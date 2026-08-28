@@ -57,6 +57,7 @@ describe("tool contract", () => {
     expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
     expect(byName.compare_areas.annotations?.readOnlyHint).toBe(true);
     expect(byName.measure.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get_share_link.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.draw_shape.annotations?.readOnlyHint).toBeFalsy();
@@ -67,10 +68,18 @@ describe("tool contract", () => {
     // Names come from OpenStreetMap and from sample listings; a client must be
     // able to treat them as data, not as instructions.
     const { byName } = toolsFor();
-    // Since drawings and annotations landed, *every* tool echoes third-party
-    // text: map state carries the labels and notes a human typed on the page,
-    // and every tool returns map state. get_map_state included.
+    // Since drawings and annotations landed, *every* tool that answers about
+    // the map echoes third-party text: map state carries the labels and notes
+    // a human typed on the page, and those tools all return map state.
+    // get_share_link is the one exception, and it has to be an explicit one:
+    // its whole output is a URL built here out of base64, so marking it
+    // untrusted would train clients to distrust a link they can safely open.
+    const ECHOES_NOTHING = ["get_share_link"];
     for (const t of toolsFor().tools) {
+      if (ECHOES_NOTHING.includes(t.name)) {
+        expect(t.annotations?.untrustedContentHint, t.name).toBeFalsy();
+        continue;
+      }
       expect(t.annotations?.untrustedContentHint, t.name).toBe(true);
     }
     expect(byName.get_map_state.annotations?.readOnlyHint).toBe(true);

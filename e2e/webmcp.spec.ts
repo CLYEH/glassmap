@@ -19,7 +19,7 @@ test.describe("WebMCP tool surface", () => {
 
   test("tools are registered on a modelContext surface", async ({ page }) => {
     const status = page.getByTestId("webmcp-status");
-    await expect(status).toContainText("10 tools");
+    await expect(status).toContainText("11 tools");
     await expect(status).not.toContainText("none");
 
     const names = await page.evaluate(async () =>
@@ -32,6 +32,7 @@ test.describe("WebMCP tool surface", () => {
       "draw_shape",
       "find_features",
       "get_map_state",
+      "get_share_link",
       "list_features_in_view",
       "measure",
       "select_features",

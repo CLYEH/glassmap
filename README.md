@@ -84,7 +84,7 @@ const result = await document.modelContext.executeTool(byName.find_features, {
 JSON.parse(result);
 // → { total: 13, returned: 13, features: [
 //     { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
-//       category: "park", distance_m: 333, direction: "S" },
+//       category: "park", distance_m: 355, direction: "S" },
 //     { id: "osm:relation:4793819", name: "幸安國小", name_en: "Xing'an Elementary School",
 //       category: "school", distance_m: 382, direction: "N" },
 //     … 11 more ] }

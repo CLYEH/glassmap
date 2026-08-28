@@ -25,7 +25,7 @@ describe("tool contract", () => {
 
 describe("get_map_state", () => {
   it("returns coordinates rounded to 5 decimals to keep token cost low", async () => {
-    const store = createMemoryToolStore({ ...DEFAULT_VIEW, center: [121.123456789, 25.987654321] });
+    const store = createMemoryToolStore({ view: { ...DEFAULT_VIEW, center: [121.123456789, 25.987654321] } });
     const out = await toolsFor(store).byName.get_map_state.execute({}, { signal });
     expect(out).toEqual({
       center: { lng: 121.12346, lat: 25.98765 },

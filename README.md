@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** the tool layer is live — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features` and `select_features` are implemented, unit-tested, and backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). Drawing, annotation and `describe_surroundings` are still in progress. See [Roadmap](#roadmap).
+> **Status:** all eight tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the sidebar are live. Remaining: the screenshot-vs-WebMCP comparison measurement, `get_share_link`, the nice-to-have `measure`/`compare_areas`/`set_layers` tools, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -17,6 +17,8 @@ Maps are the largest "DOM without semantics" surface on the web. WebMCP fills ex
 
 The same opacity that blocks agents also blocks screen readers, so the read-only tools double as a semantic layer for people who cannot see the map. We call this *agent-mediated map access*; it is not a WCAG or accessibility-compliance claim.
 
+`describe_surroundings` is the clearest example. It names the district a point is in — falling back to the nearest district boundary within 300 m when the point sits in a seam between two independently simplified polygons, and naming none rather than guessing beyond that — then lists nearby features grouped into up to eight compass directions, nearest first, each with a distance in metres and a feature id an agent can act on next (`select_features`, `set_map_view`). When more features match than the tool describes, it says so instead of staying quiet: `total` is how many are within `radius_m`, `returned` is how many were actually listed (at most 30) — so a wider radius is never implied to reveal features that were simply cut off.
+
 ## What an agent can do
 
 | You say | Without WebMCP | With GlassMap |
@@ -25,18 +27,18 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 | "Which parks are in view?" | screenshot → guess that green blobs are parks → can't read names | `list_features_in_view({ categories: ["park"] })` |
 | "Circle an 800 m walk from the station" | nearly impossible: compute a pixel radius at the right zoom, then drag | `draw_shape({ type: "circle", center: …, radius_m: 800 })` |
 | "What's inside the area I just drew?" | impossible — the agent cannot see vector geometry | `find_features({ within: "drawing:1" })` |
-| "I can't see the map. Where's the nearest park?" | impossible | `describe_surroundings()` → "Daan Forest Park, 320 m northeast" |
+| "I can't see the map. Where's the nearest park?" | impossible | `describe_surroundings()` → nearest features grouped by direction, each with a name, distance in metres and id |
 
 ## Tools
 
-Three layers. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, all eight tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
-├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape
+├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape ✅
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
-├─ find_features ✅                                                   ├─ annotate
-├─ describe_surroundings                                              └─ get_share_link
+├─ find_features ✅                                                   ├─ annotate ✅
+├─ describe_surroundings ✅                                           └─ get_share_link
 ├─ measure
 └─ compare_areas
 ```
@@ -45,20 +47,33 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 
 | Tool | What it does | Key inputs |
 |---|---|---|
-| `get_map_state` | Reads the camera, visible bounds, feature count and selection in one call — the read that used to require a screenshot. | *(none)* |
+| `get_map_state` | Reads the camera, visible bounds, feature count, selection, drawings and annotations in one call — the read that used to require a screenshot. | *(none)* |
 | `set_map_view` | Moves the camera: by exact `center`/`zoom`/`bearing`/`pitch`, by `feature_id`, or by `place` name resolved against the loaded data. An ambiguous `place` does not move the map — it returns candidates with distances instead. | `place`, `feature_id`, `center`, `zoom`, `bearing`, `pitch` |
 | `list_features_in_view` | Lists loaded features whose bounds overlap the current view, nearest-first, each with distance in metres and an 8-point compass direction from the view centre. | `categories`, `limit` |
-| `find_features` | Searches every loaded feature, not just what's visible, by name substring, category and distance from a place, a feature id or a coordinate. | `query`, `categories`, `near`, `radius_m`, `limit` |
-| `select_features` | Highlights features on the map and in the sidebar, by explicit ids or the same `query`/`near`/`radius_m`/`categories` filter `find_features` accepts. | `ids` or filter, `replace` |
+| `find_features` | Searches every loaded feature, not just what's visible, by name substring, category, distance from a place/feature/coordinate, and whether it's inside a shape on the map — including one a human drew by hand. | `query`, `categories`, `near`, `radius_m`, `within`, `limit` |
+| `select_features` | Highlights features on the map and in the sidebar, by explicit ids or the same `query`/`near`/`radius_m`/`categories`/`within` filter `find_features` accepts — but selects every match, not just the first `limit`. | `ids` or filter, `within`, `replace` |
+| `draw_shape` | Draws a circle, polygon or line on the map so the human can see the area being discussed; returns its area (circle/polygon) or length (line) and a `drawing:<n>` id. | `type`, `center`+`radius_m` (circle) or `coordinates` (polygon/line), `label` |
+| `annotate` | Pins a short note to a place on the map, so the human sees what was found where it was found. | `at`, `note`, `icon` |
+| `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
+
+`within: "drawing:<n>"` on `find_features` and `select_features` is the read half of the collaborative loop: any circle or polygon on the map — agent-drawn or hand-drawn by a human — becomes something an agent can query by id, not just something rendered on screen. (A line has no inside, so `within` does not apply to it.)
 
 Design rules the tool layer follows:
 
-- Every write tool (`set_map_view`, `select_features`) returns the full new map state, so the agent never needs a follow-up read.
+- Every write tool (`set_map_view`, `select_features`, `draw_shape`, `annotate`) returns the full new map state, so the agent never needs a follow-up read.
 - Read-only tools carry `readOnlyHint: true` so clients can skip confirmation prompts.
 - Output that contains OpenStreetMap or user-entered text carries `untrustedContentHint: true`.
 - Responses are small on purpose: `limit` defaults to 20, coordinates are rounded to 5 decimals, geometry is returned by id rather than inline.
 - Bad input returns a structured `{ error }` instead of throwing, so the agent can recover.
 - No `alert` / `confirm` / `prompt` anywhere — modal dialogs freeze agents.
+
+## Working together on the same map
+
+The map is shared state, not a private channel for the agent:
+
+- **Human draws, agent reads.** Click "Draw a polygon", add vertices, close it — the shape appears in `get_map_state().drawings` with `source: "user"` and is immediately queryable with `find_features({ within: "drawing:<n>" })`, the same call an agent uses on its own shapes.
+- **Agent draws or annotates, human sees and edits.** A `draw_shape` or `annotate` call renders on the map at once and lists in the sidebar with a "drawn by agent" / "pinned by agent" label and a ✕ button to remove it — no confirmation dialog blocks either side.
+- **Two WebMCP APIs, one state.** Besides the imperative tools above, the sidebar's note field is a plain `<form toolname="add_note">` — the declarative half of WebMCP, filled in by a human or submitted by an agent with no JavaScript registration. `SubmitEvent.agentInvoked` tells the store which one happened, so the note is stored as `source: "agent"` or `source: "user"` honestly either way.
 
 ## Try it
 
@@ -76,18 +91,34 @@ const byName = Object.fromEntries(tools.map(t => [t.name, t]));
 await document.modelContext.executeTool(byName.set_map_view, { place: "Daan Park Station" });
 
 // Everything within comfortable walking distance of the station.
-const result = await document.modelContext.executeTool(byName.find_features, {
-  near: "Daan Park",
+const found = await document.modelContext.executeTool(byName.find_features, {
+  near: "Daan Park Station",
   radius_m: 800,
   categories: ["park", "school"],
 });
-JSON.parse(result);
-// → { total: 13, returned: 13, features: [
-//     { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
-//       category: "park", distance_m: 355, direction: "S" },
-//     { id: "osm:relation:4793819", name: "幸安國小", name_en: "Xing'an Elementary School",
-//       category: "school", distance_m: 382, direction: "N" },
-//     … 11 more ] }
+JSON.parse(found);
+// → { total: <number in range>, returned: <number listed, ≤ limit>, features: [
+//     { id, name, name_en?, category: "park" | "school", distance_m, direction }, … ] }
+// e.g. { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
+//        category: "park", distance_m: <metres>, direction: <compass point> }
+
+// Draw a circle so the human can see the area, then ask what's inside it — the
+// same "within" an agent would use to read a shape a human drew by hand.
+const drawn = await document.modelContext.executeTool(byName.draw_shape, {
+  type: "circle",
+  center: "Daan Park Station",
+  radius_m: 500,
+  label: "5-minute walk",
+});
+const { drawing_id } = JSON.parse(drawn);
+// → { drawing_id: "drawing:<n>", area_m2: <number>, state: { …, drawings: { count: 1, items: [...] } } }
+
+const inside = await document.modelContext.executeTool(byName.find_features, {
+  within: drawing_id,
+  categories: ["park"],
+});
+JSON.parse(inside);
+// → { total, returned, features: [ { id, name, category: "park", distance_m, direction }, … ] }
 ```
 
 ### ChatGPT desktop app
@@ -143,13 +174,13 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 
 ## Roadmap
 
-| Day | Deliverable |
-|---|---|
-| D1 | MapLibre + OpenFreeMap on Vercel; `get_map_state` and `set_map_view` on a real map; verify a WebMCP client can call them |
-| D2 | GeoJSON data; `list_features_in_view`, `find_features`, `select_features` + sidebar |
-| D3 | `draw_shape` (agent- and hand-drawn), `annotate`, `describe_surroundings` |
-| D4 | `compare_areas`, `get_share_link`, `measure`, `set_layers`; screenshot-vs-WebMCP comparison |
-| D5 | Demo video, submission text |
+| Day | Deliverable | Status |
+|---|---|---|
+| D1 | MapLibre + OpenFreeMap on Vercel; `get_map_state` and `set_map_view` on a real map; verify a WebMCP client can call them | done |
+| D2 | GeoJSON data; `list_features_in_view`, `find_features`, `select_features` + sidebar | done |
+| D3 | `draw_shape` (agent- and hand-drawn), `annotate`, `describe_surroundings` | done |
+| D4 | `compare_areas`, `get_share_link`, `measure`, `set_layers`; screenshot-vs-WebMCP comparison | todo |
+| D5 | Demo video, submission text | todo |
 
 ## Data and licensing
 

@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test artifacts
+/test-results/
+/playwright-report/
+
+# private (Claude Code harness + planning notes, Chinese)
+CLAUDE.local.md
+/.claude/
+/glassmap-decision-record.md
+/eventcart-navigator-decision-record.md

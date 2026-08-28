@@ -50,6 +50,9 @@ done
 
 [ -n "$HEAD" ] || { echo "ship-pr: --head is required" >&2; exit 2; }
 git -C "$ROOT" rev-parse --git-dir >/dev/null
+# gh ignores git -C and uses the process cwd — which may be a worktree this
+# very script deleted on a previous invocation. Run everything from the root.
+cd "$ROOT"
 
 # --merge-back: bring the base's tip (e.g. an old merge commit on main) into
 # the head's history so strict protection does not refuse the merge.

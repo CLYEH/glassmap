@@ -1,12 +1,5 @@
 import { callTool } from "./mcp";
-import {
-  FEATURE_COUNT,
-  blockBasemapNetwork,
-  forceNoWebGL2,
-  waitForFeatures,
-  waitForLiveMap,
-  waitForTools,
-} from "./helpers";
+import { FEATURE_COUNT, forceNoWebGL2, waitForFeatures, waitForLiveMap, waitForTools } from "./helpers";
 import { expect, test } from "./fixtures";
 
 /**
@@ -15,12 +8,16 @@ import { expect, test } from "./fixtures";
  * rendering (useFeatureData's fetch does not depend on the map at all). The
  * visible bounds is a narrower guarantee than the task brief first assumed:
  * it is written by MapCanvas's own effect, so it necessarily needs a real
- * MapLibre map object to exist. The first three tests below therefore need
+ * MapLibre map object to exist. The first two tests below therefore need
  * WebGL2 to actually work (verified against this worktree's real browser,
  * not forced) and prove bounds does not additionally need the basemap style
- * or tiles to load. The last test forces the one case that is NOT covered by
- * that -- WebGL2 itself unavailable, i.e. real headless CI without a GPU --
- * and documents that bounds does not currently survive it.
+ * or tiles to load -- which, thanks to fixtures.ts's suite-wide network
+ * block (T-13), it never does here: `map-status` can only reach "loading" or
+ * "error", never "ready", so this is no longer a race against a
+ * possibly-fast CDN, it is the suite's only reachable path. The last test
+ * forces the one case that is NOT covered by that -- WebGL2 itself
+ * unavailable, i.e. real headless CI without a GPU -- and documents that
+ * bounds does not currently survive it.
  */
 test.describe("data + view state", () => {
   test("2063 features load; get_map_state agrees with the DOM, bounds included", async ({ page }) => {
@@ -48,41 +45,18 @@ test.describe("data + view state", () => {
     await expect(page.getByTestId("bounds")).not.toHaveText("none");
   });
 
-  test("bounds becomes available without waiting for map-status to reach ready", async ({ page }) => {
-    await page.goto("/");
-    await waitForTools(page);
-
-    // Do NOT assert this holds the instant window.__glassmap exists: that is
-    // not actually guaranteed (see the "back-to-back reads can disagree on
-    // bounds" fix in webmcp.spec.ts -- MapCanvas is a dynamic import, so its
-    // effect, and the constructor-time setBounds() inside it, can still be
-    // pending at that point). What IS guaranteed, and worth testing, is that
-    // bounds does not wait for the "load" event / tile fetch: poll for it
-    // deterministically instead of asserting a single racy snapshot.
-    await page.waitForFunction(
-      () => document.querySelector('[data-testid="bounds"]')?.textContent !== "none",
-    );
-    const statusWhenBoundsAppeared = await page.getByTestId("map-status").textContent();
-    // "ready" only fires after tiles load; seeing bounds while still
-    // "loading" (or having missed that window because this run was fast) are
-    // both fine, but "unavailable" would mean bounds appeared without a map
-    // at all, which should not happen on this code path (WebGL is real here,
-    // not forced unavailable).
-    expect(statusWhenBoundsAppeared).not.toBe("unavailable");
-
-    const state = await callTool(page, "get_map_state");
-    expect(state.bounds).not.toBeNull();
-  });
-
   test("bounds becomes available even when the basemap style/tiles never load", async ({ page }) => {
-    // Stronger version of the previous test: instead of racing a fast-enough
-    // poll against a basemap that happens to load quickly, make the
-    // "never reaches ready" window permanent by blocking the network the
-    // basemap needs. map-status can then only become "loading" or "error"
-    // (MapCanvas.tsx's map.on("error", ...) sets "error" when a tile/style
-    // request fails before `ready`), never "ready" -- so if bounds is
-    // non-null here, it genuinely does not depend on the basemap loading.
-    await blockBasemapNetwork(page);
+    // fixtures.ts blocks every non-localhost request for the whole suite by
+    // default (T-13), so the basemap style/tile fetch always fails here --
+    // map-status can only become "loading" or "error" (MapCanvas.tsx's
+    // map.on("error", ...) sets "error" when a tile/style request fails
+    // before `ready`), never "ready" -- so if bounds is non-null here, it
+    // genuinely does not depend on the basemap loading. Do NOT assert this
+    // holds the instant window.__glassmap exists: that is not actually
+    // guaranteed (see the "back-to-back reads can disagree on bounds" fix in
+    // webmcp.spec.ts -- MapCanvas is a dynamic import, so its effect, and the
+    // constructor-time setBounds() inside it, can still be pending at that
+    // point). Poll for bounds instead of asserting a single racy snapshot.
     await page.goto("/");
     await waitForTools(page);
     await waitForLiveMap(page);

@@ -86,8 +86,13 @@ done
 echo "ship-pr: check conclusions = ${CONCLUSIONS:-<none>}"
 [ "$CONCLUSIONS" = "SUCCESS" ] || { echo "ship-pr: refusing to merge (checks: ${CONCLUSIONS:-none appeared})" >&2; exit 1; }
 
+# No --delete-branch: gh would try to check out the default branch locally to
+# delete the head, which fails when the head lives in a worktree and the
+# default branch is checked out elsewhere ("already used by worktree") — and
+# that local failure masks a REMOTE merge that already succeeded. Merge only;
+# branches are deleted explicitly below, after the merge is fact-checked.
 case "$STRATEGY" in
-  squash) gh pr merge "$PR" --squash --delete-branch ;;
+  squash) gh pr merge "$PR" --squash ;;
   merge)  gh pr merge "$PR" --merge ;;
   *) echo "ship-pr: unknown strategy $STRATEGY" >&2; exit 2 ;;
 esac
@@ -107,6 +112,13 @@ if [ -n "$WORKTREE" ]; then
   fi
   git -C "$ROOT" worktree prune
   [ -d "$WORKTREE" ] && echo "ship-pr: warning — $WORKTREE still exists" >&2 || true
+fi
+
+# Delete the head branch explicitly (remote first, then local) — but never
+# when it is a long-lived branch (a promote's head is the integration branch).
+if [ "$HEAD" != "develop" ] && [ "$HEAD" != "main" ]; then
+  git -C "$ROOT" push -q origin --delete "$HEAD" 2>/dev/null || true
+  git -C "$ROOT" branch -D "$HEAD" 2>/dev/null || true
 fi
 
 # Sync the local base branch (only if the main checkout is on it or can switch).

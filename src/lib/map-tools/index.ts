@@ -184,7 +184,8 @@ const withinProperty = {
 const radiusProperty = {
   type: "number",
   exclusiveMinimum: 0,
-  description: `Keep only features within this many metres of "near" (default ${DEFAULT_RADIUS_M} when "near" is given, no radius filter otherwise). Measured to a feature point, or to the centroid of an area.`,
+  maximum: MAX_RADIUS_M,
+  description: `Keep only features within this many metres of "near" (default ${DEFAULT_RADIUS_M} when "near" is given, no radius filter otherwise, at most ${MAX_RADIUS_M}). A larger radius is refused rather than quietly narrowed. Measured to a feature point, or to the centroid of an area.`,
 };
 
 // ------------------------------------------------------------------ internals
@@ -458,7 +459,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate, and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
     inputSchema: {
       type: "object",
       properties: {
@@ -487,7 +488,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
     name: "select_features",
     description:
-      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids, or the same query/near/radius_m/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at `limit`: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them.",
+      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at `limit`: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -746,7 +747,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
     name: "describe_surroundings",
     description:
-      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its distance in metres. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. Answers are capped at 30 features, so widen or narrow radius_m rather than expecting everything.",
+      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. Answers are capped at 30 features, so widen or narrow radius_m rather than expecting everything.",
     inputSchema: {
       type: "object",
       properties: {

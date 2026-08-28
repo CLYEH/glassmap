@@ -34,6 +34,8 @@ export const NEIGHBOUR_CATEGORIES: FeatureCategory[] = FEATURE_CATEGORIES.filter
 );
 
 export interface SurroundingsItem {
+  /** The same feature id every other tool takes, so a description can be acted on. */
+  id: string;
   name: string;
   name_en?: string;
   category: FeatureCategory;
@@ -122,6 +124,7 @@ export function groupByDirection(
     const direction: Compass =
       distance_m === 0 ? "N" : compassFromBearing(turfBearing(origin, center));
     const item: SurroundingsItem = {
+      id: p.id,
       name: p.name,
       ...(p.nameEn ? { name_en: p.nameEn } : {}),
       category: p.category,

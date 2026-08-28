@@ -4,7 +4,7 @@ import { createMemoryToolStore, DEFAULT_VIEW, type MapToolStore } from "@/lib/st
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
-import { DEFAULT_LIMIT, DEFAULT_RADIUS_M } from "./query";
+import { DEFAULT_LIMIT, DEFAULT_RADIUS_M, MAX_QUERY_RADIUS_M } from "./query";
 import {
   BROKEN_FEATURES,
   DAAN_FOREST_PARK,
@@ -126,6 +126,11 @@ describe("tool contract", () => {
       input: { type: "circle", center: "Daan Station", radius_m: -5 },
       rejectedBy: ["draw_shape", "find_features", "select_features", "describe_surroundings"],
     },
+    // One radius story: every tool that takes radius_m refuses the same values.
+    {
+      input: { radius_m: 500000 },
+      rejectedBy: ["find_features", "select_features", "describe_surroundings"],
+    },
     {
       input: { type: "polygon", coordinates: [[121.5, 25], [121.6, 25]] },
       rejectedBy: ["draw_shape"],
@@ -171,7 +176,7 @@ describe("tool contract", () => {
     // The loader can hand us a relation that failed to assemble; one bad
     // feature must not take down every query over the other 2000.
     const { store, byName } = mapReady({ features: [...FIXTURE_FEATURES, ...BROKEN_FEATURES] });
-    for (const input of [{}, { query: "polygon" }, { near: "Daan", radius_m: 50000 }]) {
+    for (const input of [{}, { query: "polygon" }, { near: "Daan", radius_m: 5000 }]) {
       for (const name of ["list_features_in_view", "find_features"]) {
         const out = await call(byName[name], input);
         expect(out.error, `${name} ${JSON.stringify(input)}`).toBeUndefined();
@@ -410,6 +415,22 @@ describe("find_features", () => {
     // The other PX Mart is ~3 km away, so the 800 m default must exclude it.
     expect(idsOf(out.features)).toEqual(["osm:node:30"]);
     expect(out.features?.[0].distance_m).toBeLessThan(DEFAULT_RADIUS_M);
+  });
+
+  it("refuses a radius past the shared cap rather than searching a narrower one", async () => {
+    // find_features, select_features, draw_shape and describe_surroundings all
+    // stop at the same number, so an agent learns one rule. Quietly narrowing
+    // the search would answer "there is no supermarket" about a shop it never
+    // looked for.
+    const { store, byName } = mapReady({ selection: ["osm:node:2"] });
+    for (const name of ["find_features", "select_features"]) {
+      const out = await call(byName[name], { near: "Daan Station", radius_m: MAX_QUERY_RADIUS_M + 1 });
+      expect(out.error, name).toMatch(String(MAX_QUERY_RADIUS_M));
+    }
+    expect(store.getSelection()).toEqual(["osm:node:2"]);
+    expect(MAX_QUERY_RADIUS_M).toBe(10000);
+    // Exactly at the cap still works.
+    expect((await call(byName.find_features, { radius_m: MAX_QUERY_RADIUS_M })).error).toBeUndefined();
   });
 
   it("widens the search when radius_m is given explicitly", async () => {

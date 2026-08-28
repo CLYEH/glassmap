@@ -32,6 +32,7 @@ import {
 const signal = new AbortController().signal;
 
 interface SurroundingsItem {
+  id: string;
   name: string;
   name_en?: string;
   category: FeatureCategory;
@@ -138,11 +139,34 @@ describe("describe_surroundings grouping", () => {
     expect(allItems(out).find((i) => i.category === "park")?.sample).toBeUndefined();
   });
 
+  it("names each feature by the id every other tool takes, so a description can be acted on", async () => {
+    /*
+     * Without ids the answer is a dead end: "the school 380 m north" cannot be
+     * selected, flown to or drawn around, and the agent would have to guess a
+     * name back into find_features. The id is the shared currency.
+     */
+    const { store, byName } = toolsFor();
+    const out = await describeAround(byName.describe_surroundings, { radius_m: 1000 });
+    const school = allItems(out).find((i) => i.category === "park");
+    expect(school?.id).toBe("osm:way:10");
+
+    const selected = (await byName.select_features.execute({ ids: [school!.id] }, { signal })) as {
+      unknown_ids?: string[];
+    };
+    expect(selected.unknown_ids).toEqual([]);
+    expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
   it("keeps both names when the source has them, because the reader may not read Chinese", async () => {
     const { byName } = toolsFor();
     const out = await describeAround(byName.describe_surroundings, { radius_m: 1000 });
     expect(allItems(out)).toContainEqual(
-      expect.objectContaining({ name: "大安森林公園", name_en: "Da-an Forest Park", category: "park" }),
+      expect.objectContaining({
+        id: "osm:way:10",
+        name: "大安森林公園",
+        name_en: "Da-an Forest Park",
+        category: "park",
+      }),
     );
   });
 

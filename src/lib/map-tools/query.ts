@@ -8,12 +8,14 @@ import { isFeatureCategory, type FeatureCategory, type GlassMapFeature } from "@
 import type { LngLat } from "@/lib/store/map-store";
 import { normaliseName, resolvePlaceOne, type PlaceCandidate } from "./gazetteer";
 import { distanceMeters, featureCenter } from "./output";
-import { featureWithin } from "./shapes";
+import { featureWithin, MAX_RADIUS_M } from "./shapes";
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 100;
 /** Walking distance; applied only when the caller gave a `near`. */
 export const DEFAULT_RADIUS_M = 800;
+/** Same ceiling as draw_shape and describe_surroundings: one radius story. */
+export const MAX_QUERY_RADIUS_M = MAX_RADIUS_M;
 
 export type NearResolution =
   | { kind: "point"; center: LngLat }
@@ -46,6 +48,11 @@ export function validateCategories(
 export function validateRadius(value: unknown): { radius_m?: number } | { error: string } {
   if (value === undefined) return {};
   if (!isNum(value) || value <= 0) return { error: "radius_m must be a positive number of metres" };
+  // Refused, not clamped: a filter that quietly covers less than it was asked
+  // to cover is a lie the agent cannot see. Same rule as draw_shape.
+  if (value > MAX_QUERY_RADIUS_M) {
+    return { error: `radius_m must be at most ${MAX_QUERY_RADIUS_M} metres` };
+  }
   return { radius_m: value };
 }
 

@@ -109,9 +109,12 @@ describe("planHashUpdate", () => {
     expect(plan.hash).toBeNull();
   });
 
-  it("resumes writing once the map fits again", () => {
-    // The overflow is a property of the current map, not a latch: deleting the
-    // shape that broke the link has to give the link back.
+  it("plans a write for a map that is merely large", () => {
+    // The counterpart to the test above, on the same "#v1.previous" fragment:
+    // a shape is not what makes a map unshareable, its size is. Nothing here
+    // can latch - planHashUpdate is stateless and sees one map at a time - so
+    // the guarantee that deleting the offending shape gives the link back lives
+    // in useShareHash, which asks again on the next change (e2e, owned by qa).
     const plan = planHashUpdate(state({ drawings: [polygon(4)] }), BASE, "#v1.previous");
     expect(plan.tooLarge).toBe(false);
     expect(plan.hash).not.toBeNull();
@@ -129,5 +132,18 @@ describe("planHashUpdate", () => {
     const long = planHashUpdate(current, BASE + "p".repeat(overshoot), "");
     expect(long.tooLarge).toBe(true);
     expect(long.hash).toBeNull();
+  });
+
+  it("still writes a URL of exactly MAX_SHARE_URL_BYTES", () => {
+    // The limit is inclusive, and get_share_link reads it the same way (there,
+    // `bytes > MAX_SHARE_URL_BYTES` is the error). Without this case a `>` that
+    // becomes a `>=` passes every other test in this file while making the
+    // address bar refuse the one link the tool would still hand out.
+    const current = state({ drawings: [polygon(40)] });
+    const padding = MAX_SHARE_URL_BYTES - planHashUpdate(current, BASE, "").bytes;
+    const exact = planHashUpdate(current, BASE + "p".repeat(padding), "");
+    expect(exact.bytes).toBe(MAX_SHARE_URL_BYTES);
+    expect(exact.tooLarge).toBe(false);
+    expect(exact.hash).not.toBeNull();
   });
 });

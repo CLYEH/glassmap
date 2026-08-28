@@ -10,6 +10,11 @@ import {
  * bar. A pan is a stream of `moveend`s and a drawn polygon is a stream of
  * `addDrawing`s; encoding on each one would burn a base64 pass per frame and
  * still end up writing the same final string.
+ *
+ * It is also a rate limit, not only a performance knob: WebKit throws a
+ * SecurityError past roughly 100 history writes in 30 s, and this floor keeps
+ * a continuously moving map at the edge of that budget rather than over it.
+ * Lowering it trades an address bar that keeps up for one that stops entirely.
  */
 export const SHARE_WRITE_DEBOUNCE_MS = 300;
 

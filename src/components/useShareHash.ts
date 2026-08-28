@@ -77,9 +77,19 @@ export function useShareHash(): { tooLarge: boolean } {
         window.location.hash,
       );
       setTooLarge(plan.tooLarge);
-      // A bare fragment resolves against the current URL, so this replaces the
-      // hash and nothing else.
-      if (plan.hash !== null) window.history.replaceState(null, "", `#${plan.hash}`);
+      if (plan.hash === null) return;
+      try {
+        // A bare fragment resolves against the current URL, so this replaces
+        // the hash and nothing else.
+        window.history.replaceState(null, "", `#${plan.hash}`);
+      } catch (error) {
+        // WebKit throttles history writes (SecurityError past ~100 in 30 s).
+        // The debounce keeps us under that, but a page left panning for half an
+        // hour is exactly the case that finds the edge, and an address bar that
+        // stopped updating is not worth taking the map down for. The next
+        // change tries again.
+        if (isDev) console.warn("[GlassMap] could not update the share link:", error);
+      }
     };
 
     const schedule = () => {
@@ -110,6 +120,15 @@ export function useShareHash(): { tooLarge: boolean } {
         applying = false;
       }
     }
+
+    // Once, whatever happened above. Without it the address bar is only ever
+    // written when something else moves the store, so a page opened with no
+    // hash (or with WebGL unavailable, where no map reports a camera back)
+    // never gets a link at all, and a partially-rejected pasted link stays in
+    // the bar unchanged - re-shared verbatim, still promising the shapes this
+    // build just dropped. `planHashUpdate` answers "no change" when there is
+    // none, so this costs one encode per load and usually writes nothing.
+    schedule();
 
     return () => {
       unsubscribe();

@@ -55,6 +55,7 @@ describe("tool contract", () => {
     expect(byName.list_features_in_view.annotations?.readOnlyHint).toBe(true);
     expect(byName.find_features.annotations?.readOnlyHint).toBe(true);
     expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
+    expect(byName.compare_areas.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.draw_shape.annotations?.readOnlyHint).toBeFalsy();
@@ -109,22 +110,55 @@ describe("tool contract", () => {
     { input: { near: true }, rejectedBy: ["find_features", "select_features"] },
     {
       input: { categories: "park" },
-      rejectedBy: ["list_features_in_view", "find_features", "select_features"],
+      rejectedBy: ["list_features_in_view", "find_features", "select_features", "compare_areas"],
     },
     { input: { limit: -1 }, rejectedBy: ["list_features_in_view", "find_features"] },
     { input: { ids: 7 }, rejectedBy: ["select_features"] },
     { input: { ids: [null] }, rejectedBy: ["select_features"] },
     { input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) }, rejectedBy: ["select_features"] },
-    { input: {}, rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
+    {
+      input: {},
+      rejectedBy: [
+        "set_map_view",
+        "select_features",
+        "draw_shape",
+        "annotate",
+        "compare_areas",
+      ],
+    },
     // Not an object at all — some clients pass the raw argument through.
-    { input: "hello", rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
-    { input: null, rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
+    {
+      input: "hello",
+      rejectedBy: [
+        "set_map_view",
+        "select_features",
+        "draw_shape",
+        "annotate",
+        "compare_areas",
+      ],
+    },
+    {
+      input: null,
+      rejectedBy: [
+        "set_map_view",
+        "select_features",
+        "draw_shape",
+        "annotate",
+        "compare_areas",
+      ],
+    },
     { input: { type: "blob", coordinates: [] }, rejectedBy: ["draw_shape"] },
     { input: { type: "circle" }, rejectedBy: ["draw_shape"] },
     { input: { type: "circle", center: "Daan Station", radius_m: 0 }, rejectedBy: ["draw_shape"] },
     {
       input: { type: "circle", center: "Daan Station", radius_m: -5 },
-      rejectedBy: ["draw_shape", "find_features", "select_features", "describe_surroundings"],
+      rejectedBy: [
+        "draw_shape",
+        "find_features",
+        "select_features",
+        "describe_surroundings",
+        "compare_areas",
+      ],
     },
     // A shape the UI has to redraw on every frame: 501 points is refused, so
     // one call cannot make the map unusable for the human.
@@ -138,7 +172,7 @@ describe("tool contract", () => {
     // One radius story: every tool that takes radius_m refuses the same values.
     {
       input: { radius_m: 500000 },
-      rejectedBy: ["find_features", "select_features", "describe_surroundings"],
+      rejectedBy: ["find_features", "select_features", "describe_surroundings", "compare_areas"],
     },
     {
       input: { type: "polygon", coordinates: [[121.5, 25], [121.6, 25]] },
@@ -158,9 +192,16 @@ describe("tool contract", () => {
     { input: { within: 7 }, rejectedBy: ["find_features", "select_features"] },
     {
       input: { radius_m: "500" },
-      rejectedBy: ["find_features", "select_features", "describe_surroundings"],
+      rejectedBy: ["find_features", "select_features", "describe_surroundings", "compare_areas"],
     },
     { input: { from: "Shibuya" }, rejectedBy: ["describe_surroundings"] },
+    // A comparison is between two places: one side plus the view centre would
+    // be a confident answer to a question nobody asked.
+    { input: { a: "Daan Station" }, rejectedBy: ["compare_areas"] },
+    { input: { b: { lng: 121.5, lat: 25 } }, rejectedBy: ["compare_areas"] },
+    { input: { a: "Pxmart", b: "Daan Station" }, rejectedBy: ["compare_areas"] },
+    { input: { a: "Daan Station", b: "Shibuya" }, rejectedBy: ["compare_areas"] },
+    { input: { a: { lng: 999, lat: 0 }, b: "Daan Station" }, rejectedBy: ["compare_areas"] },
   ];
 
   it.each(HOSTILE)("refuses $input without throwing or changing state", async ({ input, rejectedBy }) => {

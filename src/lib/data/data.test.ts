@@ -7,6 +7,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { booleanPointInPolygon, point } from "@turf/turf";
 import { describe, expect, it } from "vitest";
 import { DATASETS, FEATURE_CATEGORIES, type FeatureCategory } from "./schema";
 
@@ -152,5 +153,27 @@ describe("public/data/*.geojson contract", () => {
   it("all six files together are under the 1 MB combined budget", () => {
     const total = FEATURE_CATEGORIES.reduce((sum, category) => sum + statSync(filePathFor(category)).size, 0);
     expect(total).toBeLessThan(1_000_000);
+  });
+
+  describe("district boundary sanity (T-24: guard against polygon overshoot)", () => {
+    const districts = readGeojson("district").features;
+    const districtsContaining = (lng: number, lat: number) =>
+      districts.filter((f) => booleanPointInPolygon(point([lng, lat]), f.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon));
+
+    it("Banqiao Station (New Taipei, across the river from Wanhua) is inside no Taipei district", () => {
+      // 121.4618,25.0132 - verified against OSM's own Nominatim reverse
+      // geocoder (2026-08-28): "MRT Banqiao Station Exit 1, Banqiao
+      // District, New Taipei". A coarse district polygon can bulge across
+      // the Xindian/Dahan river here and wrongly claim this point for a
+      // Taipei district (describe_surroundings would then confidently name
+      // a Taipei district for a New Taipei location).
+      expect(districtsContaining(121.4618, 25.0132)).toHaveLength(0);
+    });
+
+    it("Taipei 101 is inside exactly one district (Xinyi)", () => {
+      const hits = districtsContaining(121.5645, 25.033);
+      expect(hits).toHaveLength(1);
+      expect(hits[0].properties.id).toBe("district:xinyi");
+    });
   });
 });

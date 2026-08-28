@@ -26,14 +26,21 @@ and does not represent real properties, addresses or prices.
 - Bounding box (Taipei City, approx.): `lng 121.45–121.67, lat 24.96–25.21`.
   Overpass bbox order is `south,west,north,east` → `24.96,121.45,25.21,121.67`.
 - Coordinates rounded to 5 decimals (~1 m). Polygons simplified with
-  `@turf/turf` `simplify` (Douglas-Peucker, `highQuality: true`,
-  tolerance `0.00012`) and clipped to the bounding box with `bboxClip`.
-  Because each district/park polygon is simplified independently, shared
-  borders between adjacent districts may show tiny gaps/overlaps at this
-  zoom level — acceptable for the demo's visual use, not survey-grade.
+  `@turf/turf` `simplify` (Douglas-Peucker, `highQuality: true`) and clipped
+  to the bounding box with `bboxClip`. Tolerance is `0.00012` for parks
+  (needed to stay under the file-size budget — see "Parks" below) and
+  `0.00003` for districts (only 12 features, so they can afford much finer
+  detail — see "Districts" below, T-24). Because each district/park polygon
+  is simplified independently, shared borders between adjacent districts may
+  show gaps/overlaps at this zoom level — see "Districts" below for why this
+  is a source-data property rather than mainly a simplification artefact —
+  acceptable for the demo's visual use, not survey-grade.
 - Regenerate: `node scripts/fetch-osm.mjs` (writes the five OSM-derived
   files) then `node scripts/make-listings.mjs` (writes `listings.geojson`,
-  which depends on `mrt-stations.geojson` and `districts.geojson`).
+  which depends on `mrt-stations.geojson` and `districts.geojson`). Pass
+  `--only=<comma-separated names>` (e.g. `--only=districts`) to regenerate a
+  subset without touching the others; valid names are `mrt`, `districts`,
+  `parks`, `schools`, `supermarkets`.
   Re-running hits live OSM data and reproduces the committed files
   byte-for-byte only if upstream OSM data has not changed since the export
   date above.
@@ -43,13 +50,13 @@ and does not represent real properties, addresses or prices.
 | File | Category | Feature count | Size | Geometry | Overpass query |
 |---|---|---:|---:|---|---|
 | `mrt-stations.geojson` | `mrt_station` | 109 | 30.7 KB | Point | see below |
-| `districts.geojson` | `district` | 12 | 32.5 KB | Polygon | see below |
+| `districts.geojson` | `district` | 12 | 61.1 KB | Polygon | see below |
 | `parks.geojson` | `park` | 865 | 287.5 KB | Polygon/MultiPolygon | see below |
 | `schools.geojson` | `school` | 445 | 101.5 KB | Point (centroid) | see below |
 | `supermarkets.geojson` | `supermarket` | 607 | 128.7 KB | Point (centroid) | see below |
 | `listings.geojson` | `listing` | 25 | 4.8 KB | Point | fabricated, not OSM |
 
-Total: 586 KB (well under the 1 MB combined budget; every file is under
+Total: 614.3 KB (well under the 1 MB combined budget; every file is under
 the 300 KB per-file target).
 
 ### MRT stations
@@ -108,6 +115,59 @@ over showing the full administrative extent.
 
 `id` format: `district:<english-slug>` (e.g. `district:daan`,
 `district:zhongzheng`), derived from the OSM `name:en` tag.
+
+#### Simplify tolerance (T-24)
+
+Districts use simplify tolerance **`0.00003`** (`DISTRICT_SIMPLIFY_TOLERANCE`
+in `fetch-osm.mjs`), not the `0.00012` shared by parks. With only 12
+features at 61.1 KB, districts have plenty of headroom under the 300 KB
+per-file budget to keep far more boundary detail than parks need to.
+
+This tolerance was tightened while investigating a tool-review report that
+`describe_surroundings` named a Taipei district for a New Taipei location -
+specifically, that Wanhua's polygon crossed the Xindian river and contained
+"Banqiao Station" at `121.4933,25.0143`, ~393 m inside the boundary.
+Re-verifying that report surfaced two things worth recording so they aren't
+rediscovered the same way twice:
+
+1. **The reported coordinate is not Banqiao Station.** OSM's own Nominatim
+   reverse geocoder places `121.4933,25.0143` at 下庄子 (Xiazhuangzi),
+   Dongyuan village, **Wanhua District, Taipei** - a real Taipei
+   neighbourhood, not New Taipei. The actual Banqiao Station (verified the
+   same way, Nominatim search for 板橋車站/"Banqiao Station" ->
+   `121.4618,25.0132`, "MRT Banqiao Station Exit 1, Banqiao District, New
+   Taipei") was already outside every district polygon, at every tolerance
+   tested from `0.00012` down to near-zero (i.e. the raw, unsimplified OSM
+   ring) - so there was no reproducible overshoot at the real station.
+   Containment of the reported coordinate is unaffected by tolerance (still
+   ~386 m inside Wanhua even unsimplified) because it is correct: that point
+   really is in Wanhua. The regression test added for this task (in
+   `src/lib/data/data.test.ts`) uses the verified real Banqiao Station
+   coordinate instead of the one in the original report.
+2. **The ~150 m gaps between adjacent district borders are a source-data
+   property, not mainly a simplification artefact.** Re-simplifying at
+   tolerances from `0.00012` down to near-zero left the largest gap between
+   any two adjacent districts' vertices essentially unchanged (~150 m
+   throughout - e.g. `0.00012`: 149.6 m, `0.00003`: 147.8 m, near-zero:
+   149.4 m, all between the same `neihu`/`shilin`/`zhongshan`/`datong`
+   vertices). Each district relation was traced independently in OSM and
+   their shared borders do not actually share way nodes even in the raw
+   `out geom` response, so simplify tolerance - which only bounds how far a
+   simplified line strays from *its own* original line - cannot close a gap
+   that already exists between two *different* original lines. Closing it
+   would need topology-aware simplification across adjacent polygons
+   (snapping shared vertices before or during simplify), which is out of
+   scope for this task's per-feature-independent pipeline.
+
+The tighter tolerance is still kept because finer per-district boundary
+detail is a real (if modest) improvement on its own, well within the
+suggested `0.00002`-`0.00004` range, and it does not regress anything: file
+size stays small, no polygon gained a kink (`turf.kinks` reports zero for
+all 12 features), Taipei 101 still resolves to exactly `district:xinyi`, and
+Daan Forest Park still resolves to exactly `district:daan`.
+
+Regenerate districts only (leaving the other four OSM-derived files
+untouched) with `node scripts/fetch-osm.mjs --only=districts`.
 
 ### Parks
 

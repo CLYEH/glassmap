@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all ten tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the sidebar are live. Remaining: `get_share_link`, the nice-to-have `set_layers` tool, the screenshot-vs-WebMCP comparison measurement, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all eleven tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the sidebar are live. Remaining: the nice-to-have `set_layers` tool, the screenshot-vs-WebMCP comparison measurement, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,14 +33,14 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 
 ## Tools
 
-Three layers, ten of twelve tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, eleven of twelve tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
 ├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape ✅
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
 ├─ find_features ✅                                                   ├─ annotate ✅
-├─ describe_surroundings ✅                                           └─ get_share_link
+├─ describe_surroundings ✅                                           └─ get_share_link ✅
 ├─ measure ✅
 └─ compare_areas ✅
 ```
@@ -59,6 +59,7 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
 | `compare_areas` | Compares two places in one call: per-category counts of what's within `radius_m` of each, plus the nearest match of each category on each side; if a place name doesn't resolve, the error names which side (`a` or `b`) failed. | `a`, `b`, `radius_m`, `categories` |
 | `measure` | Measures one drawing or loaded feature: area and perimeter for a circle or polygon, length for a line. A point has no extent and is refused, with a pointer to `find_features` for distances instead. | `target` |
+| `get_share_link` | Builds a link that reproduces this map for whoever opens it — camera, selection, every drawing and every note, encoded in the URL itself, nothing uploaded. Returns `{ url, bytes }`; a map too large to fit in a URL (over 8 KB) is refused with an error naming what to remove. | *(none)* |
 
 `within: "drawing:<n>"` on `find_features` and `select_features` is the read half of the collaborative loop: any circle or polygon on the map — agent-drawn or hand-drawn by a human — becomes something an agent can query by id, not just something rendered on screen. (A line has no inside, so `within` does not apply to it.)
 
@@ -78,6 +79,8 @@ The map is shared state, not a private channel for the agent:
 - **Human draws, agent reads.** Click "Draw a polygon", add vertices, close it — the shape appears in `get_map_state().drawings` with `source: "user"` and is immediately queryable with `find_features({ within: "drawing:<n>" })`, the same call an agent uses on its own shapes.
 - **Agent draws or annotates, human sees and edits.** A `draw_shape` or `annotate` call renders on the map at once and lists in the sidebar with a "drawn by agent" / "pinned by agent" label and a ✕ button to remove it — no confirmation dialog blocks either side.
 - **Two WebMCP APIs, one state.** Besides the imperative tools above, the sidebar's note field is a plain `<form toolname="add_note">` — the declarative half of WebMCP, filled in by a human or submitted by an agent with no JavaScript registration. `SubmitEvent.agentInvoked` tells the store which one happened, so the note is stored as `source: "agent"` or `source: "user"` honestly either way.
+
+The address bar is part of that shared state, too: it always holds a link back to the map exactly as it stands, kept current whether the human or the agent made the last change, and opening that link — or one handed off from `get_share_link` — restores the same camera, selection, drawings and notes rather than a description of them. That is what lets a judge (or anyone else) reproduce what this README can only show as a screenshot.
 
 ## Try it
 
@@ -183,7 +186,7 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 | D1 | MapLibre + OpenFreeMap on Vercel; `get_map_state` and `set_map_view` on a real map; verify a WebMCP client can call them | done |
 | D2 | GeoJSON data; `list_features_in_view`, `find_features`, `select_features` + sidebar | done |
 | D3 | `draw_shape` (agent- and hand-drawn), `annotate`, `describe_surroundings` | done |
-| D4 | `compare_areas`, `measure` (done); `get_share_link`, `set_layers`, screenshot-vs-WebMCP comparison (todo) | in progress |
+| D4 | `compare_areas`, `measure`, `get_share_link` (done); `set_layers`, screenshot-vs-WebMCP comparison (todo) | in progress |
 | D5 | Demo video, submission text | todo |
 
 ## Data and licensing

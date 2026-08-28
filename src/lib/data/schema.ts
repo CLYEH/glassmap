@@ -23,8 +23,9 @@ export function isFeatureCategory(x: unknown): x is FeatureCategory {
 export interface GlassMapFeatureProperties {
   /**
    * Stable id, unique across all datasets:
-   * `osm:<node|way|relation>:<osm_id>` for OSM data, `listing:<n>` for
-   * sample listings, `district:<name>` for administrative districts.
+   * `osm:<node|way|relation>:<osm_id>` for OSM data, `listing:<nn>`
+   * (zero-padded) for sample listings, `district:<english-slug>` for
+   * administrative districts.
    */
   id: string;
   /** Local name (zh-TW for Taipei OSM data). Untrusted content for tool output. */

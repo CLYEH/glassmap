@@ -1,10 +1,34 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Map as MapLibreMap, setWorkerUrl, type GeoJSONSource } from "maplibre-gl";
+import {
+  Map as MapLibreMap,
+  Marker,
+  setWorkerUrl,
+  type GeoJSONSource,
+  type MapMouseEvent,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { FeatureCollection } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
-import { useMapStore, type MapView } from "@/lib/store/map-store";
+import {
+  useMapStore,
+  type Annotation,
+  type Drawing,
+  type LngLat,
+  type MapView,
+} from "@/lib/store/map-store";
+import { createAnnotationElement } from "./annotation-marker";
+import { useDrawStore, type DrawMode } from "./draw-store";
+import {
+  DRAFT_SOURCE,
+  DRAWING_LABEL_SOURCE,
+  DRAWING_SOURCE,
+  buildDrawingLayerSpecs,
+  draftToGeoJson,
+  drawingsToGeoJson,
+  labelPointsToGeoJson,
+} from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
   STYLE_URL,
@@ -73,6 +97,52 @@ function applySelection(map: MapLibreMap, selection: readonly string[]) {
   }
 }
 
+/** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
+function setSourceData(map: MapLibreMap, id: string, data: FeatureCollection) {
+  const source = map.getSource(id) as GeoJSONSource | undefined;
+  source?.setData(data);
+}
+
+function applyDrawings(map: MapLibreMap, drawings: readonly Drawing[]) {
+  setSourceData(map, DRAWING_SOURCE, drawingsToGeoJson(drawings));
+  setSourceData(map, DRAWING_LABEL_SOURCE, labelPointsToGeoJson(drawings));
+}
+
+const applyDraft = (map: MapLibreMap, draft: readonly LngLat[]) =>
+  setSourceData(map, DRAFT_SOURCE, draftToGeoJson(draft));
+
+/**
+ * Add/remove one marker per annotation, keeping the ones that did not change.
+ * Rebuilding all of them on every store write would close a bubble the user is
+ * reading whenever an agent pins another note.
+ */
+function syncAnnotationMarkers(
+  map: MapLibreMap,
+  markers: Map<string, Marker>,
+  annotations: readonly Annotation[],
+) {
+  const live = new Set(annotations.map((a) => a.id));
+  for (const [id, marker] of markers) {
+    if (live.has(id)) continue;
+    marker.remove();
+    markers.delete(id);
+  }
+  for (const annotation of annotations) {
+    if (markers.has(annotation.id)) continue;
+    const marker = new Marker({ element: createAnnotationElement(annotation), anchor: "bottom" })
+      .setLngLat(annotation.at)
+      .addTo(map);
+    markers.set(annotation.id, marker);
+  }
+}
+
+/**
+ * How close a click has to be to the previous vertex to count as the same one.
+ * The second click of a double-click lands a pixel or two off the first, and it
+ * must not leave a duplicate corner behind when the polygon is finished.
+ */
+const VERTEX_SLOP_PX = 8;
+
 const sameView = (a: MapView, b: MapView) =>
   Math.abs(a.center[0] - b.center[0]) < 1e-6 &&
   Math.abs(a.center[1] - b.center[1]) < 1e-6 &&
@@ -106,6 +176,7 @@ export default function MapCanvas() {
     };
 
     const store = useMapStore;
+    const draw = useDrawStore;
 
     /**
      * No map, so nothing will ever report a viewport. Compute one instead:
@@ -152,6 +223,9 @@ export default function MapCanvas() {
     }
 
     if (isDev) window.__glassmapMap = map;
+
+    /** One MapLibre marker per annotation id, kept in step with the store. */
+    const markers = new Map<string, Marker>();
 
     let ready = false;
     let fromMap = false;
@@ -218,12 +292,23 @@ export default function MapCanvas() {
       for (const category of FEATURE_CATEGORIES) {
         map.addSource(sourceId(category), { type: "geojson", data: EMPTY });
       }
-      const { features, selection } = store.getState();
+      const { features, selection, drawings } = store.getState();
       for (const layer of buildLayerSpecs(selection)) map.addLayer(layer);
       applyFeatures(map, features);
 
+      // Drawings sit on top of the data layers: a shape is always about the
+      // features under it.
+      map.addSource(DRAWING_SOURCE, { type: "geojson", data: EMPTY });
+      map.addSource(DRAWING_LABEL_SOURCE, { type: "geojson", data: EMPTY });
+      map.addSource(DRAFT_SOURCE, { type: "geojson", data: EMPTY });
+      for (const layer of buildDrawingLayerSpecs()) map.addLayer(layer);
+      applyDrawings(map, drawings);
+      applyDraft(map, draw.getState().draft);
+
       const canvas = map.getCanvas();
       map.on("click", INTERACTIVE_LAYER_IDS, (event) => {
+        // While drawing, a click is a vertex, not a selection.
+        if (draw.getState().mode !== "none") return;
         const id = event.features
           ?.map((f) => f.properties?.id)
           .find((value): value is string => typeof value === "string");
@@ -234,9 +319,11 @@ export default function MapCanvas() {
           .setSelection(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
       });
       map.on("mouseenter", INTERACTIVE_LAYER_IDS, () => {
+        if (draw.getState().mode !== "none") return;
         canvas.style.cursor = "pointer";
       });
       map.on("mouseleave", INTERACTIVE_LAYER_IDS, () => {
+        if (draw.getState().mode !== "none") return;
         canvas.style.cursor = "";
       });
 
@@ -247,15 +334,61 @@ export default function MapCanvas() {
 
     map.on("moveend", pushViewFromMap);
 
+    // --- Hand drawing -----------------------------------------------------
+    // Registered outside `load` so drawing works even if the basemap never
+    // arrives; the preview source is written through `setSourceData`, which is
+    // a no-op until the style is up.
+
+    const applyDrawCursor = (mode: DrawMode) => {
+      map.getCanvas().style.cursor = mode === "polygon" ? "crosshair" : "";
+      // Otherwise the second click of "double-click to finish" zooms the map.
+      if (mode === "polygon") map.doubleClickZoom.disable();
+      else map.doubleClickZoom.enable();
+    };
+
+    map.on("click", (event: MapMouseEvent) => {
+      const state = draw.getState();
+      if (state.mode !== "polygon") return;
+      const last = state.draft[state.draft.length - 1];
+      if (last) {
+        const previous = map.project(last);
+        const distance = Math.hypot(previous.x - event.point.x, previous.y - event.point.y);
+        if (distance < VERTEX_SLOP_PX) return;
+      }
+      state.addVertex([event.lngLat.lng, event.lngLat.lat]);
+    });
+
+    map.on("dblclick", (event: MapMouseEvent) => {
+      if (draw.getState().mode !== "polygon") return;
+      event.preventDefault();
+      draw.getState().finish();
+    });
+
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.view !== previous.view && !fromMap) applyView(state.view);
+      // Markers do not need the style, so they are kept in sync from the start.
+      if (state.annotations !== previous.annotations) {
+        syncAnnotationMarkers(map, markers, state.annotations);
+      }
       if (!ready) return;
       if (state.features !== previous.features) applyFeatures(map, state.features);
       if (state.selection !== previous.selection) applySelection(map, state.selection);
+      if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
+
+    const unsubscribeDraw = draw.subscribe((state, previous) => {
+      if (state.draft !== previous.draft) applyDraft(map, state.draft);
+      if (state.mode !== previous.mode) applyDrawCursor(state.mode);
+    });
+
+    syncAnnotationMarkers(map, markers, store.getState().annotations);
+    applyDrawCursor(draw.getState().mode);
 
     return () => {
       unsubscribe();
+      unsubscribeDraw();
+      for (const marker of markers.values()) marker.remove();
+      markers.clear();
       try {
         map.remove();
       } catch {

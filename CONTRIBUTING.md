@@ -111,6 +111,7 @@ A task is done only when **all** of these hold. Anything missing must be stated 
 |---|---|
 | `pnpm dev` | 3000 |
 | Playwright web server | `E2E_PORT`, default 3100 |
+| Live-basemap smoke (opt-in, never in CI) | `E2E_LIVE_BASEMAP=1` — e2e is network-isolated by default |
 
 ## Environment and secrets
 

@@ -31,6 +31,13 @@ import {
   type ShapeKind,
 } from "./shapes";
 import {
+  DEFAULT_SURROUNDINGS_RADIUS_M,
+  findDistrict,
+  groupByDirection,
+  NEIGHBOUR_CATEGORIES,
+  SURROUNDINGS_ITEM_LIMIT,
+} from "./surroundings";
+import {
   DEFAULT_LIMIT,
   DEFAULT_RADIUS_M,
   MAX_LIMIT,
@@ -77,6 +84,11 @@ export interface AnnotateInput {
   at?: unknown;
   note?: unknown;
   icon?: unknown;
+}
+
+export interface DescribeSurroundingsInput {
+  from?: unknown;
+  radius_m?: unknown;
 }
 
 export interface ListFeaturesInViewInput {
@@ -731,6 +743,53 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
+    name: "describe_surroundings",
+    description:
+      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its distance in metres. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. Answers are capped at 30 features, so widen or narrow radius_m rather than expecting everything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: pointProperty(
+          "Where to look from: a coordinate, a feature id from an earlier call, or a place name. Omit to describe the surroundings of the centre of the current view.",
+        ),
+        radius_m: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: MAX_RADIUS_M,
+          description: `How far to look, in metres (default ${DEFAULT_SURROUNDINGS_RADIUS_M}, roughly a five-minute walk; at most ${MAX_RADIUS_M}).`,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const radius = validateRadiusM(inp.radius_m, DEFAULT_SURROUNDINGS_RADIUS_M);
+      if ("error" in radius) return { error: radius.error };
+
+      let origin = store.getView().center;
+      if (inp.from !== undefined) {
+        const resolved = resolvePoint(store, inp.from, "from");
+        if ("error" in resolved) return resolved;
+        origin = resolved.point;
+      }
+
+      const features = store.getFeatures();
+      const near = queryFeatures(features, {
+        origin,
+        radius_m: radius.radius_m,
+        categories: NEIGHBOUR_CATEGORIES,
+      });
+
+      return {
+        origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
+        district: findDistrict(features, origin),
+        groups: groupByDirection(near.slice(0, SURROUNDINGS_ITEM_LIMIT), origin),
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
@@ -739,5 +798,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     selectFeatures as GlassMapTool,
     drawShape as GlassMapTool,
     annotate as GlassMapTool,
+    describeSurroundings as GlassMapTool,
   ];
 }

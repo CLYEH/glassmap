@@ -54,6 +54,7 @@ describe("tool contract", () => {
     expect(byName.get_map_state.annotations?.readOnlyHint).toBe(true);
     expect(byName.list_features_in_view.annotations?.readOnlyHint).toBe(true);
     expect(byName.find_features.annotations?.readOnlyHint).toBe(true);
+    expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.draw_shape.annotations?.readOnlyHint).toBeFalsy();
@@ -123,7 +124,7 @@ describe("tool contract", () => {
     { input: { type: "circle", center: "Daan Station", radius_m: 0 }, rejectedBy: ["draw_shape"] },
     {
       input: { type: "circle", center: "Daan Station", radius_m: -5 },
-      rejectedBy: ["draw_shape", "find_features", "select_features"],
+      rejectedBy: ["draw_shape", "find_features", "select_features", "describe_surroundings"],
     },
     {
       input: { type: "polygon", coordinates: [[121.5, 25], [121.6, 25]] },
@@ -141,7 +142,11 @@ describe("tool contract", () => {
     { input: { note: "no location" }, rejectedBy: ["annotate"] },
     { input: { within: "drawing:404" }, rejectedBy: ["find_features", "select_features"] },
     { input: { within: 7 }, rejectedBy: ["find_features", "select_features"] },
-    { input: { radius_m: "500" }, rejectedBy: ["find_features", "select_features"] },
+    {
+      input: { radius_m: "500" },
+      rejectedBy: ["find_features", "select_features", "describe_surroundings"],
+    },
+    { input: { from: "Shibuya" }, rejectedBy: ["describe_surroundings"] },
   ];
 
   it.each(HOSTILE)("refuses $input without throwing or changing state", async ({ input, rejectedBy }) => {

@@ -21,7 +21,7 @@
  */
 import { callTool } from "./mcp";
 import { forceNoWebGL2, waitForFeatures, waitForStoreHandle, waitForTools } from "./helpers";
-import { expect, test } from "./fixtures";
+import { blockExternalNetwork, expect, test } from "./fixtures";
 import { decodeShareState } from "@/lib/map-tools/share";
 import { DEFAULT_VIEW, type Drawing } from "@/lib/store/map-store";
 import { SHARE_TOO_LARGE_MESSAGE, SHARE_WRITE_DEBOUNCE_MS } from "@/components/share-hash";
@@ -128,6 +128,11 @@ test.describe("share link (T-31)", () => {
 
     const context2 = await browser.newContext();
     const page2 = await context2.newPage();
+    // A fresh context is not covered by fixtures.ts's auto-block (that one
+    // only routes the default context Playwright hands this test) -- without
+    // this, the "recipient" page would make a real request to
+    // tiles.openfreemap.org (T-13).
+    await blockExternalNetwork(page2);
     const errors2: string[] = [];
     page2.on("pageerror", (err) => errors2.push(err.message));
 
@@ -192,6 +197,11 @@ test.describe("share link (T-31)", () => {
 
     const context2 = await browser.newContext();
     const page2 = await context2.newPage();
+    // A fresh context is not covered by fixtures.ts's auto-block (that one
+    // only routes the default context Playwright hands this test) -- without
+    // this, the "recipient" page would make a real request to
+    // tiles.openfreemap.org (T-13).
+    await blockExternalNetwork(page2);
     const errors2: string[] = [];
     page2.on("pageerror", (err) => errors2.push(err.message));
 

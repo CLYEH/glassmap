@@ -1,12 +1,50 @@
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { MapToolStore, MapView } from "@/lib/store/map-store";
-import { describeView } from "./state";
+import type { LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
+import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import { describeState } from "./state";
+import {
+  boundsIntersect,
+  describeFeature,
+  featureBounds,
+  featureCenter,
+  type FeatureOutput,
+} from "./output";
+import { resolvePlaceOne } from "./gazetteer";
+import {
+  DEFAULT_LIMIT,
+  DEFAULT_RADIUS_M,
+  MAX_LIMIT,
+  queryFeatures,
+  resolveNear,
+  validateCategories,
+  validateLimit,
+  validateRadius,
+} from "./query";
+
+/** Zoom used when the caller names a place instead of a camera position. */
+export const PLACE_ZOOM = 15;
 
 export interface SetMapViewInput {
   center?: { lng: number; lat: number };
   zoom?: number;
   bearing?: number;
   pitch?: number;
+  place?: string;
+  feature_id?: string;
+}
+
+export interface FindFeaturesInput {
+  query?: unknown;
+  categories?: unknown;
+  near?: unknown;
+  radius_m?: unknown;
+  limit?: unknown;
+  within?: unknown;
+}
+
+export interface ListFeaturesInViewInput {
+  categories?: unknown;
+  limit?: unknown;
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -37,41 +75,300 @@ export function validateSetMapView(input: SetMapViewInput): { patch: Partial<Map
   return { patch };
 }
 
+// ---------------------------------------------------------------- schema bits
+
+const categoriesProperty = {
+  type: "array",
+  minItems: 1,
+  items: { type: "string", enum: [...FEATURE_CATEGORIES] },
+  description: `Keep only features in these categories. Omit to search every category. Values: ${FEATURE_CATEGORIES.join(", ")}.`,
+};
+
+const limitProperty = {
+  type: "integer",
+  minimum: 1,
+  maximum: MAX_LIMIT,
+  description: `Maximum number of features to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}). The "total" field reports how many matched in all.`,
+};
+
+const nearProperty = {
+  description:
+    'Origin for distances and for the radius filter: a feature id returned by an earlier call (e.g. "osm:node:123"), a place name to look up in the loaded data (e.g. "Daan Station"), or an explicit coordinate. Omit to measure from the centre of the current view.',
+  anyOf: [
+    { type: "string", description: "A feature id, or the name of a station, park or district." },
+    {
+      type: "object",
+      properties: {
+        lng: { type: "number", minimum: -180, maximum: 180, description: "Longitude in degrees." },
+        lat: { type: "number", minimum: -90, maximum: 90, description: "Latitude in degrees." },
+      },
+      required: ["lng", "lat"],
+      additionalProperties: false,
+      description: "Explicit coordinate.",
+    },
+  ],
+};
+
+const radiusProperty = {
+  type: "number",
+  exclusiveMinimum: 0,
+  description: `Keep only features within this many metres of "near" (default ${DEFAULT_RADIUS_M} when "near" is given, no radius filter otherwise). Measured to a feature point, or to the centroid of an area.`,
+};
+
+// ------------------------------------------------------------------ internals
+
+interface ResolvedQuery {
+  origin: LngLat;
+  radius_m?: number;
+  categories?: FeatureCategory[];
+  query?: string;
+  limit: number;
+}
+
+type QueryError = { error: string; candidates?: unknown };
+
+/**
+ * Validation shared by find_features and select_features, so that "the parks I
+ * found" and "the parks you selected" can never be different sets. Returns
+ * either the resolved query or the exact object the tool should hand back.
+ */
+function resolveQueryInput(
+  store: MapToolStore,
+  input: FindFeaturesInput,
+  opts: { allowQuery: boolean },
+): ResolvedQuery | QueryError {
+  const cats = validateCategories(input.categories);
+  if ("error" in cats) return { error: cats.error };
+  const lim = validateLimit(input.limit);
+  if ("error" in lim) return { error: lim.error };
+  const rad = validateRadius(input.radius_m);
+  if ("error" in rad) return { error: rad.error };
+
+  let query: string | undefined;
+  if (opts.allowQuery && input.query !== undefined) {
+    if (typeof input.query !== "string") return { error: "query must be a string" };
+    query = input.query.trim() || undefined;
+  }
+
+  let origin = store.getView().center;
+  let radius_m = rad.radius_m;
+  if (input.near !== undefined) {
+    const near = resolveNear(input.near, store.getFeatures());
+    if (near.kind === "invalid") return { error: near.error };
+    if (near.kind === "none") return { error: "unknown place" };
+    if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
+    origin = near.center;
+    radius_m = radius_m ?? DEFAULT_RADIUS_M;
+  }
+
+  return { origin, radius_m, categories: cats.categories, query, limit: lim.limit };
+}
+
+interface FeatureListOutput {
+  total: number;
+  returned: number;
+  features: FeatureOutput[];
+}
+
+function listOutput(matched: GlassMapFeature[], origin: LngLat, limit: number): FeatureListOutput {
+  const page = matched.slice(0, limit);
+  return {
+    total: matched.length,
+    returned: page.length,
+    features: page.map((f) => describeFeature(f, origin)),
+  };
+}
+
+// ---------------------------------------------------------------------- tools
+
 export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view (center, zoom, bearing, pitch). Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded and which are selected. Use this instead of a screenshot to know what the map shows.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
-    execute: () => describeView(store.getView()),
+    execute: () => describeState(store),
   };
 
   const setMapView: GlassMapTool<SetMapViewInput> = {
     name: "set_map_view",
     description:
-      "Move the map camera. Any of center {lng,lat}, zoom (0-22), bearing (deg), pitch (0-85) may be given. Returns the new map state.",
+      "Move the map camera. Give a place name or a feature id to jump to something by name, or center/zoom/bearing/pitch to position the camera directly. Returns the new map state, so no follow-up read is needed.",
     inputSchema: {
       type: "object",
       properties: {
         center: {
           type: "object",
-          properties: { lng: { type: "number" }, lat: { type: "number" } },
+          properties: {
+            lng: { type: "number", minimum: -180, maximum: 180, description: "Longitude in degrees." },
+            lat: { type: "number", minimum: -90, maximum: 90, description: "Latitude in degrees." },
+          },
           required: ["lng", "lat"],
+          additionalProperties: false,
+          description: "Exact camera centre. Cannot be combined with place or feature_id.",
         },
-        zoom: { type: "number", minimum: 0, maximum: 22 },
-        bearing: { type: "number" },
-        pitch: { type: "number", minimum: 0, maximum: 85 },
+        zoom: {
+          type: "number",
+          minimum: 0,
+          maximum: 22,
+          description: `Zoom level: 10 shows a city, 15 a neighbourhood, 18 a building. Defaults to ${PLACE_ZOOM} when place or feature_id is used.`,
+        },
+        bearing: {
+          type: "number",
+          description: "Map rotation in degrees clockwise from north; 0 is north-up.",
+        },
+        pitch: {
+          type: "number",
+          minimum: 0,
+          maximum: 85,
+          description: "Camera tilt in degrees; 0 looks straight down.",
+        },
+        place: {
+          type: "string",
+          description:
+            'Name of a place in the loaded data, e.g. "Daan Station". Station suffixes are optional. If several places match equally well the map does not move and the answer lists candidates to choose from.',
+        },
+        feature_id: {
+          type: "string",
+          description:
+            'Id of a loaded feature, e.g. "osm:node:123". Use this instead of place when you already have an id, or to resolve an ambiguous place.',
+        },
       },
       additionalProperties: false,
     },
+    // Candidates for an ambiguous place echo OSM names, which are third-party text.
+    annotations: { untrustedContentHint: true },
     execute: (input) => {
-      const v = validateSetMapView(input ?? {});
-      if ("error" in v) return { error: v.error, state: describeView(store.getView()) };
-      store.setView(v.patch);
-      return describeView(store.getView());
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      const hasPlace = inp.place !== undefined;
+      const hasFeatureId = inp.feature_id !== undefined;
+      const hasCamera = [inp.center, inp.zoom, inp.bearing, inp.pitch].some((v) => v !== undefined);
+
+      if (hasPlace && hasFeatureId) {
+        return { error: "provide either place or feature_id, not both", state: state() };
+      }
+      if ((hasPlace || hasFeatureId) && inp.center !== undefined) {
+        return { error: "provide either center or place/feature_id, not both", state: state() };
+      }
+      if (!hasCamera && !hasPlace && !hasFeatureId) {
+        return {
+          error: "provide at least one of center, zoom, bearing, pitch, place, feature_id",
+          state: state(),
+        };
+      }
+
+      let patch: Partial<MapView> = {};
+      if (hasCamera) {
+        const v = validateSetMapView({
+          center: inp.center,
+          zoom: inp.zoom,
+          bearing: inp.bearing,
+          pitch: inp.pitch,
+        });
+        if ("error" in v) return { error: v.error, state: state() };
+        patch = v.patch;
+      }
+
+      if (hasFeatureId) {
+        if (typeof inp.feature_id !== "string" || !inp.feature_id.trim()) {
+          return { error: "feature_id must be a non-empty string", state: state() };
+        }
+        const id = inp.feature_id.trim();
+        const feature = store.getFeatures().find((f) => f.properties?.id === id);
+        if (!feature) return { error: "unknown feature_id", state: state() };
+        const center = featureCenter(feature);
+        if (!center) return { error: "feature has no usable geometry", state: state() };
+        patch.center = center;
+        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+      }
+
+      if (hasPlace) {
+        if (typeof inp.place !== "string" || !inp.place.trim()) {
+          return { error: "place must be a non-empty string", state: state() };
+        }
+        const resolved = resolvePlaceOne(inp.place, store.getFeatures());
+        if (resolved.kind === "none") return { error: "unknown place", state: state() };
+        if (resolved.kind === "ambiguous") {
+          // Never guess: an agent cannot see that the map went to the wrong place.
+          return { error: "ambiguous place", candidates: resolved.candidates, state: state() };
+        }
+        patch.center = resolved.entry.center;
+        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+      }
+
+      store.setView(patch);
+      return describeState(store);
     },
   };
 
-  return [getMapState, setMapView as GlassMapTool];
+  const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
+    name: "list_features_in_view",
+    description:
+      "List the features currently visible on the map, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. This is how you describe what is on screen without taking a screenshot.",
+    inputSchema: {
+      type: "object",
+      properties: { categories: categoriesProperty, limit: limitProperty },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const cats = validateCategories(inp.categories);
+      if ("error" in cats) return { error: cats.error };
+      const lim = validateLimit(inp.limit);
+      if ("error" in lim) return { error: lim.error };
+
+      const bounds = store.getBounds();
+      if (!bounds) return { error: "map not ready" };
+
+      const origin = store.getView().center;
+      const visible = store.getFeatures().filter((f) => {
+        const b = featureBounds(f);
+        return b ? boundsIntersect(b, bounds) : false;
+      });
+      return listOutput(queryFeatures(visible, { origin, categories: cats.categories }), origin, lim.limit);
+    },
+  };
+
+  const findFeatures: GlassMapTool<FindFeaturesInput> = {
+    name: "find_features",
+    description:
+      "Search every loaded feature, not only the visible ones. Filter by name, category and distance from a place, a feature or a coordinate. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Case-insensitive substring of the local or English name. Omit to match every name.",
+        },
+        categories: categoriesProperty,
+        near: nearProperty,
+        radius_m: radiusProperty,
+        limit: limitProperty,
+        within: {
+          type: "string",
+          description: "shape:<id> or drawing:<id> (available from D3)",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      if (inp.within !== undefined) return { error: "within is not available yet" };
+      const resolved = resolveQueryInput(store, inp, { allowQuery: true });
+      if ("error" in resolved) return resolved;
+      return listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit);
+    },
+  };
+
+  return [
+    getMapState,
+    setMapView as GlassMapTool,
+    listFeaturesInView as GlassMapTool,
+    findFeatures as GlassMapTool,
+  ];
 }

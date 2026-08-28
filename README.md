@@ -2,7 +2,7 @@
 
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
-> Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
+> Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
 > **Status: early scaffold.** Two tools work end-to-end against an in-memory map state; the MapLibre map and the remaining tools are in progress. See [Roadmap](#roadmap).
 
 ## Why "Glass"
@@ -56,7 +56,7 @@ Design rules the tool layer follows:
 ### Chrome (149+)
 
 1. Enable `chrome://flags/#enable-webmcp-testing` and restart Chrome.
-2. Open the deployed app *(URL coming soon)* or run it locally (below).
+2. Open **https://glassmap.clyeh.xyz** or run it locally (below).
 3. Use the [Model Context Tool Inspector](https://developer.chrome.com/docs/ai/webmcp) extension, or open DevTools and call the API directly:
 
 ```js

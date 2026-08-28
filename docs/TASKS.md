@@ -11,7 +11,7 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
 | T-01 | Harness, scaffold, shim, `get_map_state` + `set_map_view` on in-memory state, CI, CONTRIBUTING | orchestrator | done | |
-| T-02 | Push scaffold to GitHub, connect Vercel (prod = `main`, preview = `develop`) | orchestrator + user | todo | needs user's Vercel login |
+| T-02 | Push scaffold to GitHub, connect Vercel (prod = `main`, preview = `develop`) | orchestrator + user | done | prod: https://glassmap.clyeh.xyz |
 | T-03 | MapLibre + OpenFreeMap map component; store ⇄ map sync; `set_map_view` flies the real map | map-ui-dev | todo | keep `data-testid`s from placeholder page |
 | T-04 | Verify `queryRenderedFeatures` reads POI layers from the liberty style | map-ui-dev | todo | result decides whether basemap POIs are in scope |
 | T-05 | D1 gate: ChatGPT desktop built-in browser lists and calls `get_map_state` | user + orchestrator | todo | fallback: Chrome flag + Inspector; rewrite demo script |

@@ -15,6 +15,8 @@ export function StateOverlay() {
   const bounds = useMapStore((s) => s.bounds);
   const featureCount = useMapStore((s) => s.features.length);
   const selectionCount = useMapStore((s) => s.selection.length);
+  const drawingCount = useMapStore((s) => s.drawings.length);
+  const annotationCount = useMapStore((s) => s.annotations.length);
   const state = describeView(view);
 
   return (
@@ -40,6 +42,10 @@ export function StateOverlay() {
         <dd data-testid="feature-count">{featureCount}</dd>
         <dt>selected</dt>
         <dd data-testid="selection-count">{selectionCount}</dd>
+        <dt>drawings</dt>
+        <dd data-testid="drawing-count">{drawingCount}</dd>
+        <dt>notes</dt>
+        <dd data-testid="annotation-count">{annotationCount}</dd>
       </dl>
       <ul data-testid="legend" className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5">
         {FEATURE_CATEGORIES.map((category) => (

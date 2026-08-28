@@ -23,6 +23,32 @@ export interface ToolResult {
   bounds?: BoundsResult | null;
   selection?: { count: number; ids: string[] };
   features_loaded?: number;
+  drawings?: { count: number; items: DrawingResult[] };
+  annotations?: { count: number; items: AnnotationResult[] };
+  // draw_shape / annotate / get_share_link success responses.
+  drawing_id?: string;
+  annotation_id?: string;
+  area_m2?: number;
+  length_m?: number;
+  url?: string;
+  bytes?: number;
+  omitted?: { drawings: number; annotations: number };
+}
+
+export interface DrawingResult {
+  id: string;
+  kind: "circle" | "polygon" | "line";
+  label?: string;
+  /** "user" means a human drew it by hand; "agent" means a tool did. */
+  source: "agent" | "user";
+  area_m2?: number;
+  length_m?: number;
+}
+
+export interface AnnotationResult {
+  id: string;
+  note: string;
+  source: "agent" | "user";
 }
 
 export interface FeatureResult {
@@ -58,4 +84,6 @@ export interface MapStateResult {
   bounds: BoundsResult | null;
   selection: { count: number; ids: string[] };
   features_loaded: number;
+  drawings: { count: number; items: DrawingResult[] };
+  annotations: { count: number; items: AnnotationResult[] };
 }

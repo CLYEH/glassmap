@@ -34,6 +34,16 @@ export async function waitForLiveMap(page: Page): Promise<void> {
 }
 
 /**
+ * True once dev-store-handle.ts has exposed the zustand store as
+ * `window.__glassmapStore` (dev builds only). Needed before any test drives
+ * the store directly (adding a hand-picked drawing, e.g.) instead of going
+ * through a tool call.
+ */
+export async function waitForStoreHandle(page: Page): Promise<void> {
+  await page.waitForFunction(() => !!window.__glassmapStore);
+}
+
+/**
  * Deterministically reproduces MapCanvas.tsx's "map unavailable" branch
  * (headless CI without a GPU) regardless of whether this Playwright browser
  * itself has real WebGL2. Must be called before `page.goto`.

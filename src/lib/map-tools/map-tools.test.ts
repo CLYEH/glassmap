@@ -39,6 +39,7 @@ interface ToolResult {
   selected?: FeatureOutput[];
   unknown_ids?: string[];
   unknown_count?: number;
+  known_ids?: string[];
   state?: MapStateOutput;
 }
 
@@ -55,17 +56,21 @@ describe("tool contract", () => {
     expect(byName.find_features.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
+    expect(byName.draw_shape.annotations?.readOnlyHint).toBeFalsy();
+    expect(byName.annotate.annotations?.readOnlyHint).toBeFalsy();
   });
 
   it("marks untrustedContentHint on every tool that can echo OSM or user text", () => {
     // Names come from OpenStreetMap and from sample listings; a client must be
     // able to treat them as data, not as instructions.
     const { byName } = toolsFor();
-    for (const name of ["set_map_view", "list_features_in_view", "find_features", "select_features"]) {
-      expect(byName[name].annotations?.untrustedContentHint, name).toBe(true);
+    // Since drawings and annotations landed, *every* tool echoes third-party
+    // text: map state carries the labels and notes a human typed on the page,
+    // and every tool returns map state. get_map_state included.
+    for (const t of toolsFor().tools) {
+      expect(t.annotations?.untrustedContentHint, t.name).toBe(true);
     }
-    // get_map_state returns numbers and ids only, so it needs no such hint.
-    expect(byName.get_map_state.annotations?.untrustedContentHint).toBeFalsy();
+    expect(byName.get_map_state.annotations?.readOnlyHint).toBe(true);
   });
 
   it("every tool has a closed JSON-schema object and describes each property", () => {
@@ -109,10 +114,34 @@ describe("tool contract", () => {
     { input: { ids: 7 }, rejectedBy: ["select_features"] },
     { input: { ids: [null] }, rejectedBy: ["select_features"] },
     { input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) }, rejectedBy: ["select_features"] },
-    { input: {}, rejectedBy: ["set_map_view", "select_features"] },
+    { input: {}, rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
     // Not an object at all — some clients pass the raw argument through.
-    { input: "hello", rejectedBy: ["set_map_view", "select_features"] },
-    { input: null, rejectedBy: ["set_map_view", "select_features"] },
+    { input: "hello", rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
+    { input: null, rejectedBy: ["set_map_view", "select_features", "draw_shape", "annotate"] },
+    { input: { type: "blob", coordinates: [] }, rejectedBy: ["draw_shape"] },
+    { input: { type: "circle" }, rejectedBy: ["draw_shape"] },
+    { input: { type: "circle", center: "Daan Station", radius_m: 0 }, rejectedBy: ["draw_shape"] },
+    {
+      input: { type: "circle", center: "Daan Station", radius_m: -5 },
+      rejectedBy: ["draw_shape", "find_features", "select_features"],
+    },
+    {
+      input: { type: "polygon", coordinates: [[121.5, 25], [121.6, 25]] },
+      rejectedBy: ["draw_shape"],
+    },
+    { input: { type: "line", coordinates: [[121.5, 25]] }, rejectedBy: ["draw_shape"] },
+    {
+      input: { type: "line", coordinates: [[121.5, 25], [181, 25]] },
+      rejectedBy: ["draw_shape"],
+    },
+    { input: { at: { lng: 121.5, lat: 25 }, note: "   " }, rejectedBy: ["annotate"] },
+    { input: { at: { lng: 121.5, lat: 25 }, note: "x".repeat(501) }, rejectedBy: ["annotate"] },
+    { input: { at: "Shibuya", note: "hi" }, rejectedBy: ["annotate"] },
+    { input: { at: 42, note: "hi" }, rejectedBy: ["annotate"] },
+    { input: { note: "no location" }, rejectedBy: ["annotate"] },
+    { input: { within: "drawing:404" }, rejectedBy: ["find_features", "select_features"] },
+    { input: { within: 7 }, rejectedBy: ["find_features", "select_features"] },
+    { input: { radius_m: "500" }, rejectedBy: ["find_features", "select_features"] },
   ];
 
   it.each(HOSTILE)("refuses $input without throwing or changing state", async ({ input, rejectedBy }) => {
@@ -126,6 +155,10 @@ describe("tool contract", () => {
       }
       expect(store.getView(), `${t.name} moved the map`).toEqual(VIEW);
       expect(store.getSelection(), `${t.name} changed the selection`).toEqual(["osm:node:2"]);
+      // Nothing in this table describes a shape or a note, so nothing may be
+      // drawn on the human's map either.
+      expect(store.getDrawings(), `${t.name} drew something`).toEqual([]);
+      expect(store.getAnnotations(), `${t.name} pinned something`).toEqual([]);
     }
   });
 
@@ -168,6 +201,8 @@ describe("get_map_state", () => {
       bounds: { west: 121.525, south: 25.02, east: 121.55, north: 25.045 },
       selection: { count: 1, ids: ["osm:node:2"] },
       features_loaded: FIXTURE_FEATURES.length,
+      drawings: { count: 0, items: [] },
+      annotations: { count: 0, items: [] },
     });
   });
 
@@ -422,13 +457,13 @@ describe("find_features", () => {
     expect(out).toEqual({ total: 0, returned: 0, features: [] });
   });
 
-  it("says 'within' is not implemented yet instead of silently ignoring it", async () => {
-    // The parameter is reserved so an agent that reads the schema in D3 does not
-    // have to re-learn the tool; until then a passed value must not be dropped.
+  it("refuses an unknown shape id instead of ignoring the filter", async () => {
+    // Dropping an unresolvable spatial filter is the worst possible failure:
+    // "the shops inside the circle I drew" would answer with the whole city.
     const { byName } = mapReady();
-    expect(await call(byName.find_features, { within: "shape:1" })).toEqual({
-      error: "within is not available yet",
-    });
+    const out = await call(byName.find_features, { within: "shape:1" });
+    expect(out.error).toMatch(/drawing/);
+    expect(out.features).toBeUndefined();
   });
 
   it("has the same result shape as list_features_in_view", async () => {
@@ -529,15 +564,19 @@ describe("select_features", () => {
     expect(found.returned).toBe(1);
     expect(store.getSelection()).toHaveLength(3);
     expect(selected.state?.selection.count).toBe(found.total);
+    // The schema description is the only place an agent can learn that the two
+    // tools diverge above `limit`; a description that claims they are identical
+    // is a lie the agent has no way to detect.
+    expect(byName.select_features.description).toMatch(/does not stop at/);
   });
 
-  it("refuses `within` instead of selecting everything the rest of the filter matched", async () => {
-    // Dropping an unimplemented spatial filter is the worst possible failure:
-    // "the shops inside the circle I drew" would highlight the whole city.
+  it("refuses an unknown `within` instead of selecting everything else the filter matched", async () => {
+    // Same failure mode as find_features, but visible: the human would watch
+    // every park in Taipei light up for "the parks in my circle".
     const { store, byName } = mapReady({ selection: ["osm:node:2"] });
     const out = await call(byName.select_features, { within: "shape:1", categories: ["park"] });
-    expect(out.error).toMatch(/within is not available yet/);
-    expect(out.error).toMatch(/find_features/);
+    expect(out.error).toMatch(/drawing/);
+    expect(out.known_ids).toEqual([]);
     expect(store.getSelection()).toEqual(["osm:node:2"]);
   });
 

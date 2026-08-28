@@ -1,10 +1,17 @@
-import type { Bounds, MapToolStore, MapView } from "@/lib/store/map-store";
+import type { Annotation, Bounds, Drawing, MapToolStore, MapView } from "@/lib/store/map-store";
+import { measureGeometry, truncate } from "./shapes";
 
 /** Round to 5 decimals (~1 m) to keep tool output small. */
 export const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
 
 /** How many selected ids describeState lists; the count is always exact. */
 export const SELECTION_ID_LIMIT = 20;
+
+/** How many drawings/annotations describeState lists; the counts are exact. */
+export const STATE_ITEM_LIMIT = 10;
+
+/** Notes are the human's own words and can be long; state only shows the start. */
+export const NOTE_PREVIEW_CHARS = 80;
 
 /** Camera only — also rendered by the page, so it must stay stable. */
 export interface ViewOutput {
@@ -21,12 +28,32 @@ export interface BoundsOutput {
   north: number;
 }
 
+/** One drawing in map state: what it is and how big, never where. */
+export interface DrawingOutput {
+  id: string;
+  kind: Drawing["kind"];
+  label?: string;
+  /** "user" means a human drew it by hand; "agent" means a tool did. */
+  source: Drawing["source"];
+  area_m2?: number;
+  length_m?: number;
+}
+
+export interface AnnotationOutput {
+  id: string;
+  /** Truncated to NOTE_PREVIEW_CHARS; the store keeps the full text. */
+  note: string;
+  source: Annotation["source"];
+}
+
 /** Serialisable map state returned by get_map_state and every write tool. */
 export interface MapStateOutput extends ViewOutput {
   /** Visible extent; null until the map has rendered once. */
   bounds: BoundsOutput | null;
   selection: { count: number; ids: string[] };
   features_loaded: number;
+  drawings: { count: number; items: DrawingOutput[] };
+  annotations: { count: number; items: AnnotationOutput[] };
 }
 
 export function describeView(view: MapView): ViewOutput {
@@ -48,17 +75,44 @@ export function describeBounds(bounds: Bounds | null): BoundsOutput | null {
   };
 }
 
+export function describeDrawing(drawing: Drawing): DrawingOutput {
+  const out: DrawingOutput = { id: drawing.id, kind: drawing.kind, source: drawing.source };
+  if (drawing.label) out.label = drawing.label;
+  // Measuring here (rather than at draw time) also covers the shapes the human
+  // drew by hand, which never went through a tool.
+  return { ...out, ...measureGeometry(drawing.geometry) };
+}
+
+export function describeAnnotation(annotation: Annotation): AnnotationOutput {
+  return {
+    id: annotation.id,
+    note: truncate(annotation.note, NOTE_PREVIEW_CHARS),
+    source: annotation.source,
+  };
+}
+
 /**
  * The one state object the agent ever needs: what the camera shows, what is
- * highlighted and how much data is loaded. Every write tool returns it so no
- * follow-up read is required.
+ * highlighted, how much data is loaded, and what has been drawn or noted on the
+ * map by either side. Every write tool returns it so no follow-up read is
+ * required.
  */
 export function describeState(store: MapToolStore): MapStateOutput {
   const selection = store.getSelection();
+  const drawings = store.getDrawings();
+  const annotations = store.getAnnotations();
   return {
     ...describeView(store.getView()),
     bounds: describeBounds(store.getBounds()),
     selection: { count: selection.length, ids: selection.slice(0, SELECTION_ID_LIMIT) },
     features_loaded: store.getFeatures().length,
+    drawings: {
+      count: drawings.length,
+      items: drawings.slice(0, STATE_ITEM_LIMIT).map(describeDrawing),
+    },
+    annotations: {
+      count: annotations.length,
+      items: annotations.slice(0, STATE_ITEM_LIMIT).map(describeAnnotation),
+    },
   };
 }

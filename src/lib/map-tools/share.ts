@@ -318,8 +318,8 @@ function decodeDrawing(value: unknown): ShareDrawing | null {
   const kind = wire.k;
   if (typeof kind !== "string" || !(SHAPE_KINDS as readonly string[]).includes(kind)) return null;
   const base: { source: Drawing["source"]; kind: Drawing["kind"]; label?: string } = {
-    // A link written by a stranger cannot claim a shape was drawn by the human:
-    // "user" is the map's word for "someone in this room drew this".
+    // Provenance survives the round trip: get_share_link promises "the human's
+    // own drawings still marked as theirs", so a decoded link keeps its source labels.
     source: wire.o === "user" ? "user" : "agent",
     kind: kind as Drawing["kind"],
   };

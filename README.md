@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status: early scaffold.** Two tools work end-to-end against an in-memory map state; the MapLibre map and the remaining tools are in progress. See [Roadmap](#roadmap).
+> **Status:** the tool layer is live — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features` and `select_features` are implemented, unit-tested, and backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). Drawing, annotation and `describe_surroundings` are still in progress. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,18 +33,27 @@ Three layers. Every write tool returns the new map state so the agent never need
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
-├─ get_map_state              ✅             ├─ set_map_view  ✅      ├─ draw_shape
-├─ list_features_in_view                     └─ set_layers            ├─ select_features
-├─ find_features                                                      ├─ annotate
+├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape
+├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
+├─ find_features ✅                                                   ├─ annotate
 ├─ describe_surroundings                                              └─ get_share_link
 ├─ measure
 └─ compare_areas
 ```
 
-✅ = implemented and covered by tests. Everything else is planned — see [Roadmap](#roadmap).
+✅ = implemented and covered by unit tests. Everything else is planned — see [Roadmap](#roadmap).
+
+| Tool | What it does | Key inputs |
+|---|---|---|
+| `get_map_state` | Reads the camera, visible bounds, feature count and selection in one call — the read that used to require a screenshot. | *(none)* |
+| `set_map_view` | Moves the camera: by exact `center`/`zoom`/`bearing`/`pitch`, by `feature_id`, or by `place` name resolved against the loaded data. An ambiguous `place` does not move the map — it returns candidates with distances instead. | `place`, `feature_id`, `center`, `zoom`, `bearing`, `pitch` |
+| `list_features_in_view` | Lists loaded features whose bounds overlap the current view, nearest-first, each with distance in metres and an 8-point compass direction from the view centre. | `categories`, `limit` |
+| `find_features` | Searches every loaded feature, not just what's visible, by name substring, category and distance from a place, a feature id or a coordinate. | `query`, `categories`, `near`, `radius_m`, `limit` |
+| `select_features` | Highlights features on the map and in the sidebar, by explicit ids or the same `query`/`near`/`radius_m`/`categories` filter `find_features` accepts. | `ids` or filter, `replace` |
 
 Design rules the tool layer follows:
 
+- Every write tool (`set_map_view`, `select_features`) returns the full new map state, so the agent never needs a follow-up read.
 - Read-only tools carry `readOnlyHint: true` so clients can skip confirmation prompts.
 - Output that contains OpenStreetMap or user-entered text carries `untrustedContentHint: true`.
 - Responses are small on purpose: `limit` defaults to 20, coordinates are rounded to 5 decimals, geometry is returned by id rather than inline.
@@ -62,8 +71,23 @@ Design rules the tool layer follows:
 ```js
 const tools = await document.modelContext.getTools();
 const byName = Object.fromEntries(tools.map(t => [t.name, t]));
-await document.modelContext.executeTool(byName.set_map_view, { center: { lng: 121.5436, lat: 25.0264 }, zoom: 15 });
-await document.modelContext.executeTool(byName.get_map_state, {});
+
+// Move the camera by name — no coordinates needed.
+await document.modelContext.executeTool(byName.set_map_view, { place: "Daan Park Station" });
+
+// Everything within comfortable walking distance of the station.
+const result = await document.modelContext.executeTool(byName.find_features, {
+  near: "Daan Park",
+  radius_m: 800,
+  categories: ["park", "school"],
+});
+JSON.parse(result);
+// → { total: 13, returned: 13, features: [
+//     { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
+//       category: "park", distance_m: 333, direction: "S" },
+//     { id: "osm:relation:4793819", name: "幸安國小", name_en: "Xing'an Elementary School",
+//       category: "school", distance_m: 382, direction: "N" },
+//     … 11 more ] }
 ```
 
 ### ChatGPT desktop app
@@ -128,6 +152,17 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 | D5 | Demo video, submission text |
 
 ## Data and licensing
+
+Six GeoJSON files bundled under `public/data/`, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API. Full provenance, Overpass queries and export notes are in [`public/data/README.md`](./public/data/README.md).
+
+| Dataset | Category | Features |
+|---|---|---:|
+| MRT stations | `mrt_station` | 109 |
+| Districts | `district` | 12 |
+| Parks | `park` | 865 |
+| Schools | `school` | 445 |
+| Supermarkets | `supermarket` | 607 |
+| Sample listings | `listing` | 25 (fabricated, not OSM) |
 
 - Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, [ODbL](https://opendatacommons.org/licenses/odbl/). Tiles by [OpenFreeMap](https://openfreemap.org/).
 - Listings shown in the demo are **sample data**, not real properties.

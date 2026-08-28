@@ -53,6 +53,7 @@ import {
   validateLimit,
   validateRadius,
 } from "./query";
+import { decodeShareState, encodeShareState, MAX_SHARE_URL_BYTES, utf8Bytes } from "./share";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -349,7 +350,27 @@ function listOutput(matched: GlassMapFeature[], origin: LngLat, limit: number): 
 
 // ---------------------------------------------------------------------- tools
 
-export function createMapTools(store: MapToolStore): GlassMapTool[] {
+export interface MapToolsOptions {
+  /**
+   * Where a share link points: the page's origin and path, no query and no
+   * hash. Injected so the tool layer stays testable and free of `window`;
+   * defaults to the current page when there is one.
+   */
+  getBaseUrl?: () => string;
+}
+
+/**
+ * The page URL, read at call time rather than at import time: this module is
+ * also loaded on the server, where there is no location at all.
+ */
+function currentBaseUrl(): string {
+  const loc = (globalThis as { location?: { origin?: string; pathname?: string } }).location;
+  if (!loc || typeof loc.origin !== "string") return "";
+  return `${loc.origin}${typeof loc.pathname === "string" ? loc.pathname : ""}`;
+}
+
+export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}): GlassMapTool[] {
+  const getBaseUrl = opts.getBaseUrl ?? currentBaseUrl;
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
@@ -991,6 +1012,74 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const getShareLink: GlassMapTool = {
+    name: "get_share_link",
+    description:
+      "Build a link that reproduces this map for whoever opens it: the camera, the selection, every shape and every note, all encoded in the URL itself. Nothing is uploaded and no account is needed - the state travels inside the link, so the person who opens it sees the map you are looking at now, with the human's own drawings still marked as theirs. Give the URL to the human as a URL, so they can send it on. Returns the url and its size in bytes. A map carrying very large hand-drawn shapes can exceed the byte limit a URL has to stay under; then there is no url, only an error saying what to remove. If \"omitted\" comes back, that many shapes or notes could not be encoded and are not in the link - say so rather than promising a complete map.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    // The only tool that echoes nothing back: the URL is base64 this layer
+    // built, not OSM or human text, so there is no untrusted content in it.
+    annotations: { readOnlyHint: true },
+    execute: () => {
+      let base = "";
+      try {
+        base = getBaseUrl();
+      } catch {
+        // An injected getter is someone else's code; it must not take the turn down.
+        base = "";
+      }
+      if (typeof base !== "string" || !base.trim()) {
+        return {
+          error:
+            "cannot build a share link: the page address is not available, so there would be nothing in front of the '#'",
+        };
+      }
+
+      const drawings = store.getDrawings();
+      const annotations = store.getAnnotations();
+      const selection = store.getSelection();
+      const hash = encodeShareState({ view: store.getView(), selection, drawings, annotations });
+      // Any hash already on the base URL is this map's previous state; keeping
+      // it would produce a link with two of them, and browsers read the first.
+      const url = `${base.trim().split("#")[0]}#${hash}`;
+      const bytes = utf8Bytes(url);
+
+      if (bytes > MAX_SHARE_URL_BYTES) {
+        // Naming the wrong culprit is worse than naming none: an agent told to
+        // "remove drawings" when the selection is what overflowed will delete
+        // the human's shapes and still not get a link.
+        const advice = drawings.length
+          ? `Shapes cost by far the most, and a hand-drawn outline far more than a circle: remove one of the ${drawings.length} drawings and ask again`
+          : selection.length > 20
+            ? `The selection is what costs here: select fewer than ${selection.length} features and ask again`
+            : "Remove some of what is on the map and ask again";
+        return {
+          error: `this map does not fit in a link: ${bytes} bytes, and a URL has to stay under ${MAX_SHARE_URL_BYTES}. ${advice}.`,
+          bytes,
+          drawings: drawings.length,
+          annotations: annotations.length,
+          selection: selection.length,
+        };
+      }
+
+      // Read our own link back before handing it out. What it restores is what
+      // the human is being promised, and a shape this codec has no form for
+      // would otherwise go missing silently in someone else's browser.
+      const check = decodeShareState(hash);
+      if ("error" in check) return { error: `could not build a valid share link: ${check.error}` };
+      const omitted = {
+        drawings: drawings.length - check.drawings.length,
+        annotations: annotations.length - check.annotations.length,
+      };
+
+      return {
+        url,
+        bytes,
+        ...(omitted.drawings || omitted.annotations ? { omitted } : {}),
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
@@ -1002,5 +1091,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     describeSurroundings as GlassMapTool,
     compareAreas as GlassMapTool,
     measure as GlassMapTool,
+    getShareLink,
   ];
 }

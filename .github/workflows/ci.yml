@@ -15,26 +15,58 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Docs-only changes skip the heavy steps but the job still reports the
+      # required "check" context (branch protection needs it either way).
+      - name: Detect docs-only change
+        id: filter
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.base_ref }}...HEAD"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] && [ -n "${{ github.event.before }}" ]; then
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          else
+            RANGE=""
+          fi
+          DOCS_ONLY=false
+          if [ -n "$RANGE" ]; then
+            CHANGED="$(git diff --name-only $RANGE || true)"
+            if [ -n "$CHANGED" ] && ! printf '%s\n' "$CHANGED" | grep -qvE '(^docs/|\.md$|^LICENSE$)'; then
+              DOCS_ONLY=true
+            fi
+          fi
+          echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$DOCS_ONLY (range: ${RANGE:-none})"
 
       - uses: pnpm/action-setup@v4 # reads the packageManager field in package.json
+        if: steps.filter.outputs.docs_only != 'true'
 
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.docs_only != 'true'
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.docs_only != 'true'
 
       - name: Typecheck, lint, unit tests
+        if: steps.filter.outputs.docs_only != 'true'
         run: pnpm check
 
       - name: Production build
+        if: steps.filter.outputs.docs_only != 'true'
         run: pnpm build
 
       - name: Install Playwright browser
+        if: steps.filter.outputs.docs_only != 'true'
         run: pnpm exec playwright install --with-deps chromium
 
       - name: E2E (tools via document.modelContext)
+        if: steps.filter.outputs.docs_only != 'true'
         run: pnpm test:e2e
         env:
           CI: "true"

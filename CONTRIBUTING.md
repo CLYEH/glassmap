@@ -90,6 +90,8 @@ Before requesting merge:
 2. The `reviewer` agent has run on the diff and every high-severity finding is fixed or explicitly declined in the PR.
 3. CI is green (`.github/workflows/ci.yml` runs the same commands plus Playwright).
 
+**Docs-only PRs** (every changed file under `docs/`, a `*.md`, or `LICENSE`) are exempt from items 1–2: CI detects them and skips the heavy steps (the required `check` still reports, in seconds), and no reviewer pass is needed — but every factual claim in the docs must still cite the code it was verified against.
+
 `develop → main` PRs are releases: additionally smoke-test the `develop` preview URL in Chrome with the WebMCP flag, and tag after merge (`d1`, `d2`, …; `v1.0-submission` for the final one).
 
 ## Definition of done

@@ -249,22 +249,23 @@ test.describe("share link (T-31)", () => {
     });
     expect(drawn.error).toBeUndefined();
 
-    // Each mutation resets the debounce (schedule() clears the previous
-    // timer), so only one write ever fires, ~300 ms after the *last* one --
-    // poll for that eventual change rather than sleeping a guessed amount.
+    // Debounced writes can fire more than once while flyTo animations settle
+    // (camera write-backs each reschedule a write), so a single decode after
+    // "hash changed" can catch an intermediate camera on a slow machine (seen
+    // in CI push run 33162552056). Poll until the DECODED state converges on
+    // the final command instead of decoding one arbitrary snapshot.
     await expect
-      .poll(() => page.evaluate(() => location.hash), {
-        message: "the address bar should pick up the final camera + drawing after the debounce",
-      })
-      .not.toBe(hashBefore);
-
-    const finalHash = await page.evaluate(() => location.hash);
-    expect(finalHash).toMatch(/^#v1\./);
-    const decoded = decodeShareState(finalHash);
-    if ("error" in decoded) throw new Error(`expected a decodable link, got: ${decoded.error}`);
-    expect(decoded.view.center).toEqual([121.54, 25.06]);
-    expect(decoded.view.zoom).toBe(15);
-    expect(decoded.drawings).toHaveLength(1);
+      .poll(
+        async () => {
+          const hash = await page.evaluate(() => location.hash);
+          if (!hash.startsWith("#v1.")) return "no v1 hash yet";
+          const decoded = decodeShareState(hash);
+          if ("error" in decoded) return `undecodable: ${decoded.error}`;
+          return `${decoded.view.center.join(",")} z${decoded.view.zoom} d${decoded.drawings.length}`;
+        },
+        { message: "the address bar should converge on the final camera + drawing" },
+      )
+      .toBe("121.54,25.06 z15 d1");
 
     const historyAfter = await page.evaluate(() => history.length);
     expect(historyAfter).toBe(historyBefore);

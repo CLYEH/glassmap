@@ -12,18 +12,18 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 |---|---|---|---|---|
 | T-01 | Harness, scaffold, shim, `get_map_state` + `set_map_view` on in-memory state, CI, CONTRIBUTING | orchestrator | done | |
 | T-02 | Push scaffold to GitHub, connect Vercel (prod = `main`, preview = `develop`) | orchestrator + user | done | prod: https://glassmap.clyeh.xyz |
-| T-03 | MapLibre + OpenFreeMap map component; store ⇄ map sync; `set_map_view` flies the real map | map-ui-dev | todo | keep `data-testid`s from placeholder page |
-| T-04 | Verify `queryRenderedFeatures` reads POI layers from the liberty style | map-ui-dev | todo | result decides whether basemap POIs are in scope |
+| T-03 | MapLibre + OpenFreeMap map component; store ⇄ map sync; `set_map_view` flies the real map | map-ui-dev | done | this PR |
+| T-04 | Verify `queryRenderedFeatures` reads POI layers from the liberty style | map-ui-dev | done | verdict: basemap POIs OUT of tool scope — `queryRenderedFeatures` returns only label-collision survivors (~36 of ~9,400 at z15); tools read our GeoJSON only |
 | T-05 | D1 gate: ChatGPT desktop built-in browser lists and calls `get_map_state` | user + orchestrator | todo | fallback: Chrome flag + Inspector; rewrite demo script |
 
 ## D2 — 2026-08-29 · gate: demo steps 1–4 run
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-10 | GeoJSON: MRT stations, districts, parks, schools, supermarkets, sample listings; gazetteer | data-engineer | todo | schema in `src/lib/data/schema.ts` first |
-| T-11 | `list_features_in_view`, `find_features` (query / categories / near / radius_m / within) | tool-dev | todo | depends on T-10 schema |
-| T-12 | `select_features` + highlight on map + sidebar list | tool-dev (tool) / map-ui-dev (UI) | todo | store gets `selection: string[]` |
-| T-13 | E2E for T-11/T-12 through `document.modelContext` | qa | todo | |
+| T-10 | GeoJSON: MRT stations, districts, parks, schools, supermarkets, sample listings | data-engineer | done | PR #4; 2,063 features, 586 KB; gazetteer moved to tool layer |
+| T-11 | `list_features_in_view`, `find_features` (query / categories / near / radius_m), gazetteer, `set_map_view` place/feature_id | tool-dev | done | PR #5; `within` deferred to D3 |
+| T-12 | `select_features` + highlight on map + sidebar list | tool-dev (tool) / map-ui-dev (UI) | review | tool + map highlight done (PR #5 + this PR); sidebar list pending — fold into D3 UI work |
+| T-13 | E2E for T-11/T-12 through `document.modelContext` | qa | todo | include: two rapid `set_map_view` calls (re-entrancy), bounds non-null before `ready`, find/select through modelContext |
 
 ## D3 — 2026-08-30 · gate: demo steps 6–8 run
 
@@ -60,3 +60,6 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 Append-only. `date · from → to · what`.
 
 - 2026-08-28 · orchestrator → all · Harness ready; read `CONTRIBUTING.md` and `docs/webmcp-reference.md` before starting.
+- 2026-08-28 · reviewer → tool-dev · District polygons are simplified independently, so shared borders have seams up to ~150 m; a point-in-polygon "current district" lookup returns none for ~1/700 map centres near borders. When implementing district lookup: fall back to nearest district by boundary distance; if two match, take the first.
+- 2026-08-28 · map-ui-dev → qa · Add e2e: two `set_map_view` calls back-to-back without awaiting the first flight; assert the second call's return matches its request (re-entrancy guard), and `get_map_state().bounds` is non-null immediately after `window.__glassmap` appears.
+- 2026-08-28 · orchestrator → all · Selection ids are `feature.properties.id`; GeoJSON features have no top-level `Feature.id` (UI filters on `["get","id"]`).

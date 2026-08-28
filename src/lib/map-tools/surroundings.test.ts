@@ -18,7 +18,7 @@ import {
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { DATASETS, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import { COMPASS, type Compass } from "./output";
-import { DISTRICT_FALLBACK_MAX_M, SURROUNDINGS_ITEM_LIMIT } from "./surroundings";
+import { SURROUNDINGS_ITEM_LIMIT } from "./surroundings";
 import {
   DAAN_STATION,
   EAST_DISTRICT,
@@ -45,6 +45,8 @@ interface Surroundings {
   candidates?: { id: string }[];
   origin?: { lng: number; lat: number };
   district?: string | null;
+  total?: number;
+  returned?: number;
   groups?: { direction: Compass; items: SurroundingsItem[] }[];
 }
 
@@ -129,6 +131,10 @@ describe("describe_surroundings grouping", () => {
     expect(items).toHaveLength(30);
     expect(items.map((i) => i.name)).toContain("Shop 0");
     expect(items.map((i) => i.name)).not.toContain("Shop 39");
+    // Truncating in silence is the trap: an agent that widens the radius sees
+    // the same thirty items and concludes the other ten do not exist.
+    expect(out.total).toBe(40);
+    expect(out.returned).toBe(30);
   });
 
   it("flags fabricated listings so the agent does not describe them as real places", async () => {
@@ -221,15 +227,6 @@ describe("describe_surroundings district", () => {
     expect(out.district).toBe("甲區");
   });
 
-  it("says null rather than guessing when the origin is nowhere near the data", async () => {
-    // Nearest-district must not stretch across the sea: claiming Shilin
-    // District for a point in Tokyo is worse than admitting ignorance.
-    const { byName } = toolsFor({ features: [WEST_DISTRICT, EAST_DISTRICT] });
-    const out = await describeAround(byName.describe_surroundings, { from: { lng: 139.7, lat: 35.68 } });
-    expect(out.district).toBeNull();
-    expect(DISTRICT_FALLBACK_MAX_M).toBe(5000);
-  });
-
   it("says null when no district data is loaded at all", async () => {
     const { byName } = toolsFor({ features: [DAAN_STATION] });
     expect((await describeAround(byName.describe_surroundings)).district).toBeNull();
@@ -272,6 +269,8 @@ describe("describe_surroundings origin", () => {
     const { byName } = toolsFor({ features: [] });
     const out = await describeAround(byName.describe_surroundings);
     expect(out.groups).toEqual([]);
+    expect(out.total).toBe(0);
+    expect(out.returned).toBe(0);
     expect(out.district).toBeNull();
     expect(out.error).toBeUndefined();
   });
@@ -308,6 +307,17 @@ describe("describe_surroundings on the committed Taipei data", () => {
     for (const item of allItems(out)) expect(item.distance_m).toBeLessThanOrEqual(500);
   });
 
+  it("refuses to name a Taipei district for a point in another city", async () => {
+    /*
+     * Xindian Station is inside no district polygon and 1.6 km from the nearest
+     * boundary. With a kilometres-wide fallback the tool answered 文山區 -
+     * confidently wrong, and the district is the one field a user who cannot
+     * see the map has no way to check. The fallback is for ~150 m seams only.
+     */
+    const byName = realTools([121.5417, 24.9675]);
+    expect((await describeAround(byName.describe_surroundings)).district).toBeNull();
+  });
+
   it("still names a district in the gap between two simplified boundaries", async () => {
     // 121.513, 25.021 is inside no district polygon in the committed data;
     // the nearest boundary (Zhongzheng, ~75 m) is the honest answer.
@@ -321,6 +331,12 @@ describe("describe_surroundings on the committed Taipei data", () => {
     const byName = realTools([121.5436, 25.0334]);
     const out = await describeAround(byName.describe_surroundings, { radius_m: 1500 });
     expect(allItems(out)).toHaveLength(SURROUNDINGS_ITEM_LIMIT);
-    expect(JSON.stringify(out).length).toBeLessThan(4000);
+    expect(out.returned).toBe(SURROUNDINGS_ITEM_LIMIT);
+    // The agent is told what it is not being shown, so it can narrow the query
+    // instead of reporting that nothing else is there.
+    expect(out.total).toBeGreaterThan(out.returned as number);
+    // Bytes, not characters: a CJK name costs three bytes per character on the
+    // wire, so a character count understates what the agent actually pays.
+    expect(Buffer.byteLength(JSON.stringify(out), "utf8")).toBeLessThan(5000);
   });
 });

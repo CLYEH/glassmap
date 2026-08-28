@@ -126,6 +126,15 @@ describe("tool contract", () => {
       input: { type: "circle", center: "Daan Station", radius_m: -5 },
       rejectedBy: ["draw_shape", "find_features", "select_features", "describe_surroundings"],
     },
+    // A shape the UI has to redraw on every frame: 501 points is refused, so
+    // one call cannot make the map unusable for the human.
+    {
+      input: {
+        type: "line",
+        coordinates: Array.from({ length: 501 }, (_, i) => [121.5 + i / 100000, 25]),
+      },
+      rejectedBy: ["draw_shape"],
+    },
     // One radius story: every tool that takes radius_m refuses the same values.
     {
       input: { radius_m: 500000 },
@@ -507,6 +516,10 @@ describe("select_features", () => {
     expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
     expect(idsOf(out.selected)).toEqual(["osm:way:10", "osm:node:2"]);
     expect(out.state).toMatchObject({ selection: { count: 2, ids: ["osm:way:10", "osm:node:2"] } });
+    // The state it returns is the state get_map_state would have returned.
+    expect(Object.keys(out.state ?? {}).sort()).toEqual(
+      Object.keys(await call(byName.get_map_state)).sort(),
+    );
   });
 
   it("reports ids it could not resolve while still selecting the rest", async () => {

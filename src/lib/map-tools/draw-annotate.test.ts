@@ -32,12 +32,15 @@ interface ToolResult {
   error?: string;
   candidates?: { id: string }[];
   known_ids?: string[];
+  known_count?: number;
   drawing_id?: string;
   annotation_id?: string;
   area_m2?: number;
   length_m?: number;
   features?: FeatureOutput[];
   selected?: FeatureOutput[];
+  drawings?: MapStateOutput["drawings"];
+  annotations?: MapStateOutput["annotations"];
   state?: MapStateOutput;
 }
 
@@ -206,6 +209,47 @@ describe("draw_shape polygon and line", () => {
     expect(store.getDrawings()).toEqual([]);
   });
 
+  it("refuses a ring that encloses no area, however it was written", async () => {
+    /*
+     * A zero-area shape is invisible to the human and still matches `within`,
+     * so "what is inside the area I drew" would answer about an area nobody can
+     * see. Collinear points and a self-intersecting bow-tie are the two ways an
+     * agent writes one by accident; both used to be accepted with area_m2 0.
+     */
+    const { store, byName } = mapReady();
+    const collinear = await call(byName.draw_shape, {
+      type: "polygon",
+      coordinates: [
+        [121.53, 25.03],
+        [121.535, 25.03],
+        [121.54, 25.03],
+      ],
+    });
+    expect(collinear.error).toMatch(/encloses no area/);
+
+    const bowTie = await call(byName.draw_shape, {
+      type: "polygon",
+      coordinates: [
+        [121.53, 25.03],
+        [121.54, 25.04],
+        [121.54, 25.03],
+        [121.53, 25.04],
+      ],
+    });
+    expect(bowTie.error).toMatch(/self-intersecting/);
+
+    // Same defect from the circle side: a radius that rounds away to nothing.
+    const speck = await call(byName.draw_shape, {
+      type: "circle",
+      center: { lng: 121.53, lat: 25.03 },
+      radius_m: 1e-9,
+    });
+    expect(speck.error).toMatch(/radius_m/);
+    expect(store.getDrawings()).toEqual([]);
+    // One metre is small but real, and stays allowed.
+    expect((await call(byName.draw_shape, { type: "circle", center: { lng: 121.53, lat: 25.03 }, radius_m: 1 })).error).toBeUndefined();
+  });
+
   it("measures a line in metres, not kilometres", async () => {
     // Same hand-computed anchor as output.test.ts: 0.01 deg of longitude at
     // lat 25.0478 is 1007 m on the sphere turf uses. A reading of ~1 means the
@@ -275,6 +319,37 @@ describe("draw_shape state", () => {
     ]);
   });
 
+  it("lists the ten most recent drawings and notes, not the ten oldest", async () => {
+    // Past the cap the agent's own last shape used to fall off the list it is
+    // told to pick `within` ids from, so `drawing:11` looked like it failed.
+    const { byName } = mapReady();
+    let lastDrawing = "";
+    let lastAnnotation = "";
+    for (let i = 0; i < 11; i++) {
+      lastDrawing =
+        ((
+          await call(byName.draw_shape, {
+            type: "circle",
+            center: { lng: 121.53, lat: 25.03 },
+            radius_m: 100 + i,
+          })
+        ).drawing_id as string) ?? "";
+      lastAnnotation =
+        ((
+          await call(byName.annotate, { at: { lng: 121.53, lat: 25.03 }, note: `note ${i}` })
+        ).annotation_id as string) ?? "";
+    }
+
+    const state = await call(byName.get_map_state);
+    expect(state.drawings?.count).toBe(11);
+    expect(state.drawings?.items).toHaveLength(10);
+    expect(state.drawings?.items.map((d) => d.id)).toContain(lastDrawing);
+    expect(state.drawings?.items.map((d) => d.id)).not.toContain("drawing:1");
+    expect(state.annotations?.count).toBe(11);
+    expect(state.annotations?.items.map((a) => a.id)).toContain(lastAnnotation);
+    expect(state.annotations?.items.map((a) => a.id)).not.toContain("annotation:1");
+  });
+
   it("never puts geometry in the answer", async () => {
     const { byName } = mapReady();
     const out = await call(byName.draw_shape, {
@@ -311,6 +386,9 @@ describe("annotate", () => {
       count: 1,
       items: [{ id: "annotation:1", note: "Viewing at 3pm", source: "agent" }],
     });
+    // Same state object every other tool returns, so no follow-up read differs.
+    const read = await call(byName.get_map_state);
+    expect(Object.keys(out.state ?? {}).sort()).toEqual(Object.keys(read).sort());
   });
 
   it("pins by place name and by feature id, the two things an agent actually has", async () => {
@@ -464,6 +542,7 @@ describe("find_features / select_features within", () => {
     const out = await call(byName.find_features, { within: "drawing:99" });
     expect(out.error).toMatch(/drawing/);
     expect(out.known_ids).toEqual(["drawing:1"]);
+    expect(out.known_count).toBe(1);
     const select = await call(byName.select_features, { within: "drawing:99" });
     expect(select.known_ids).toEqual(["drawing:1"]);
     expect(store.getSelection()).toEqual(["osm:node:2"]);

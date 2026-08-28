@@ -178,7 +178,7 @@ const nearProperty = pointProperty(
 const withinProperty = {
   type: "string",
   description:
-    '"drawing:<n>" - restrict results to features inside that drawing, as returned by draw_shape or listed in map state under drawings. A circle or polygon works; a line has no inside. Combines with the other filters instead of replacing them.',
+    '"drawing:<n>" - restrict results to features inside that drawing, as returned by draw_shape or listed in map state under drawings (the ten most recent; drawings.count is the true total). A circle or polygon works; a line has no inside. Combines with the other filters instead of replacing them.',
 };
 
 const radiusProperty = {
@@ -199,7 +199,12 @@ interface ResolvedQuery {
   limit: number;
 }
 
-type QueryError = { error: string; candidates?: unknown; known_ids?: string[] };
+type QueryError = {
+  error: string;
+  candidates?: unknown;
+  known_ids?: string[];
+  known_count?: number;
+};
 
 /**
  * One location out of the three forms every location parameter accepts.
@@ -229,12 +234,15 @@ function resolveWithin(
   value: unknown,
 ): { area: Polygon | MultiPolygon } | QueryError {
   const drawings = store.getDrawings();
-  const known_ids = drawings.map((d) => d.id).slice(0, SELECTION_ID_LIMIT);
+  // Most recent, like map state: past the cap, the oldest ids are the least
+  // likely to be the one the caller meant.
+  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
+  const known_count = drawings.length;
   if (typeof value !== "string" || !value.trim()) {
-    return { error: 'within must be a drawing id like "drawing:1"', known_ids };
+    return { error: 'within must be a drawing id like "drawing:1"', known_ids, known_count };
   }
   const drawing = drawings.find((d) => d.id === value.trim());
-  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids };
+  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
   if (!isAreaGeometry(drawing.geometry)) {
     return {
       error: `within requires an area drawing (a circle or a polygon); ${drawing.id} is a ${drawing.kind}`,
@@ -308,7 +316,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at 10 each, annotation notes at 80 characters). Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). Use this instead of a screenshot to know what the map shows.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     // State echoes labels and notes a human may have typed on the page.
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -677,6 +685,20 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         }
       }
 
+      // A shape with no extent is invisible to the human and still matches
+      // `within`, so "what is in the area I drew" would answer about an area
+      // nobody can see. Refuse it where it is made.
+      const measure = measureGeometry(geometry);
+      if (kind !== "line" && !measure.area_m2) {
+        return {
+          error:
+            kind === "circle"
+              ? "radius_m is too small: the circle encloses no area"
+              : "the points are collinear or the ring is self-intersecting; it encloses no area",
+          state: state(),
+        };
+      }
+
       const drawing = store.addDrawing({
         source: "agent",
         kind,
@@ -686,7 +708,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         ...(radius_m !== undefined ? { radius_m } : {}),
       });
 
-      return { drawing_id: drawing.id, ...measureGeometry(geometry), state: describeState(store) };
+      return { drawing_id: drawing.id, ...measure, state: describeState(store) };
     },
   };
 
@@ -747,7 +769,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
     name: "describe_surroundings",
     description:
-      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. Answers are capped at 30 features, so widen or narrow radius_m rather than expecting everything.",
+      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. total is how many features are inside radius_m, returned is how many are described (at most 30, the nearest ones): when total is larger, narrow radius_m or use find_features with a category filter - widening the radius will not reveal the ones that were left out.",
     inputSchema: {
       type: "object",
       properties: {
@@ -782,11 +804,16 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         radius_m: radius.radius_m,
         categories: NEIGHBOUR_CATEGORIES,
       });
+      const groups = groupByDirection(near.slice(0, SURROUNDINGS_ITEM_LIMIT), origin);
 
       return {
         origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
         district: findDistrict(features, origin),
-        groups: groupByDirection(near.slice(0, SURROUNDINGS_ITEM_LIMIT), origin),
+        // Truncating in silence would teach the agent that a wider radius adds
+        // nothing, and it would deny matches it was never shown.
+        total: near.length,
+        returned: groups.reduce((n, g) => n + g.items.length, 0),
+        groups,
       };
     },
   };

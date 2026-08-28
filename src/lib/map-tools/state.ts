@@ -7,7 +7,11 @@ export const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
 /** How many selected ids describeState lists; the count is always exact. */
 export const SELECTION_ID_LIMIT = 20;
 
-/** How many drawings/annotations describeState lists; the counts are exact. */
+/**
+ * How many drawings/annotations describeState lists; the counts are exact and
+ * the items are the *most recent* ones. Listing the oldest would hide the shape
+ * the agent just drew as soon as the map holds more than ten.
+ */
 export const STATE_ITEM_LIMIT = 10;
 
 /** Notes are the human's own words and can be long; state only shows the start. */
@@ -108,11 +112,11 @@ export function describeState(store: MapToolStore): MapStateOutput {
     features_loaded: store.getFeatures().length,
     drawings: {
       count: drawings.length,
-      items: drawings.slice(0, STATE_ITEM_LIMIT).map(describeDrawing),
+      items: drawings.slice(-STATE_ITEM_LIMIT).map(describeDrawing),
     },
     annotations: {
       count: annotations.length,
-      items: annotations.slice(0, STATE_ITEM_LIMIT).map(describeAnnotation),
+      items: annotations.slice(-STATE_ITEM_LIMIT).map(describeAnnotation),
     },
   };
 }

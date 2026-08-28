@@ -21,12 +21,14 @@ export const DEFAULT_SURROUNDINGS_RADIUS_M = 500;
 /** Read aloud, thirty things is already a lot. */
 export const SURROUNDINGS_ITEM_LIMIT = 30;
 /**
- * How far the "nearest district" fallback may reach. Seams between the
- * independently simplified district polygons are ~150 m wide; anything beyond a
- * few kilometres means the origin is simply not in Taipei, and naming a
- * district there would be a confident lie.
+ * How far the "nearest district" fallback may reach. It exists for one defect
+ * only: the seams between independently simplified district polygons, which are
+ * up to ~150 m wide. 300 m covers those with margin and nothing else - at 5 km
+ * the fallback confidently answered a Taipei district for Xindian and Tamsui,
+ * both in a different city, and the district is the one field a user who cannot
+ * see the map has no way to check.
  */
-export const DISTRICT_FALLBACK_MAX_M = 5_000;
+export const DISTRICT_FALLBACK_MAX_M = 300;
 
 /** Everything that can be a neighbour. The district you are in is its own field. */
 export const NEIGHBOUR_CATEGORIES: FeatureCategory[] = FEATURE_CATEGORIES.filter(

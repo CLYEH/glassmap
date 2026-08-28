@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { DrawToolbar } from "@/components/DrawToolbar";
+import { ShareStatus } from "@/components/ShareStatus";
 import { Sidebar } from "@/components/Sidebar";
 import { StateOverlay } from "@/components/StateOverlay";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
@@ -21,6 +22,10 @@ export default function Home() {
       className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row"
     >
       <div className="relative min-h-0 flex-1 overflow-hidden">
+        {/* Before <MapCanvas /> on purpose: sibling effects run in tree order,
+            so a shared link is in the store before the map reads its opening
+            camera out of it, and the map opens there rather than flying there. */}
+        <ShareStatus />
         <MapCanvas />
         <StateOverlay />
         <DrawToolbar />

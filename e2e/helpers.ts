@@ -62,18 +62,6 @@ export async function forceNoWebGL2(page: Page): Promise<void> {
 }
 
 /**
- * Blocks the basemap style and tiles so MapLibre's `load` event can never
- * fire -- `map-status` stays "loading" (or "error") for the life of the
- * test, so `map-status !== "ready"` is a permanent, not merely
- * fast-enough-to-observe, condition. Must be called before `page.goto`.
- * WebGL itself is untouched, so `window.__glassmapMap` still becomes
- * available and constructor-time bounds still get set.
- */
-export async function blockBasemapNetwork(page: Page): Promise<void> {
-  await page.route(/openfreemap\.org/, (route) => route.abort());
-}
-
-/**
  * The subset of a map-state object that only changes because of a tool call.
  * `bounds` is written by MapCanvas's own effect independently of any tool
  * (once at construction time, again once the container is measured, again

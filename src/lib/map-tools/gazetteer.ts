@@ -7,7 +7,8 @@
  * the caller only has to decide "one confident answer" vs "ask the human".
  */
 import type { GazetteerEntry, GlassMapFeature } from "@/lib/data/schema";
-import { featureCenter } from "./output";
+import type { LngLat } from "@/lib/store/map-store";
+import { distanceMeters, featureCenter } from "./output";
 import { round5 } from "./state";
 
 export interface GazetteerMatch extends GazetteerEntry {
@@ -22,12 +23,18 @@ export interface GazetteerMatch extends GazetteerEntry {
  */
 const SCORE = { exact: 4, exactStripped: 3, prefix: 2, substring: 1 } as const;
 
-/** What an ambiguous lookup shows the agent so it can retry with feature_id. */
+/**
+ * What an ambiguous lookup shows the agent so it can retry with feature_id.
+ * Chain stores share a name (208 branches are called 全聯福利中心 in the real
+ * data), so distance is the only field that tells the candidates apart.
+ */
 export interface PlaceCandidate {
   id: string;
   name: string;
   name_en?: string;
   category: GazetteerEntry["category"];
+  /** Metres from the current view centre, when the caller supplied one. */
+  distance_m?: number;
 }
 
 export type PlaceResolution =
@@ -44,11 +51,19 @@ export const AMBIGUOUS_CANDIDATE_LIMIT = 5;
 const SUFFIX_PATTERNS = [/捷運站$/, /車站$/, /站$/, /\s*\bmrt\s+station$/i, /\s*\bstation$/i, /\s*\bmrt$/i];
 const PREFIX_PATTERNS = [/^捷運/, /^mrt\s+/i];
 
-const normalise = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+/**
+ * Latin transcriptions of Taipei names are punctuated inconsistently — OSM has
+ * "Da-an Forest Park" and "Da'an District" while people type "Daan ...". Fold
+ * the separators away on both sides so spelling does not decide the answer.
+ */
+const PUNCTUATION = /[-\u2010-\u2015'\u2018\u2019\u02bc.\u00b7\u2022]/g;
+
+export const normaliseName = (s: string) =>
+  s.trim().toLowerCase().replace(PUNCTUATION, "").replace(/\s+/g, " ");
 
 /** Normalised form with at most one station prefix and one station suffix removed. */
 export function stripPlaceSuffix(raw: string): string {
-  let s = normalise(raw);
+  let s = normaliseName(raw);
   for (const p of PREFIX_PATTERNS) {
     if (p.test(s)) {
       s = s.replace(p, "");
@@ -94,18 +109,20 @@ export function buildGazetteer(features: readonly GlassMapFeature[]): GazetteerE
 /** Ranked matches, best first. Empty when the query is blank or matches nothing. */
 export function resolvePlace(query: string, features: readonly GlassMapFeature[]): GazetteerMatch[] {
   if (typeof query !== "string") return [];
-  const qRaw = normalise(query);
+  const qRaw = normaliseName(query);
   if (!qRaw) return [];
   const qStripped = stripPlaceSuffix(query);
 
   const matches: GazetteerMatch[] = [];
   for (const entry of buildGazetteer(features)) {
     let score = 0;
-    for (const name of [entry.name, entry.nameEn, ...(entry.aliases ?? [])]) {
+    // GazetteerEntry.aliases exists in the schema but no dataset fills it in;
+    // matching name and nameEn is all the real data supports today.
+    for (const name of [entry.name, entry.nameEn]) {
       if (!name) continue;
       score = Math.max(
         score,
-        pairScore(qRaw, normalise(name), SCORE.exact),
+        pairScore(qRaw, normaliseName(name), SCORE.exact),
         pairScore(qStripped, stripPlaceSuffix(name), SCORE.exactStripped),
       );
     }
@@ -119,9 +136,10 @@ export function resolvePlace(query: string, features: readonly GlassMapFeature[]
   );
 }
 
-export function toPlaceCandidate(entry: GazetteerEntry): PlaceCandidate {
+export function toPlaceCandidate(entry: GazetteerEntry, from?: LngLat | null): PlaceCandidate {
   const c: PlaceCandidate = { id: entry.id, name: entry.name, category: entry.category };
   if (entry.nameEn) c.name_en = entry.nameEn;
+  if (from) c.distance_m = distanceMeters(from, entry.center);
   return c;
 }
 
@@ -133,12 +151,17 @@ export function toPlaceCandidate(entry: GazetteerEntry): PlaceCandidate {
 export function resolvePlaceOne(
   query: string,
   features: readonly GlassMapFeature[],
+  from?: LngLat | null,
 ): PlaceResolution {
   const matches = resolvePlace(query, features);
   if (matches.length === 0) return { kind: "none" };
   const best = matches.filter((m) => m.score === matches[0].score);
   if (best.length > 1) {
-    return { kind: "ambiguous", candidates: best.slice(0, AMBIGUOUS_CANDIDATE_LIMIT).map(toPlaceCandidate) };
+    // Equally named candidates are only useful if the agent can tell them
+    // apart, so offer the nearest ones to where the human is already looking.
+    const candidates = best.map((e) => toPlaceCandidate(e, from));
+    if (from) candidates.sort((a, b) => (a.distance_m ?? 0) - (b.distance_m ?? 0));
+    return { kind: "ambiguous", candidates: candidates.slice(0, AMBIGUOUS_CANDIDATE_LIMIT) };
   }
   return { kind: "found", entry: matches[0] };
 }

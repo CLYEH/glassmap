@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { GlassMapFeature } from "@/lib/data/schema";
 import { buildGazetteer, resolvePlace, resolvePlaceOne, stripPlaceSuffix } from "./gazetteer";
-import { FIXTURE_FEATURES } from "./test-fixtures";
+import { FIXTURE_FEATURES, VIEW } from "./test-fixtures";
 
 const ids = (query: string) => resolvePlace(query, FIXTURE_FEATURES).map((m) => m.id);
 
@@ -22,14 +23,57 @@ describe("stripPlaceSuffix", () => {
   });
 });
 
+describe("punctuation folding", () => {
+  /*
+   * OSM romanises 大安 as "Da-an" in the park and "Da'an" in the district while
+   * every human types "Daan". Before folding, both of these returned "unknown
+   * place" against the real dataset — the tool looked broken for the most
+   * obvious query in the demo.
+   */
+  it("matches a hyphenated OSM name typed without the hyphen", () => {
+    expect(resolvePlaceOne("Daan Forest Park", FIXTURE_FEATURES)).toMatchObject({
+      kind: "found",
+      entry: { id: "osm:way:10", nameEn: "Da-an Forest Park" },
+    });
+  });
+
+  it("matches an apostrophised OSM name typed without the apostrophe", () => {
+    expect(resolvePlaceOne("Daan District", FIXTURE_FEATURES)).toMatchObject({
+      kind: "found",
+      entry: { id: "district:daan", nameEn: "Da'an District" },
+    });
+  });
+
+  it("still matches when the punctuation is typed, in either style", () => {
+    expect(ids("Da-an Forest Park")).toContain("osm:way:10");
+    expect(ids("Da'an Forest Park")).toContain("osm:way:10");
+    expect(ids("Da’an District")).toContain("district:daan");
+  });
+});
+
 describe("resolvePlace ranking", () => {
-  it("ranks exact above prefix above substring", () => {
-    // "Daan" is exactly 大安站 once the station suffix is stripped; the park,
-    // the park station and the district only start with it.
+  it("ranks an exact name above everything that merely starts with it", () => {
+    // The station is named exactly 大安 / "Daan"; the park, the park station
+    // and the district only begin with it.
     const ranked = resolvePlace("Daan", FIXTURE_FEATURES);
     expect(ranked[0].id).toBe("osm:node:2");
-    expect(ranked[0].score).toBe(3);
-    expect(ranked.slice(1).every((m) => m.score < 3)).toBe(true);
+    expect(ranked[0].score).toBe(4);
+    expect(ranked.slice(1).every((m) => m.score < 4)).toBe(true);
+  });
+
+  it("prefers a name as written over one that only matches after stripping", () => {
+    // Constructed, not from the dataset: no real place is named 台北 on its own.
+    // The rule still matters, because a station suffix must never let 台北車站
+    // outrank something actually called 台北.
+    const taipeiPark: GlassMapFeature = {
+      type: "Feature",
+      properties: { id: "test:taipei", name: "台北", category: "park", source: "osm" },
+      geometry: { type: "Point", coordinates: [121.52, 25.05] },
+    };
+    const ranked = resolvePlace("台北", [...FIXTURE_FEATURES, taipeiPark]);
+    expect(ranked[0].id).toBe("test:taipei");
+    expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
+    expect(ranked[1].id).toBe("osm:node:1");
   });
 
   it("matches the local name and the English name of the same feature", () => {
@@ -45,33 +89,54 @@ describe("resolvePlace ranking", () => {
 
   it("indexes every named feature, including sample listings", () => {
     expect(buildGazetteer(FIXTURE_FEATURES)).toHaveLength(FIXTURE_FEATURES.length);
-    expect(ids("Sunny")).toEqual(["listing:1"]);
+    expect(ids("Sample listing")).toEqual(["listing:01"]);
   });
 });
 
 describe("resolvePlaceOne", () => {
-  it("prefers the exact name over the station that merely contains it", () => {
-    // 大安森林公園站 also reduces to 大安森林公園 after suffix stripping, but
-    // the human named the park; only the station form should return the station.
-    expect(resolvePlaceOne("大安森林公園", FIXTURE_FEATURES)).toMatchObject({
+  it("commits to a single best match", () => {
+    expect(resolvePlaceOne("228 Peace Park", FIXTURE_FEATURES)).toMatchObject({
       kind: "found",
-      entry: { id: "osm:way:10" },
+      entry: { id: "osm:way:11" },
     });
-    expect(resolvePlaceOne("大安森林公園站", FIXTURE_FEATURES)).toMatchObject({
+    // "Daan Park" is the station's exact English name; the park is called
+    // "Da-an Forest Park", which neither equals nor starts with it.
+    expect(resolvePlaceOne("Daan Park", FIXTURE_FEATURES)).toMatchObject({
       kind: "found",
       entry: { id: "osm:node:3" },
     });
   });
 
+  it("admits that a station and the park it serves share one name", () => {
+    // Both are called 大安森林公園 in OSM. Picking either would be a guess.
+    const r = resolvePlaceOne("大安森林公園", FIXTURE_FEATURES);
+    expect(r.kind).toBe("ambiguous");
+    if (r.kind !== "ambiguous") throw new Error("unreachable");
+    expect(r.candidates.map((c) => c.id).sort()).toEqual(["osm:node:3", "osm:way:10"]);
+    expect(r.candidates.map((c) => c.category).sort()).toEqual(["mrt_station", "park"]);
+  });
+
   it("refuses to pick between two branches of the same chain", () => {
     // A wrong guess is invisible to an agent that cannot see the map, so two
     // equally good matches must come back as a question, not an answer.
-    const r = resolvePlaceOne("PX Mart", FIXTURE_FEATURES);
+    const r = resolvePlaceOne("Pxmart", FIXTURE_FEATURES);
     expect(r.kind).toBe("ambiguous");
     if (r.kind !== "ambiguous") throw new Error("unreachable");
     expect(r.candidates.map((c) => c.id).sort()).toEqual(["osm:node:30", "osm:node:32"]);
-    // Candidates carry an id to retry with and no coordinates.
+    // Without an origin there is nothing to measure from, so no distance.
     expect(Object.keys(r.candidates[0]).sort()).toEqual(["category", "id", "name", "name_en"]);
+  });
+
+  it("distinguishes identically named candidates by distance, nearest first", () => {
+    // 全聯福利中心 says nothing on its own; a distance is what makes the
+    // agent's follow-up question answerable by a human.
+    const r = resolvePlaceOne("全聯福利中心", FIXTURE_FEATURES, VIEW.center);
+    if (r.kind !== "ambiguous") throw new Error("expected ambiguous");
+    expect(r.candidates.map((c) => c.id)).toEqual(["osm:node:30", "osm:node:32"]);
+    const near = r.candidates[0].distance_m ?? -1;
+    const far = r.candidates[1].distance_m ?? -1;
+    expect(near).toBeGreaterThan(0);
+    expect(near).toBeLessThan(far);
   });
 
   it("reports 'none' rather than an arbitrary nearest name", () => {

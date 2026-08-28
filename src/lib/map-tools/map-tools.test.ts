@@ -5,7 +5,15 @@ import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
 import { DEFAULT_LIMIT, DEFAULT_RADIUS_M } from "./query";
-import { FIXTURE_FEATURES, IN_VIEW_IDS_BY_DISTANCE, VIEW, VIEW_BOUNDS } from "./test-fixtures";
+import {
+  BROKEN_FEATURES,
+  DAAN_FOREST_PARK,
+  FIXTURE_FEATURES,
+  IN_VIEW_IDS_BY_DISTANCE,
+  PX_MART_DAAN,
+  VIEW,
+  VIEW_BOUNDS,
+} from "./test-fixtures";
 
 const signal = new AbortController().signal;
 const toolsFor = (store = createMemoryToolStore()) => {
@@ -24,12 +32,13 @@ const mapReady = (over: Partial<Parameters<typeof createMemoryToolStore>[0]> = {
 interface ToolResult {
   [key: string]: unknown;
   error?: string;
-  candidates?: { id: string; name: string; name_en?: string; category: string }[];
+  candidates?: { id: string; name: string; name_en?: string; category: string; distance_m?: number }[];
   total?: number;
   returned?: number;
   features?: FeatureOutput[];
   selected?: FeatureOutput[];
   unknown_ids?: string[];
+  unknown_count?: number;
   state?: MapStateOutput;
 }
 
@@ -78,11 +87,66 @@ describe("tool contract", () => {
     for (const t of toolsFor().tools) expect(t.name).toMatch(/^[a-z0-9_]+$/);
   });
 
-  it("never throws on hostile input; it returns an error object", async () => {
+  /**
+   * A tool that throws takes the whole agent turn down, and one that silently
+   * accepts nonsense is worse: the human sees the map do the wrong thing. Every
+   * row states which tools must refuse the input; all of them must leave the
+   * view and the selection exactly as they were.
+   */
+  const HOSTILE: { input: unknown; rejectedBy: string[] }[] = [
+    { input: { zoom: "banana" }, rejectedBy: ["set_map_view"] },
+    { input: { zoom: 99 }, rejectedBy: ["set_map_view"] },
+    { input: { bearing: Infinity }, rejectedBy: ["set_map_view"] },
+    { input: { center: null }, rejectedBy: ["set_map_view"] },
+    { input: { place: "😀" }, rejectedBy: ["set_map_view"] },
+    { input: { near: {} }, rejectedBy: ["find_features", "select_features"] },
+    { input: { near: true }, rejectedBy: ["find_features", "select_features"] },
+    {
+      input: { categories: "park" },
+      rejectedBy: ["list_features_in_view", "find_features", "select_features"],
+    },
+    { input: { limit: -1 }, rejectedBy: ["list_features_in_view", "find_features"] },
+    { input: { ids: 7 }, rejectedBy: ["select_features"] },
+    { input: { ids: [null] }, rejectedBy: ["select_features"] },
+    { input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) }, rejectedBy: ["select_features"] },
+    { input: {}, rejectedBy: ["set_map_view", "select_features"] },
+    // Not an object at all — some clients pass the raw argument through.
+    { input: "hello", rejectedBy: ["set_map_view", "select_features"] },
+    { input: null, rejectedBy: ["set_map_view", "select_features"] },
+  ];
+
+  it.each(HOSTILE)("refuses $input without throwing or changing state", async ({ input, rejectedBy }) => {
     for (const t of toolsFor().tools) {
-      const out = await call(t, { zoom: "banana", limit: -1, ids: 7, near: true, categories: "park" });
+      const { store, byName } = mapReady({ selection: ["osm:node:2"] });
+      const out = (await byName[t.name].execute(input as never, { signal })) as ToolResult;
       expect(typeof out, t.name).toBe("object");
+      if (rejectedBy.includes(t.name)) {
+        expect(out, `${t.name} must reject`).toHaveProperty("error");
+        expect(typeof out.error, t.name).toBe("string");
+      }
+      expect(store.getView(), `${t.name} moved the map`).toEqual(VIEW);
+      expect(store.getSelection(), `${t.name} changed the selection`).toEqual(["osm:node:2"]);
     }
+  });
+
+  it("degrades instead of throwing when a feature has unusable geometry", async () => {
+    // The loader can hand us a relation that failed to assemble; one bad
+    // feature must not take down every query over the other 2000.
+    const { store, byName } = mapReady({ features: [...FIXTURE_FEATURES, ...BROKEN_FEATURES] });
+    for (const input of [{}, { query: "polygon" }, { near: "Daan", radius_m: 50000 }]) {
+      for (const name of ["list_features_in_view", "find_features"]) {
+        const out = await call(byName[name], input);
+        expect(out.error, `${name} ${JSON.stringify(input)}`).toBeUndefined();
+      }
+    }
+    // A broken feature can still be selected by id; it just has no distance.
+    const out = await call(byName.select_features, { ids: ["broken:empty-polygon"] });
+    expect(out.unknown_ids).toEqual([]);
+    expect(out.selected?.[0]).toMatchObject({ id: "broken:empty-polygon" });
+    expect(out.selected?.[0].distance_m).toBeUndefined();
+    expect(store.getSelection()).toEqual(["broken:empty-polygon"]);
+    // ...and it is never offered as a place, because it has no location.
+    expect((await call(byName.set_map_view, { place: "Empty polygon" })).error).toBe("unknown place");
   });
 });
 
@@ -164,21 +228,36 @@ describe("set_map_view", () => {
   it("does not move for an ambiguous place; it asks with candidates", async () => {
     const { store, byName } = mapReady();
     const before = store.getView();
-    const out = await call(byName.set_map_view, { place: "PX Mart" });
+    const out = await call(byName.set_map_view, { place: "Pxmart" });
     expect(out.error).toBe("ambiguous place");
     expect(out.candidates?.map((c) => c.id).sort()).toEqual(["osm:node:30", "osm:node:32"]);
     // The map must be exactly where it was: a wrong jump is invisible to the agent.
     expect(store.getView()).toEqual(before);
   });
 
-  it("caps candidates at five so an unlucky query cannot flood the context", async () => {
+  it("offers the five nearest candidates, measured from where the human is looking", async () => {
+    // 208 branches share this name in the real data. Five identical rows would
+    // be useless, and the far ones are useless too — so cap, and sort by
+    // distance from the current view centre.
     const many = Array.from({ length: 8 }, (_, i) => ({
-      ...FIXTURE_FEATURES[6],
-      properties: { ...FIXTURE_FEATURES[6].properties, id: `osm:node:9${i}` },
+      ...PX_MART_DAAN,
+      properties: { ...PX_MART_DAAN.properties, id: `osm:node:9${i}` },
+      geometry: { type: "Point" as const, coordinates: [121.5375 + 0.01 * (8 - i), 25.0325] },
     }));
     const { byName } = mapReady({ features: many });
-    const out = await call(byName.set_map_view, { place: "PX Mart" });
+    const out = await call(byName.set_map_view, { place: "Pxmart" });
     expect(out.candidates).toHaveLength(5);
+    // Feature 7 is the closest, 3 the fifth closest; 0..2 are dropped.
+    expect(out.candidates?.map((c) => c.id)).toEqual([
+      "osm:node:97",
+      "osm:node:96",
+      "osm:node:95",
+      "osm:node:94",
+      "osm:node:93",
+    ]);
+    const distances = out.candidates?.map((c) => c.distance_m ?? 0) ?? [];
+    expect(distances).toEqual([...distances].sort((a, b) => a - b));
+    expect(distances[0]).toBeGreaterThan(0);
   });
 
   it("reports an unknown place with the unchanged state instead of guessing", async () => {
@@ -260,7 +339,7 @@ describe("list_features_in_view", () => {
   it("reports distance and direction from the view centre, and no geometry at all", async () => {
     const { byName } = mapReady();
     const out = await call(byName.list_features_in_view, { limit: 1 });
-    expect(out.features?.[0]).toMatchObject({ id: "listing:1", direction: "SW", sample: true });
+    expect(out.features?.[0]).toMatchObject({ id: "listing:01", direction: "SW", sample: true });
     expect(out.features?.[0].distance_m).toBeGreaterThan(0);
     expect(JSON.stringify(out)).not.toMatch(/coordinates|geometry/);
   });
@@ -315,7 +394,7 @@ describe("find_features", () => {
 
   it("asks instead of guessing when the origin place is ambiguous", async () => {
     const { byName } = mapReady();
-    const out = await call(byName.find_features, { near: "PX Mart" });
+    const out = await call(byName.find_features, { near: "Pxmart" });
     expect(out.error).toBe("ambiguous place");
     expect(out.candidates).toHaveLength(2);
   });
@@ -412,6 +491,73 @@ describe("select_features", () => {
     expect(selected.selected?.[0].distance_m).toBe(found.features?.[0].distance_m);
   });
 
+  it("honours query in the filter, exactly as find_features does", async () => {
+    /*
+     * Regression: select_features used to drop `query` and select everything
+     * the rest of the filter matched. Against the real dataset the agent asked
+     * for 6 parks and the human saw 8 light up — a silent lie about what "these
+     * parks" refers to. Both tools must resolve the same set from one input.
+     */
+    const { store, byName } = mapReady();
+    const filter = { query: "公園", near: "大安", radius_m: 2000, categories: ["park"] };
+    const found = await call(byName.find_features, filter);
+    const selected = await call(byName.select_features, filter);
+    expect(idsOf(found.features)).toEqual(["osm:way:10"]);
+    expect(idsOf(selected.selected)).toEqual(idsOf(found.features));
+    expect(store.getSelection()).toEqual(idsOf(found.features));
+
+    // Without the query the same filter matches more: proof the query bites.
+    const { store: store2, byName: byName2 } = mapReady();
+    await call(byName2.select_features, { near: "大安", radius_m: 2000 });
+    expect(store2.getSelection().length).toBeGreaterThan(1);
+  });
+
+  it("accepts query on its own as a filter, without ids", async () => {
+    const { store, byName } = mapReady();
+    const out = await call(byName.select_features, { query: "Pxmart" });
+    expect(out.error).toBeUndefined();
+    expect([...store.getSelection()].sort()).toEqual(["osm:node:30", "osm:node:32"]);
+  });
+
+  it("selects every match while find_features pages, and says so in state.selection", async () => {
+    // The two tools resolve the same set; only the *reporting* is paged. An
+    // agent that asked for limit 1 still highlights everything it matched.
+    const { store, byName } = mapReady();
+    const found = await call(byName.find_features, { categories: ["mrt_station"], limit: 1 });
+    const selected = await call(byName.select_features, { categories: ["mrt_station"], limit: 1 });
+    expect(found.total).toBe(3);
+    expect(found.returned).toBe(1);
+    expect(store.getSelection()).toHaveLength(3);
+    expect(selected.state?.selection.count).toBe(found.total);
+  });
+
+  it("refuses `within` instead of selecting everything the rest of the filter matched", async () => {
+    // Dropping an unimplemented spatial filter is the worst possible failure:
+    // "the shops inside the circle I drew" would highlight the whole city.
+    const { store, byName } = mapReady({ selection: ["osm:node:2"] });
+    const out = await call(byName.select_features, { within: "shape:1", categories: ["park"] });
+    expect(out.error).toMatch(/within is not available yet/);
+    expect(out.error).toMatch(/find_features/);
+    expect(store.getSelection()).toEqual(["osm:node:2"]);
+  });
+
+  it("caps the unknown_ids echo but reports the true count", async () => {
+    const { byName } = mapReady();
+    const missing = Array.from({ length: 30 }, (_, i) => `osm:node:90${i}`);
+    const out = await call(byName.select_features, { ids: missing });
+    expect(out.unknown_ids).toHaveLength(20);
+    expect(out.unknown_count).toBe(30);
+  });
+
+  it("refuses an id list longer than the schema allows", async () => {
+    const { store, byName } = mapReady({ selection: ["osm:node:2"] });
+    const out = await call(byName.select_features, {
+      ids: Array.from({ length: 101 }, (_, i) => `osm:node:${i}`),
+    });
+    expect(out.error).toMatch(/at most 100/);
+    expect(store.getSelection()).toEqual(["osm:node:2"]);
+  });
+
   it("treats an empty match as a valid answer, not an error", async () => {
     const { store, byName } = mapReady();
     const out = await call(byName.select_features, { near: "Daan Station", categories: ["school"] });
@@ -429,7 +575,7 @@ describe("select_features", () => {
 
   it("does not change the selection when the filter cannot be resolved", async () => {
     const { store, byName } = mapReady({ selection: ["osm:way:10"] });
-    const out = await call(byName.select_features, { near: "PX Mart" });
+    const out = await call(byName.select_features, { near: "Pxmart" });
     expect(out.error).toBe("ambiguous place");
     expect(store.getSelection()).toEqual(["osm:way:10"]);
   });
@@ -437,7 +583,7 @@ describe("select_features", () => {
   it("returns names but no geometry", async () => {
     const { byName } = mapReady();
     const out = await call(byName.select_features, { ids: ["osm:way:10"] });
-    expect(out.selected?.[0]).toMatchObject({ name: "大安森林公園", name_en: "Daan Forest Park" });
+    expect(out.selected?.[0]).toMatchObject({ name: "大安森林公園", name_en: "Da-an Forest Park" });
     expect(JSON.stringify(out)).not.toMatch(/coordinates|geometry/);
   });
 });
@@ -448,10 +594,11 @@ describe("selection ids", () => {
     // would show up as "the agent selected something and nothing lit up".
     const store: MapToolStore = createMemoryToolStore({ features: FIXTURE_FEATURES, bounds: VIEW_BOUNDS, view: VIEW });
     const { byName } = toolsFor(store);
+    // "Daan Forest" also proves query folding: OSM spells it "Da-an Forest Park".
     const found = await call(byName.find_features, { query: "Daan Forest" });
     const id = found.features?.[0].id;
-    expect(id).toBe(FIXTURE_FEATURES.find((f) => f.properties.nameEn === "Daan Forest Park")!.properties.id);
-    await call(byName.select_features, { ids: [id!] });
+    expect(id).toBe(DAAN_FOREST_PARK.properties.id);
+    await call(byName.select_features, { ids: [id as string] });
     expect(store.getSelection()).toEqual([id]);
   });
 });

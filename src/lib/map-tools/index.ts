@@ -24,6 +24,9 @@ import {
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
 
+/** Ceiling on an explicit id list; larger sets belong to the filter path. */
+export const MAX_IDS = 100;
+
 export interface SetMapViewInput {
   center?: { lng: number; lat: number };
   zoom?: number;
@@ -49,6 +52,8 @@ export interface ListFeaturesInViewInput {
 
 export interface SelectFeaturesInput {
   ids?: unknown;
+  query?: unknown;
+  within?: unknown;
   near?: unknown;
   radius_m?: unknown;
   categories?: unknown;
@@ -143,7 +148,6 @@ type QueryError = { error: string; candidates?: unknown };
 function resolveQueryInput(
   store: MapToolStore,
   input: FindFeaturesInput,
-  opts: { allowQuery: boolean },
 ): ResolvedQuery | QueryError {
   const cats = validateCategories(input.categories);
   if ("error" in cats) return { error: cats.error };
@@ -153,15 +157,16 @@ function resolveQueryInput(
   if ("error" in rad) return { error: rad.error };
 
   let query: string | undefined;
-  if (opts.allowQuery && input.query !== undefined) {
+  if (input.query !== undefined) {
     if (typeof input.query !== "string") return { error: "query must be a string" };
     query = input.query.trim() || undefined;
   }
 
-  let origin = store.getView().center;
+  const viewCenter = store.getView().center;
+  let origin = viewCenter;
   let radius_m = rad.radius_m;
   if (input.near !== undefined) {
-    const near = resolveNear(input.near, store.getFeatures());
+    const near = resolveNear(input.near, store.getFeatures(), viewCenter);
     if (near.kind === "invalid") return { error: near.error };
     if (near.kind === "none") return { error: "unknown place" };
     if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
@@ -193,7 +198,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded and which are selected. Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, and the selection. selection.count is the exact number of selected features; selection.ids lists at most the first 20 of them. Use this instead of a screenshot to know what the map shows.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
     execute: () => describeState(store),
@@ -296,7 +301,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         if (typeof inp.place !== "string" || !inp.place.trim()) {
           return { error: "place must be a non-empty string", state: state() };
         }
-        const resolved = resolvePlaceOne(inp.place, store.getFeatures());
+        const resolved = resolvePlaceOne(inp.place, store.getFeatures(), store.getView().center);
         if (resolved.kind === "none") return { error: "unknown place", state: state() };
         if (resolved.kind === "ambiguous") {
           // Never guess: an agent cannot see that the map went to the wrong place.
@@ -314,7 +319,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the features currently visible on the map, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. This is how you describe what is on screen without taking a screenshot.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot.",
     inputSchema: {
       type: "object",
       properties: { categories: categoriesProperty, limit: limitProperty },
@@ -356,10 +361,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         near: nearProperty,
         radius_m: radiusProperty,
         limit: limitProperty,
-        within: {
-          type: "string",
-          description: "shape:<id> or drawing:<id> (available from D3)",
-        },
       },
       additionalProperties: false,
     },
@@ -367,7 +368,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     execute: (input) => {
       const inp = input ?? {};
       if (inp.within !== undefined) return { error: "within is not available yet" };
-      const resolved = resolveQueryInput(store, inp, { allowQuery: true });
+      const resolved = resolveQueryInput(store, inp);
       if ("error" in resolved) return resolved;
       return listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit);
     },
@@ -376,15 +377,20 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
     name: "select_features",
     description:
-      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids, or the same near/radius_m/categories filter as find_features. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 features while state.selection.count is the true total.",
+      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids, or the same query/near/radius_m/categories filter as find_features — the filter selects exactly the features find_features would return for it. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 features while state.selection.count is the true total.",
     inputSchema: {
       type: "object",
       properties: {
         ids: {
           type: "array",
           items: { type: "string" },
+          maxItems: MAX_IDS,
+          description: `Feature ids to select, as returned by find_features or list_features_in_view (at most ${MAX_IDS}; use the filter instead for larger sets). An empty array clears the selection. Ids that are not loaded are reported in unknown_ids instead of failing the call.`,
+        },
+        query: {
+          type: "string",
           description:
-            "Feature ids to select, as returned by find_features or list_features_in_view. An empty array clears the selection. Ids that are not loaded are reported in unknown_ids instead of failing the call.",
+            "Case-insensitive substring of the local or English name, exactly as in find_features.",
         },
         near: nearProperty,
         radius_m: radiusProperty,
@@ -401,6 +407,14 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     execute: (input) => {
       const inp = input ?? {};
       const state = () => describeState(store);
+      if (inp.within !== undefined) {
+        // Silently ignoring it would select every feature the rest of the
+        // filter matches — the opposite of what "within this shape" asked for.
+        return {
+          error: "within is not available yet; call find_features first and pass ids",
+          state: state(),
+        };
+      }
       if (inp.replace !== undefined && typeof inp.replace !== "boolean") {
         return { error: "replace must be a boolean", state: state() };
       }
@@ -408,10 +422,13 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
 
       const hasIds = inp.ids !== undefined;
       const hasFilter =
-        inp.near !== undefined || inp.categories !== undefined || inp.radius_m !== undefined;
+        inp.query !== undefined ||
+        inp.near !== undefined ||
+        inp.categories !== undefined ||
+        inp.radius_m !== undefined;
       if (!hasIds && !hasFilter) {
         return {
-          error: "provide ids, or near/categories/radius_m to select by filter",
+          error: "provide ids, or query/near/categories/radius_m to select by filter",
           state: state(),
         };
       }
@@ -426,6 +443,9 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         if (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string")) {
           return { error: "ids must be an array of feature id strings", state: state() };
         }
+        if (inp.ids.length > MAX_IDS) {
+          return { error: `ids must have at most ${MAX_IDS} entries`, state: state() };
+        }
         for (const raw of inp.ids as string[]) {
           const feature = byId.get(raw.trim());
           if (feature) targets.push(feature);
@@ -435,7 +455,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
 
       let origin: LngLat | null = null;
       if (hasFilter) {
-        const resolved = resolveQueryInput(store, inp, { allowQuery: false });
+        const resolved = resolveQueryInput(store, inp);
         if ("error" in resolved) return { ...resolved, state: state() };
         origin = resolved.origin;
         targets.push(...queryFeatures(all, resolved));
@@ -451,7 +471,9 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         selected: nextIds
           .slice(0, SELECTION_ID_LIMIT)
           .map((id) => describeFeature(byId.get(id)!, origin)),
-        unknown_ids,
+        // Echoing hundreds of bad ids helps nobody; the count still does.
+        unknown_ids: unknown_ids.slice(0, SELECTION_ID_LIMIT),
+        unknown_count: unknown_ids.length,
         state: describeState(store),
       };
     },

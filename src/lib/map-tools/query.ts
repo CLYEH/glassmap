@@ -5,7 +5,7 @@
  */
 import { isFeatureCategory, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import type { LngLat } from "@/lib/store/map-store";
-import { resolvePlaceOne, type PlaceCandidate } from "./gazetteer";
+import { normaliseName, resolvePlaceOne, type PlaceCandidate } from "./gazetteer";
 import { distanceMeters, featureCenter } from "./output";
 
 export const DEFAULT_LIMIT = 20;
@@ -51,7 +51,11 @@ export function validateRadius(value: unknown): { radius_m?: number } | { error:
  * `near` accepts the three things an agent can plausibly have: an id it got
  * from a previous call, an explicit coordinate, or a place name a human said.
  */
-export function resolveNear(near: unknown, features: readonly GlassMapFeature[]): NearResolution {
+export function resolveNear(
+  near: unknown,
+  features: readonly GlassMapFeature[],
+  viewCenter?: LngLat | null,
+): NearResolution {
   if (typeof near === "string") {
     const trimmed = near.trim();
     if (!trimmed) return { kind: "invalid", error: "near must not be empty" };
@@ -61,7 +65,7 @@ export function resolveNear(near: unknown, features: readonly GlassMapFeature[])
       if (!center) return { kind: "invalid", error: `feature ${trimmed} has no usable geometry` };
       return { kind: "point", center };
     }
-    const place = resolvePlaceOne(trimmed, features);
+    const place = resolvePlaceOne(trimmed, features, viewCenter);
     if (place.kind === "found") return { kind: "point", center: place.entry.center };
     if (place.kind === "ambiguous") return { kind: "ambiguous", candidates: place.candidates };
     return { kind: "none" };
@@ -86,10 +90,15 @@ export interface QuerySpec {
   radius_m?: number;
 }
 
+/**
+ * Same folding as place lookup, so find_features({query:"Daan Forest Park"})
+ * and set_map_view({place:"Daan Forest Park"}) cannot disagree about whether
+ * OSM's "Da-an Forest Park" is a match.
+ */
 function matchesQuery(feature: GlassMapFeature, needle: string): boolean {
   const p = feature.properties;
   return (
-    (p.name ?? "").toLowerCase().includes(needle) || (p.nameEn ?? "").toLowerCase().includes(needle)
+    normaliseName(p.name ?? "").includes(needle) || normaliseName(p.nameEn ?? "").includes(needle)
   );
 }
 
@@ -98,7 +107,7 @@ export function queryFeatures(
   features: readonly GlassMapFeature[],
   spec: QuerySpec,
 ): GlassMapFeature[] {
-  const needle = spec.query?.trim().toLowerCase();
+  const needle = spec.query ? normaliseName(spec.query) || undefined : undefined;
   const categories = spec.categories ? new Set<string>(spec.categories) : null;
 
   const scored: { feature: GlassMapFeature; distance: number }[] = [];

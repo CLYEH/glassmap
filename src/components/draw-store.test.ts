@@ -53,6 +53,41 @@ describe("draw store", () => {
     expect(draw().draft).toHaveLength(2);
   });
 
+  it("rounds every corner to ~1 m as it is clicked", () => {
+    // The draft the preview draws and the polygon the store keeps have to be
+    // the same numbers: rounding later, in whatever serializes a drawing for a
+    // tool, would make the shape on screen and the shape an agent reads back
+    // disagree.
+    draw().start();
+    draw().addVertex([121.5175123456, 25.0478987654]);
+    expect(draw().draft).toEqual([[121.51751, 25.0479]]);
+
+    draw().addVertex([121.6000004, 25.0000004]);
+    draw().addVertex([121.6000004, 25.1000004]);
+    const stored = draw().finish();
+    expect(stored!.geometry).toEqual({
+      type: "Polygon",
+      coordinates: [
+        [
+          [121.51751, 25.0479],
+          [121.6, 25],
+          [121.6, 25.1],
+          [121.51751, 25.0479],
+        ],
+      ],
+    });
+  });
+
+  it("treats two clicks inside the same metre as one corner", () => {
+    // Rounding must not be able to smuggle a duplicate corner into a ring.
+    draw().start();
+    draw().addVertex([121.5, 25]);
+    draw().addVertex([121.5000001, 25.0000001]);
+    draw().addVertex([121.6, 25]);
+    expect(draw().finish()).toBeNull();
+    expect(map().drawings).toEqual([]);
+  });
+
   it("throws the draft away on cancel without touching the map store", () => {
     draw().start();
     draw().addVertex([121.5, 25]);

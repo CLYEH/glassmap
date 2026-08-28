@@ -26,3 +26,14 @@ declare module "react" {
     toolparamdescription?: string;
   }
 }
+
+declare global {
+  interface SubmitEvent {
+    /**
+     * True when a WebMCP agent submitted the form rather than a person. Absent
+     * in every browser without the declarative API, which is why the page
+     * treats "missing" as "a human did it".
+     */
+    readonly agentInvoked?: boolean;
+  }
+}

@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { round5 } from "@/lib/map-tools/state";
 import { useMapStore } from "@/lib/store/map-store";
+
+/** ~1 m, the same precision the tools report coordinates in. */
+const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
 
 /**
  * The declarative half of T-21: a normal HTML form that a WebMCP-capable
@@ -16,6 +18,12 @@ import { useMapStore } from "@/lib/store/map-store";
  * navigates - the page has no server - and never opens a dialog: the result is
  * written to the store and echoed in `add-note-status`, which is also what an
  * agent reads back after submitting.
+ *
+ * Who gets credit for the note comes from `SubmitEvent.agentInvoked`, the
+ * spec's own discriminator. Without a WebMCP client there is no such flag and
+ * the note is stored as `source: "user"` - the honest default for a form a
+ * human typed into, and the one that keeps the sidebar's "pinned by" line and
+ * the pin colour truthful.
  */
 export function AddNoteForm() {
   const [status, setStatus] = useState("");
@@ -30,7 +38,12 @@ export function AddNoteForm() {
       return;
     }
     const { view, addAnnotation } = useMapStore.getState();
-    const stored = addAnnotation({ source: "agent", at: view.center, note });
+    const agentInvoked = (event.nativeEvent as SubmitEvent).agentInvoked === true;
+    const stored = addAnnotation({
+      source: agentInvoked ? "agent" : "user",
+      at: view.center,
+      note,
+    });
     setStatus(
       `Pinned ${stored.id} at ${round5(view.center[0])}, ${round5(view.center[1])}.`,
     );

@@ -36,8 +36,9 @@ describe("drawingsToGeoJson", () => {
   });
 
   it("omits label entirely when the drawing has none", () => {
-    // The label layer filters on ["has", "label"]; a label key set to
-    // undefined or "" would put an empty text box on every unlabelled shape.
+    // The source mirrors the store: a drawing without a label must not gain a
+    // key holding undefined or "", which anything reading the source back -
+    // a filter, a debug query - would treat as a value the user never set.
     const [feature] = drawingsToGeoJson([drawing()]).features;
     expect(feature.properties).not.toHaveProperty("label");
     const [labelled] = drawingsToGeoJson([drawing({ label: "walkable" })]).features;

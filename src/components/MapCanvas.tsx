@@ -181,8 +181,11 @@ export default function MapCanvas() {
     /**
      * No map, so nothing will ever report a viewport. Compute one instead:
      * without it `bounds` stays null forever and every viewport tool answers
-     * "map not ready" on a page whose store, overlay and tools all work. The
-     * subscription keeps it right after a tool moves the camera.
+     * "map not ready" on a page whose store, overlay and tools all work.
+     *
+     * It is recomputed on both inputs it depends on - the camera (a tool moved
+     * it) and the container size (the window was resized, which a real map
+     * would have reported through `moveend`).
      */
     const startBoundsFallback = () => {
       const pushBounds = () => {
@@ -191,9 +194,14 @@ export default function MapCanvas() {
         store.getState().setBounds(approximateBounds(store.getState().view, width, height));
       };
       pushBounds();
-      return store.subscribe((state, previous) => {
+      const unsubscribe = store.subscribe((state, previous) => {
         if (state.view !== previous.view) pushBounds();
       });
+      window.addEventListener("resize", pushBounds);
+      return () => {
+        window.removeEventListener("resize", pushBounds);
+        unsubscribe();
+      };
     };
 
     if (!hasWebGL2()) {

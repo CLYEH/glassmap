@@ -117,9 +117,10 @@ export function buildDrawingLayerSpecs(): AddLayerObject[] {
 }
 
 /**
- * Drawings as GeoJSON for `DRAWING_SOURCE`. `label` is only set when the
- * drawing has one, so the label layer filter `["has", "label"]` keeps
- * unlabelled shapes free of empty text boxes.
+ * Drawings as GeoJSON for `DRAWING_SOURCE`. The properties mirror the store,
+ * so `label` is absent when the drawing has none rather than present-and-empty;
+ * labels themselves are drawn from `DRAWING_LABEL_SOURCE`, which only contains
+ * labelled drawings.
  */
 export function drawingsToGeoJson(drawings: readonly Drawing[]): FeatureCollection {
   return {

@@ -12,10 +12,12 @@ import { resolveSelection } from "./selection-model";
  * map and the pinned notes, each removable by hand.
  *
  * It is a column of the page layout, not an overlay, so on a narrow window it
- * sits under the map instead of covering it. Collapsing hides the panel body
- * with CSS rather than unmounting it: the declarative `add_note` form lives in
- * here, and a tool that disappears when a human folds a panel would be a
- * confusing thing to hand an agent.
+ * sits under the map instead of covering it.
+ *
+ * Only the three lists collapse. The declarative `add_note` form sits outside
+ * the collapsible body and stays visible: a collapsed `display: none` form is
+ * a 0x0 element its own fields cannot be focused or filled in, so folding a
+ * panel would quietly break a tool an agent had already been told about.
  */
 export function Sidebar() {
   const [open, setOpen] = useState(true);
@@ -50,7 +52,7 @@ export function Sidebar() {
 
       <div
         id="sidebar-body"
-        className={`flex-1 space-y-4 overflow-y-auto px-3 py-3 pb-12 ${open ? "" : "hidden"}`}
+        className={`flex-1 space-y-4 overflow-y-auto px-3 py-3 ${open ? "" : "hidden"}`}
       >
         <section>
           <h3 className="flex items-center justify-between font-semibold">
@@ -90,16 +92,16 @@ export function Sidebar() {
                   style={{ backgroundColor: DRAWING_COLOR[drawing.source] }}
                 />
                 <span className="min-w-0 flex-1 break-words">
-                  {drawing.label ?? drawing.kind}
+                  {drawing.label && <span className="block">{drawing.label}</span>}
                   <span className="block text-zinc-500">
-                    {drawing.kind} · drawn by {drawing.source}
+                    {drawing.id} · {drawing.kind} · drawn by {drawing.source}
                   </span>
                 </span>
                 <button
                   type="button"
                   data-testid="remove-drawing"
                   data-drawing-id={drawing.id}
-                  aria-label={`Remove drawing ${drawing.id}`}
+                  aria-label={`Remove ${drawing.id}`}
                   onClick={() => removeDrawing(drawing.id)}
                   className="rounded px-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
                 >
@@ -129,14 +131,16 @@ export function Sidebar() {
                   style={{ backgroundColor: DRAWING_COLOR[annotation.source] }}
                 />
                 <span className="min-w-0 flex-1 break-words">
-                  {annotation.note}
-                  <span className="block text-zinc-500">pinned by {annotation.source}</span>
+                  <span className="block">{annotation.note}</span>
+                  <span className="block text-zinc-500">
+                    {annotation.id} · pinned by {annotation.source}
+                  </span>
                 </span>
                 <button
                   type="button"
                   data-testid="remove-annotation"
                   data-annotation-id={annotation.id}
-                  aria-label={`Remove note ${annotation.id}`}
+                  aria-label={`Remove ${annotation.id}`}
                   onClick={() => removeAnnotation(annotation.id)}
                   className="rounded px-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
                 >
@@ -146,11 +150,13 @@ export function Sidebar() {
             ))}
           </ul>
         </section>
-
-        <section className="border-t border-zinc-200 pt-3">
-          <AddNoteForm />
-        </section>
       </div>
+
+      {/* Outside the collapsible body on purpose - see the comment above. The
+          bottom padding keeps the last line clear of the fixed WebMCP badge. */}
+      <section className="shrink-0 border-t border-zinc-200 px-3 py-3 pb-10">
+        <AddNoteForm />
+      </section>
     </aside>
   );
 }

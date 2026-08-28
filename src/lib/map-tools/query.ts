@@ -3,15 +3,19 @@
  * from the tool definitions so both tools cannot drift: "the 3 parks I found"
  * and "the 3 parks you selected" must be the same three.
  */
+import type { MultiPolygon, Polygon } from "geojson";
 import { isFeatureCategory, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import type { LngLat } from "@/lib/store/map-store";
 import { normaliseName, resolvePlaceOne, type PlaceCandidate } from "./gazetteer";
 import { distanceMeters, featureCenter } from "./output";
+import { featureWithin, MAX_RADIUS_M } from "./shapes";
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 100;
 /** Walking distance; applied only when the caller gave a `near`. */
 export const DEFAULT_RADIUS_M = 800;
+/** Same ceiling as draw_shape and describe_surroundings: one radius story. */
+export const MAX_QUERY_RADIUS_M = MAX_RADIUS_M;
 
 export type NearResolution =
   | { kind: "point"; center: LngLat }
@@ -44,21 +48,30 @@ export function validateCategories(
 export function validateRadius(value: unknown): { radius_m?: number } | { error: string } {
   if (value === undefined) return {};
   if (!isNum(value) || value <= 0) return { error: "radius_m must be a positive number of metres" };
+  // Refused, not clamped: a filter that quietly covers less than it was asked
+  // to cover is a lie the agent cannot see. Same rule as draw_shape.
+  if (value > MAX_QUERY_RADIUS_M) {
+    return { error: `radius_m must be at most ${MAX_QUERY_RADIUS_M} metres` };
+  }
   return { radius_m: value };
 }
 
 /**
  * `near` accepts the three things an agent can plausibly have: an id it got
  * from a previous call, an explicit coordinate, or a place name a human said.
+ * `field` names the parameter in the error messages, because the same three
+ * ways of saying "here" are also draw_shape's `center`, annotate's `at` and
+ * describe_surroundings' `from`.
  */
 export function resolveNear(
   near: unknown,
   features: readonly GlassMapFeature[],
   viewCenter?: LngLat | null,
+  field = "near",
 ): NearResolution {
   if (typeof near === "string") {
     const trimmed = near.trim();
-    if (!trimmed) return { kind: "invalid", error: "near must not be empty" };
+    if (!trimmed) return { kind: "invalid", error: `${field} must not be empty` };
     const byId = features.find((f) => f.properties?.id === trimmed);
     if (byId) {
       const center = featureCenter(byId);
@@ -75,9 +88,9 @@ export function resolveNear(
     if (isNum(lng) && isNum(lat) && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90) {
       return { kind: "point", center: [lng, lat] };
     }
-    return { kind: "invalid", error: "near {lng,lat} must be lng -180..180 and lat -90..90" };
+    return { kind: "invalid", error: `${field} {lng,lat} must be lng -180..180 and lat -90..90` };
   }
-  return { kind: "invalid", error: "near must be a feature id, a place name, or {lng,lat}" };
+  return { kind: "invalid", error: `${field} must be a feature id, a place name, or {lng,lat}` };
 }
 
 export interface QuerySpec {
@@ -88,6 +101,11 @@ export interface QuerySpec {
   origin: LngLat;
   /** Drops anything further than this from the origin. */
   radius_m?: number;
+  /**
+   * Keeps only what is inside this area (a drawing's geometry). Applied on top
+   * of every other filter, never instead of one.
+   */
+  within?: Polygon | MultiPolygon;
 }
 
 /**
@@ -115,6 +133,7 @@ export function queryFeatures(
     if (!feature?.properties?.id) continue;
     if (categories && !categories.has(feature.properties.category)) continue;
     if (needle && !matchesQuery(feature, needle)) continue;
+    if (spec.within && !featureWithin(spec.within, feature)) continue;
     const center = featureCenter(feature);
     const distance = center ? distanceMeters(spec.origin, center) : Number.POSITIVE_INFINITY;
     if (spec.radius_m !== undefined && distance > spec.radius_m) continue;

@@ -1,7 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { DrawToolbar } from "@/components/DrawToolbar";
+import { Sidebar } from "@/components/Sidebar";
 import { StateOverlay } from "@/components/StateOverlay";
+import { useDevStoreHandle } from "@/components/dev-store-handle";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
@@ -9,10 +12,20 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 
 export default function Home() {
   useFeatureData();
+  useDevStoreHandle();
   return (
-    <main data-testid="map-page" className="relative flex-1 overflow-hidden">
-      <MapCanvas />
-      <StateOverlay />
+    // A row on wide windows, a column on narrow ones. The sidebar is part of
+    // the layout rather than an overlay, so it never covers the map.
+    <main
+      data-testid="map-page"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row"
+    >
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <MapCanvas />
+        <StateOverlay />
+        <DrawToolbar />
+      </div>
+      <Sidebar />
     </main>
   );
 }

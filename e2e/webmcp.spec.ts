@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectBoundsShape, stableState } from "./helpers";
 
 /**
  * End-to-end harness: drive the tools the way a WebMCP client would
@@ -35,7 +36,16 @@ test.describe("WebMCP tool surface", () => {
     });
 
     expect(result.set).toMatchObject({ center: { lng: 121.5436, lat: 25.0264 }, zoom: 15 });
-    expect(result.get).toEqual(result.set);
+    // Compare stable fields only, not the whole object: `bounds` is written
+    // by MapCanvas's own effect independently of any tool call (constructor
+    // time, then again once the container is measured, then again once
+    // tiles load), so two reads a few milliseconds apart -- `set` catching
+    // it still `null`, `get` catching the first real box -- can legitimately
+    // disagree on it even though nothing asked the view to move. See
+    // e2e/helpers.ts.
+    expect(stableState(result.get)).toEqual(stableState(result.set));
+    expectBoundsShape(result.set.bounds);
+    expectBoundsShape(result.get.bounds);
     await expect(page.getByTestId("zoom")).toHaveText("15");
     await expect(page.getByTestId("center")).toHaveText("121.5436, 25.0264");
   });

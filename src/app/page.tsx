@@ -1,28 +1,18 @@
 "use client";
 
-import { useMapStore } from "@/lib/store/map-store";
-import { describeView } from "@/lib/map-tools/state";
+import dynamic from "next/dynamic";
+import { StateOverlay } from "@/components/StateOverlay";
+import { useFeatureData } from "@/components/useFeatureData";
 
-/** Placeholder until MapLibre lands (D1): shows the store state so tools have a visible effect. */
+// MapLibre needs window/WebGL at import time, so it never runs on the server.
+const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false });
+
 export default function Home() {
-  const view = useMapStore((s) => s.view);
-  const state = describeView(view);
+  useFeatureData();
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8 font-mono">
-      <h1 className="text-2xl font-semibold">GlassMap</h1>
-      <p className="text-sm text-zinc-500">map placeholder — MapLibre arrives in D1</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt>center</dt>
-        <dd data-testid="center">
-          {state.center.lng}, {state.center.lat}
-        </dd>
-        <dt>zoom</dt>
-        <dd data-testid="zoom">{state.zoom}</dd>
-        <dt>bearing</dt>
-        <dd data-testid="bearing">{state.bearing}</dd>
-        <dt>pitch</dt>
-        <dd data-testid="pitch">{state.pitch}</dd>
-      </dl>
+    <main data-testid="map-page" className="relative flex-1 overflow-hidden">
+      <MapCanvas />
+      <StateOverlay />
     </main>
   );
 }

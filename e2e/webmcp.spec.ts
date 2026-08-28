@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { expectBoundsShape, stableState } from "./helpers";
+import { expect, test } from "./fixtures";
+import { expectBoundsShape, stableState, waitForFeatures } from "./helpers";
 
 /**
  * End-to-end harness: drive the tools the way a WebMCP client would
@@ -10,6 +10,11 @@ test.describe("WebMCP tool surface", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await page.waitForFunction(() => !!window.__glassmap);
+    // features_loaded is part of get_map_state's output and can transition
+    // asynchronously (0 -> 2063) independently of any tool call -- same
+    // flake class as `bounds` (see stableState below): settle it first so a
+    // test reading get_map_state twice does not see it change mid-test.
+    await waitForFeatures(page);
   });
 
   test("tools are registered on a modelContext surface", async ({ page }) => {

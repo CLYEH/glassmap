@@ -10,12 +10,27 @@ export async function waitForTools(page: Page): Promise<void> {
   await page.waitForFunction(() => !!window.__glassmap);
 }
 
-/** True once useFeatureData has loaded every dataset (src/components/useFeatureData.ts). */
+/**
+ * True once useFeatureData has loaded every dataset
+ * (src/components/useFeatureData.ts). Uses `expect(...).toHaveText` (which
+ * polls) rather than `waitForFunction` so a failure prints the actual vs.
+ * expected count instead of a bare timeout.
+ */
 export async function waitForFeatures(page: Page): Promise<void> {
-  await page.waitForFunction(
-    (expected) => document.querySelector('[data-testid="feature-count"]')?.textContent === String(expected),
-    FEATURE_COUNT,
-  );
+  await expect(page.getByTestId("feature-count")).toHaveText(String(FEATURE_COUNT));
+}
+
+/**
+ * True once MapCanvas's effect has actually constructed a live MapLibre map
+ * (src/components/MapCanvas.tsx sets `window.__glassmapMap` in dev builds
+ * right after `new MapLibreMap(...)` succeeds). MapCanvas is a
+ * `next/dynamic` import, so it can still be pending well after
+ * `window.__glassmap` appears (WebMcpProvider mounts synchronously; MapCanvas
+ * does not) -- tests that exercise MapLibre-specific behaviour (e.g. the
+ * `flyTo` re-entrancy guard) must wait for this, not just for the tools.
+ */
+export async function waitForLiveMap(page: Page): Promise<void> {
+  await page.waitForFunction(() => !!window.__glassmapMap);
 }
 
 /**
@@ -34,6 +49,18 @@ export async function forceNoWebGL2(page: Page): Promise<void> {
       return original.apply(this, args);
     };
   });
+}
+
+/**
+ * Blocks the basemap style and tiles so MapLibre's `load` event can never
+ * fire -- `map-status` stays "loading" (or "error") for the life of the
+ * test, so `map-status !== "ready"` is a permanent, not merely
+ * fast-enough-to-observe, condition. Must be called before `page.goto`.
+ * WebGL itself is untouched, so `window.__glassmapMap` still becomes
+ * available and constructor-time bounds still get set.
+ */
+export async function blockBasemapNetwork(page: Page): Promise<void> {
+  await page.route(/openfreemap\.org/, (route) => route.abort());
 }
 
 /**

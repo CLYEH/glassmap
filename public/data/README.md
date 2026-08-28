@@ -34,6 +34,9 @@ and does not represent real properties, addresses or prices.
 - Regenerate: `node scripts/fetch-osm.mjs` (writes the five OSM-derived
   files) then `node scripts/make-listings.mjs` (writes `listings.geojson`,
   which depends on `mrt-stations.geojson` and `districts.geojson`).
+  Re-running hits live OSM data and reproduces the committed files
+  byte-for-byte only if upstream OSM data has not changed since the export
+  date above.
 
 ## Files
 
@@ -41,9 +44,9 @@ and does not represent real properties, addresses or prices.
 |---|---|---:|---:|---|---|
 | `mrt-stations.geojson` | `mrt_station` | 109 | 30.7 KB | Point | see below |
 | `districts.geojson` | `district` | 12 | 32.5 KB | Polygon | see below |
-| `parks.geojson` | `park` | 865 | 287.8 KB | Polygon/MultiPolygon | see below |
+| `parks.geojson` | `park` | 865 | 287.5 KB | Polygon/MultiPolygon | see below |
 | `schools.geojson` | `school` | 445 | 101.5 KB | Point (centroid) | see below |
-| `supermarkets.geojson` | `supermarket` | 607 | 128.8 KB | Point (centroid) | see below |
+| `supermarkets.geojson` | `supermarket` | 607 | 128.7 KB | Point (centroid) | see below |
 | `listings.geojson` | `listing` | 25 | 4.8 KB | Point | fabricated, not OSM |
 
 Total: 586 KB (well under the 1 MB combined budget; every file is under
@@ -67,6 +70,14 @@ sharing a name are averaged into a single point, and the feature id is
 taken from the lowest OSM node id in the group (deterministic across
 re-runs). `tags.network` / `tags.operator` are kept when present.
 
+The bbox query is not restricted to Taipei City administratively, so it
+also picks up 12 stations tagged `network=New Taipei Metro` (the Circular
+Line, `operator=New Taipei Metro Corporation`). More broadly, 36 of the
+109 stations fall geographically outside the 12 district polygons in
+`districts.geojson` (checked with `turf.booleanPointInPolygon`) - near-
+border stations operated by Taipei Rapid Transit Corporation but sited in
+neighbouring New Taipei City, in addition to the 12 New Taipei Metro ones.
+
 ### Districts
 
 ```
@@ -75,7 +86,7 @@ rel(id:2782528,2783061,2822029,2822030,2869465,2881027,2881028,2881029,2881105,2
 out geom;
 ```
 
-Taipei City's 12 districts (區) are tagged `boundary=administrative`,
+Taipei City's 12 districts are tagged `boundary=administrative`,
 **`admin_level=7`** in OSM (the city itself, "臺北市", would be
 `admin_level=6`, but no such relation intersected the query bbox in a
 usable way; districts are pinned by explicit relation id instead of area
@@ -87,11 +98,13 @@ whose `name:en` values are the 12 Taipei City districts.
 
 Multipolygon ways are joined into closed rings in `fetch-osm.mjs`
 (`assembleRings`/`buildPolygon`) from the `out geom;` member geometry, then
-clipped to the bbox and simplified. Because of the bbox clip, the small
-northern parts of Beitou (北投) and Shilin (士林) that extend into the
-Yangmingshan area above lat 25.21 are cut off — this follows the task's
-explicit "clip to it" instruction over showing the full administrative
-extent.
+clipped to the bbox and simplified. Only Beitou actually touches the clip
+line: its northern tip runs into the Yangmingshan area, and 134 m of its
+boundary (two adjacent vertices at `lat=25.21`) sits exactly on the north
+edge of the bbox. Shilin, despite also having hilly terrain in the north,
+tops out at `lat=25.1954` and never reaches any bbox edge, so it is not
+clipped at all. This follows the task's explicit "clip to it" instruction
+over showing the full administrative extent.
 
 `id` format: `district:<english-slug>` (e.g. `district:daan`,
 `district:zhongzheng`), derived from the OSM `name:en` tag.
@@ -148,20 +161,23 @@ this matches the task's bbox-based instruction for this dataset.
 out center;
 ```
 
-Same centroid approach as schools. Dominated by 全聯福利中心 (PX Mart,
-208), 美廉社 (Simple Mart, 143) and 家樂福 (Carrefour, incl. "家樂福超市"
-variant, 89 combined) — consistent with known Taipei supermarket density.
+Same centroid approach as schools. Dominated by PX Mart (208), Simple Mart
+(143) and Carrefour (89 combined, across a shorter and a longer OSM name
+variant) — consistent with known Taipei supermarket density.
 
 ### Listings (fabricated)
 
 `scripts/make-listings.mjs` generates 25 points scattered 50–300 m from a
-seeded, deterministic selection of MRT stations located inside Daan
-(大安), Zhongshan (中山), Songshan (松山) and Xinyi (信義) districts
-(membership tested with `turf.booleanPointInPolygon` against
-`districts.geojson`). Every feature has `sample: true`, `source:
-"sample"`, and a name of the form `"Sample listing 07"` — deliberately not
-a real address or price. Re-running the script with the same seed
-(`20260828`) reproduces byte-identical output.
+seeded, deterministic selection of MRT stations located inside Daan,
+Zhongshan, Songshan and Xinyi districts (membership tested with
+`turf.booleanPointInPolygon` against `districts.geojson`). Each scatter is
+re-drawn (same seeded RNG, so still deterministic) up to 20 times until
+the point itself also lands inside one of those four districts, since a
+station near a border can otherwise scatter across it; the station's own
+coordinate is used as a last-resort fallback. Every feature has `sample:
+true`, `source: "sample"`, and a name of the form `"Sample listing 07"` —
+deliberately not a real address or price. Re-running the script with the
+same seed (`20260828`) reproduces byte-identical output.
 
 ## Property shape
 

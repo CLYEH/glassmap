@@ -80,9 +80,9 @@ describe("loadDatasets", () => {
     await expect(loadDatasets(fetchFn)).rejects.toThrow(/category/i);
   });
 
-  it("throws on a non-404 HTTP error instead of silently returning partial data", async () => {
+  it("throws on a category that is not in FEATURE_CATEGORIES at all (isFeatureCategory guard)", async () => {
     const fetchFn = stubFetch({
-      [DATASETS.mrt_station.file]: jsonResponse({}, 500),
+      [DATASETS.mrt_station.file]: jsonResponse({ features: [feature("cafe", "osm:node:1")] }),
       [DATASETS.park.file]: jsonResponse({ features: [] }),
       [DATASETS.school.file]: jsonResponse({ features: [] }),
       [DATASETS.supermarket.file]: jsonResponse({ features: [] }),
@@ -90,6 +90,31 @@ describe("loadDatasets", () => {
       [DATASETS.district.file]: jsonResponse({ features: [] }),
     });
 
-    await expect(loadDatasets(fetchFn)).rejects.toThrow(/500/);
+    // Matches only the isFeatureCategory branch's own message, not the
+    // "expected <category>" mismatch branch - so removing this guard (the
+    // code would then fall through to the mismatch check and still throw,
+    // just with different wording) fails this assertion.
+    await expect(loadDatasets(fetchFn)).rejects.toThrow(/invalid category/i);
+  });
+
+  it("throws when a feature has no string id (missing-id guard)", async () => {
+    const featureWithoutId = {
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Point", coordinates: [121.5, 25.0] },
+    };
+    const fetchFn = stubFetch({
+      [DATASETS.mrt_station.file]: jsonResponse({ features: [featureWithoutId] }),
+      [DATASETS.park.file]: jsonResponse({ features: [] }),
+      [DATASETS.school.file]: jsonResponse({ features: [] }),
+      [DATASETS.supermarket.file]: jsonResponse({ features: [] }),
+      [DATASETS.listing.file]: jsonResponse({ features: [] }),
+      [DATASETS.district.file]: jsonResponse({ features: [] }),
+    });
+
+    // Matches only the id guard's own message - if it is removed, the next
+    // check (isFeatureCategory on an also-missing category) throws a
+    // different message, so this assertion would fail.
+    await expect(loadDatasets(fetchFn)).rejects.toThrow(/missing a string id/i);
   });
 });

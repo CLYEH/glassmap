@@ -42,18 +42,18 @@ const ENDPOINTS = [
 // district identity is pinned by relation id below rather than by area
 // name, which avoids Traditional-Chinese "臺" vs "台" ambiguity).
 const DISTRICT_RELATIONS = [
-  2782528, // 萬華區 Wanhua
-  2783061, // 中正區 Zhongzheng
-  2822029, // 中山區 Zhongshan
-  2822030, // 大同區 Datong
-  2869465, // 大安區 Da'an
-  2881027, // 信義區 Xinyi
-  2881028, // 南港區 Nangang
-  2881029, // 松山區 Songshan
-  2881105, // 文山區 Wenshan
-  2905064, // 北投區 Beitou
-  2905065, // 內湖區 Neihu
-  2905066, // 士林區 Shilin
+  2782528, // Wanhua
+  2783061, // Zhongzheng
+  2822029, // Zhongshan
+  2822030, // Datong
+  2869465, // Da'an
+  2881027, // Xinyi
+  2881028, // Nangang
+  2881029, // Songshan
+  2881105, // Wenshan
+  2905064, // Beitou
+  2905065, // Neihu
+  2905066, // Shilin
 ];
 
 const round5 = (n) => Math.round(n * 1e5) / 1e5;
@@ -212,6 +212,31 @@ function clipToBbox(geometry) {
   return clipped.geometry;
 }
 
+function isValidRing(ring) {
+  return Array.isArray(ring) && ring.length >= 4 && coordsEqual(ring[0], ring[ring.length - 1]);
+}
+
+/**
+ * Drops empty/degenerate rings and polygons that bboxClip or simplify can
+ * produce (e.g. one part of a MultiPolygon clipping down to nothing) and
+ * demotes a MultiPolygon with a single remaining polygon to a plain
+ * Polygon. Returns null if nothing valid is left, so the caller can drop
+ * the feature entirely - GeoJSON never allows an empty ring/polygon array.
+ */
+function sanitizeGeometry(geometry) {
+  if (geometry.type === "Polygon") {
+    const rings = geometry.coordinates.filter(isValidRing);
+    return rings.length ? { type: "Polygon", coordinates: rings } : null;
+  }
+  if (geometry.type === "MultiPolygon") {
+    const polys = geometry.coordinates.map((poly) => poly.filter(isValidRing)).filter((poly) => poly.length > 0);
+    if (polys.length === 0) return null;
+    if (polys.length === 1) return { type: "Polygon", coordinates: polys[0] };
+    return { type: "MultiPolygon", coordinates: polys };
+  }
+  return geometry;
+}
+
 function simplifyGeometry(geometry, tolerance = 0.00012) {
   const simplified = turf.simplify(turf.feature(geometry), { tolerance, highQuality: true });
   return simplified.geometry;
@@ -290,7 +315,16 @@ out geom;`;
       console.warn(`  district relation ${rel.id} (${rel.tags?.name}) produced no polygon, skipping`);
       continue;
     }
-    geometry = roundGeometry(simplifyGeometry(clipToBbox(geometry)));
+    const clipped = sanitizeGeometry(clipToBbox(geometry));
+    if (!clipped) {
+      console.warn(`  district relation ${rel.id} (${rel.tags?.name}) clipped to nothing, skipping`);
+      continue;
+    }
+    geometry = sanitizeGeometry(roundGeometry(simplifyGeometry(clipped)));
+    if (!geometry) {
+      console.warn(`  district relation ${rel.id} (${rel.tags?.name}) simplified to nothing, skipping`);
+      continue;
+    }
     const name = rel.tags.name;
     const nameEn = rel.tags["name:en"];
     const id = `district:${districtSlug(nameEn ?? name)}`;
@@ -325,13 +359,14 @@ out geom;`;
   for (const el of data.elements) {
     const rawGeometry0 = wayOrRelationToPolygon(el);
     if (!rawGeometry0) continue;
-    const rawGeometry = clipToBbox(rawGeometry0);
-    if (!rawGeometry.coordinates?.length) continue;
+    const rawGeometry = sanitizeGeometry(clipToBbox(rawGeometry0));
+    if (!rawGeometry) continue;
     const areaM2 = turf.area(rawGeometry);
     if (areaM2 < 2000) continue;
 
-    const geometry = roundGeometry(simplifyGeometry(rawGeometry));
-    const name = el.tags?.name ?? el.tags?.["name:en"] ?? `Park ${el.id}`;
+    const geometry = sanitizeGeometry(roundGeometry(simplifyGeometry(rawGeometry)));
+    if (!geometry) continue;
+    const name = el.tags?.name ?? el.tags?.["name:en"] ?? "Unnamed park";
     const nameEn = el.tags?.["name:en"];
     const id = `osm:${el.type}:${el.id}`;
     features.push({
@@ -376,7 +411,7 @@ out center;`;
     lat = round5(lat);
     if (!inBbox(lng, lat)) continue;
 
-    const name = el.tags?.name ?? el.tags?.["name:en"] ?? `${category} ${el.id}`;
+    const name = el.tags?.name ?? el.tags?.["name:en"] ?? `Unnamed ${category}`;
     const nameEn = el.tags?.["name:en"];
     const id = `osm:${el.type}:${el.id}`;
     const tags = pickTags(el.tags, extraTagKeys) ?? {};

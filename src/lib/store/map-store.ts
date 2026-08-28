@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { Geometry } from "geojson";
 import type { GlassMapFeature } from "@/lib/data/schema";
 
 /** [lng, lat] */
@@ -39,6 +40,44 @@ export interface MapToolStore {
   getFeatures(): readonly GlassMapFeature[];
   getSelection(): readonly string[];
   setSelection(ids: string[]): void;
+  getDrawings(): readonly Drawing[];
+  /** Returns the stored drawing with its assigned `drawing:<n>` id. */
+  addDrawing(drawing: Omit<Drawing, "id">): Drawing;
+  /** False when the id does not exist. */
+  removeDrawing(id: string): boolean;
+  getAnnotations(): readonly Annotation[];
+  /** Returns the stored annotation with its assigned `annotation:<n>` id. */
+  addAnnotation(annotation: Omit<Annotation, "id">): Annotation;
+  /** False when the id does not exist. */
+  removeAnnotation(id: string): boolean;
+}
+
+/**
+ * A shape on the map, drawn by a tool (`source: "agent"`) or by hand
+ * (`source: "user"`). Ids (`drawing:<n>`) are assigned by the store so both
+ * sources share one sequence. Circles keep their centre/radius; `geometry`
+ * always holds the renderable/queryable form (Polygon for circle and polygon,
+ * LineString for line).
+ */
+export interface Drawing {
+  id: string;
+  source: "agent" | "user";
+  kind: "circle" | "polygon" | "line";
+  label?: string;
+  geometry: Geometry;
+  /** Circles only. */
+  center?: LngLat;
+  /** Circles only. */
+  radius_m?: number;
+}
+
+/** A note pinned to a location. Ids are `annotation:<n>`, store-assigned. */
+export interface Annotation {
+  id: string;
+  source: "agent" | "user";
+  at: LngLat;
+  note: string;
+  icon?: string;
 }
 
 /** Which WebMCP surfaces picked up our tools; null until registration ran. */
@@ -56,11 +95,19 @@ interface MapStore {
   setFeatures: (features: GlassMapFeature[]) => void;
   selection: string[];
   setSelection: (ids: string[]) => void;
+  drawings: Drawing[];
+  drawingSeq: number;
+  addDrawing: (drawing: Omit<Drawing, "id">) => Drawing;
+  removeDrawing: (id: string) => boolean;
+  annotations: Annotation[];
+  annotationSeq: number;
+  addAnnotation: (annotation: Omit<Annotation, "id">) => Annotation;
+  removeAnnotation: (id: string) => boolean;
   webmcp: WebMcpInfo | null;
   setWebMcp: (info: WebMcpInfo | null) => void;
 }
 
-export const useMapStore = create<MapStore>((set) => ({
+export const useMapStore = create<MapStore>((set, get) => ({
   view: DEFAULT_VIEW,
   setView: (patch) => set((s) => ({ view: { ...s.view, ...patch } })),
   bounds: null,
@@ -69,6 +116,30 @@ export const useMapStore = create<MapStore>((set) => ({
   setFeatures: (features) => set({ features }),
   selection: [],
   setSelection: (selection) => set({ selection }),
+  drawings: [],
+  drawingSeq: 1,
+  addDrawing: (drawing) => {
+    const stored: Drawing = { ...drawing, id: `drawing:${get().drawingSeq}` };
+    set((s) => ({ drawings: [...s.drawings, stored], drawingSeq: s.drawingSeq + 1 }));
+    return stored;
+  },
+  removeDrawing: (id) => {
+    const exists = get().drawings.some((d) => d.id === id);
+    if (exists) set((s) => ({ drawings: s.drawings.filter((d) => d.id !== id) }));
+    return exists;
+  },
+  annotations: [],
+  annotationSeq: 1,
+  addAnnotation: (annotation) => {
+    const stored: Annotation = { ...annotation, id: `annotation:${get().annotationSeq}` };
+    set((s) => ({ annotations: [...s.annotations, stored], annotationSeq: s.annotationSeq + 1 }));
+    return stored;
+  },
+  removeAnnotation: (id) => {
+    const exists = get().annotations.some((a) => a.id === id);
+    if (exists) set((s) => ({ annotations: s.annotations.filter((a) => a.id !== id) }));
+    return exists;
+  },
   webmcp: null,
   setWebMcp: (webmcp) => set({ webmcp }),
 }));
@@ -81,6 +152,12 @@ export const zustandToolStore: MapToolStore = {
   getFeatures: () => useMapStore.getState().features,
   getSelection: () => useMapStore.getState().selection,
   setSelection: (ids) => useMapStore.getState().setSelection(ids),
+  getDrawings: () => useMapStore.getState().drawings,
+  addDrawing: (drawing) => useMapStore.getState().addDrawing(drawing),
+  removeDrawing: (id) => useMapStore.getState().removeDrawing(id),
+  getAnnotations: () => useMapStore.getState().annotations,
+  addAnnotation: (annotation) => useMapStore.getState().addAnnotation(annotation),
+  removeAnnotation: (id) => useMapStore.getState().removeAnnotation(id),
 };
 
 export interface MemoryToolStoreInit {
@@ -88,6 +165,8 @@ export interface MemoryToolStoreInit {
   bounds?: Bounds | null;
   features?: GlassMapFeature[];
   selection?: string[];
+  drawings?: Drawing[];
+  annotations?: Annotation[];
 }
 
 /** In-memory adapter for unit tests. */
@@ -96,6 +175,10 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MapToolSt
   const bounds = init.bounds ?? null;
   const features = init.features ?? [];
   let selection = [...(init.selection ?? [])];
+  let drawings = [...(init.drawings ?? [])];
+  let drawingSeq = drawings.length + 1;
+  let annotations = [...(init.annotations ?? [])];
+  let annotationSeq = annotations.length + 1;
   return {
     getView: () => view,
     setView: (patch) => {
@@ -106,6 +189,28 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MapToolSt
     getSelection: () => selection,
     setSelection: (ids) => {
       selection = [...ids];
+    },
+    getDrawings: () => drawings,
+    addDrawing: (drawing) => {
+      const stored: Drawing = { ...drawing, id: `drawing:${drawingSeq++}` };
+      drawings = [...drawings, stored];
+      return stored;
+    },
+    removeDrawing: (id) => {
+      const exists = drawings.some((d) => d.id === id);
+      drawings = drawings.filter((d) => d.id !== id);
+      return exists;
+    },
+    getAnnotations: () => annotations,
+    addAnnotation: (annotation) => {
+      const stored: Annotation = { ...annotation, id: `annotation:${annotationSeq++}` };
+      annotations = [...annotations, stored];
+      return stored;
+    },
+    removeAnnotation: (id) => {
+      const exists = annotations.some((a) => a.id === id);
+      annotations = annotations.filter((a) => a.id !== id);
+      return exists;
     },
   };
 }

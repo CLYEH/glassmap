@@ -1,7 +1,7 @@
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
-import { describeState } from "./state";
+import { describeState, SELECTION_ID_LIMIT } from "./state";
 import {
   boundsIntersect,
   describeFeature,
@@ -45,6 +45,14 @@ export interface FindFeaturesInput {
 export interface ListFeaturesInViewInput {
   categories?: unknown;
   limit?: unknown;
+}
+
+export interface SelectFeaturesInput {
+  ids?: unknown;
+  near?: unknown;
+  radius_m?: unknown;
+  categories?: unknown;
+  replace?: unknown;
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -365,10 +373,95 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
+    name: "select_features",
+    description:
+      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids, or the same near/radius_m/categories filter as find_features. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 features while state.selection.count is the true total.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Feature ids to select, as returned by find_features or list_features_in_view. An empty array clears the selection. Ids that are not loaded are reported in unknown_ids instead of failing the call.",
+        },
+        near: nearProperty,
+        radius_m: radiusProperty,
+        categories: categoriesProperty,
+        replace: {
+          type: "boolean",
+          description: "true (the default) replaces the current selection; false adds to it.",
+        },
+      },
+      additionalProperties: false,
+    },
+    // Returns OSM names.
+    annotations: { untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      if (inp.replace !== undefined && typeof inp.replace !== "boolean") {
+        return { error: "replace must be a boolean", state: state() };
+      }
+      const replace = inp.replace === undefined ? true : inp.replace;
+
+      const hasIds = inp.ids !== undefined;
+      const hasFilter =
+        inp.near !== undefined || inp.categories !== undefined || inp.radius_m !== undefined;
+      if (!hasIds && !hasFilter) {
+        return {
+          error: "provide ids, or near/categories/radius_m to select by filter",
+          state: state(),
+        };
+      }
+
+      const all = store.getFeatures();
+      const byId = new Map<string, GlassMapFeature>();
+      for (const f of all) if (f?.properties?.id) byId.set(f.properties.id, f);
+
+      const unknown_ids: string[] = [];
+      const targets: GlassMapFeature[] = [];
+      if (hasIds) {
+        if (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string")) {
+          return { error: "ids must be an array of feature id strings", state: state() };
+        }
+        for (const raw of inp.ids as string[]) {
+          const feature = byId.get(raw.trim());
+          if (feature) targets.push(feature);
+          else unknown_ids.push(raw);
+        }
+      }
+
+      let origin: LngLat | null = null;
+      if (hasFilter) {
+        const resolved = resolveQueryInput(store, inp, { allowQuery: false });
+        if ("error" in resolved) return { ...resolved, state: state() };
+        origin = resolved.origin;
+        targets.push(...queryFeatures(all, resolved));
+      }
+
+      // Keeping only ids we can still resolve drops leftovers from a previous
+      // dataset instead of carrying dead ids into the UI.
+      const nextIds = replace ? [] : store.getSelection().filter((id) => byId.has(id));
+      for (const f of targets) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
+      store.setSelection(nextIds);
+
+      return {
+        selected: nextIds
+          .slice(0, SELECTION_ID_LIMIT)
+          .map((id) => describeFeature(byId.get(id)!, origin)),
+        unknown_ids,
+        state: describeState(store),
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
     listFeaturesInView as GlassMapTool,
     findFeatures as GlassMapTool,
+    selectFeatures as GlassMapTool,
   ];
 }

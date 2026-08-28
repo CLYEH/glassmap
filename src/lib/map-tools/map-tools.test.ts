@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMapTools, PLACE_ZOOM, validateSetMapView } from "./index";
-import { createMemoryToolStore, DEFAULT_VIEW } from "@/lib/store/map-store";
+import { createMemoryToolStore, DEFAULT_VIEW, type MapToolStore } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
@@ -45,13 +45,14 @@ describe("tool contract", () => {
     expect(byName.list_features_in_view.annotations?.readOnlyHint).toBe(true);
     expect(byName.find_features.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
+    expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
   });
 
   it("marks untrustedContentHint on every tool that can echo OSM or user text", () => {
     // Names come from OpenStreetMap and from sample listings; a client must be
     // able to treat them as data, not as instructions.
     const { byName } = toolsFor();
-    for (const name of ["set_map_view", "list_features_in_view", "find_features"]) {
+    for (const name of ["set_map_view", "list_features_in_view", "find_features", "select_features"]) {
       expect(byName[name].annotations?.untrustedContentHint, name).toBe(true);
     }
     // get_map_state returns numbers and ids only, so it needs no such hint.
@@ -356,5 +357,101 @@ describe("find_features", () => {
     const a = await call(byName.find_features, { limit: 3 });
     const b = await call(byName.list_features_in_view, { limit: 3 });
     expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort());
+  });
+});
+
+describe("select_features", () => {
+  it("stores the ids the UI highlights and returns the new state", async () => {
+    const { store, byName } = mapReady();
+    const out = await call(byName.select_features, { ids: ["osm:way:10", "osm:node:2"] });
+    expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(idsOf(out.selected)).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(out.state).toMatchObject({ selection: { count: 2, ids: ["osm:way:10", "osm:node:2"] } });
+  });
+
+  it("reports ids it could not resolve while still selecting the rest", async () => {
+    // Half-working beats failing: the agent learns which id was stale and the
+    // human still sees the features that do exist.
+    const { store, byName } = mapReady();
+    const out = await call(byName.select_features, { ids: ["osm:way:10", "osm:node:404"] });
+    expect(out.unknown_ids).toEqual(["osm:node:404"]);
+    expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
+  it("replaces by default and adds when replace is false", async () => {
+    const { store, byName } = mapReady();
+    await call(byName.select_features, { ids: ["osm:way:10"] });
+    await call(byName.select_features, { ids: ["osm:node:2"], replace: false });
+    expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
+    await call(byName.select_features, { ids: ["osm:node:1"] });
+    expect(store.getSelection()).toEqual(["osm:node:1"]);
+  });
+
+  it("never selects the same feature twice", async () => {
+    const { store, byName } = mapReady();
+    await call(byName.select_features, { ids: ["osm:way:10"] });
+    await call(byName.select_features, { ids: ["osm:way:10", "osm:way:10"], replace: false });
+    expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
+  it("clears the selection with an empty ids array", async () => {
+    const { store, byName } = mapReady({ selection: ["osm:way:10"] });
+    const out = await call(byName.select_features, { ids: [] });
+    expect(store.getSelection()).toEqual([]);
+    expect(out.state).toMatchObject({ selection: { count: 0, ids: [] } });
+  });
+
+  it("selects by the same filter as find_features, so both agree on the set", async () => {
+    const { store, byName } = mapReady();
+    const filter = { near: "Daan Station", categories: ["park"], radius_m: 1500 };
+    const found = await call(byName.find_features, filter);
+    const selected = await call(byName.select_features, filter);
+    expect(idsOf(found.features)).toEqual(["osm:way:10"]);
+    expect(store.getSelection()).toEqual(idsOf(found.features));
+    expect(idsOf(selected.selected)).toEqual(idsOf(found.features));
+    expect(selected.selected?.[0].distance_m).toBe(found.features?.[0].distance_m);
+  });
+
+  it("treats an empty match as a valid answer, not an error", async () => {
+    const { store, byName } = mapReady();
+    const out = await call(byName.select_features, { near: "Daan Station", categories: ["school"] });
+    expect(out.error).toBeUndefined();
+    expect(out.selected).toEqual([]);
+    expect(store.getSelection()).toEqual([]);
+  });
+
+  it("rejects a call with neither ids nor a filter so nothing happens by accident", async () => {
+    const { store, byName } = mapReady({ selection: ["osm:way:10"] });
+    const out = await call(byName.select_features, {});
+    expect(out.error).toMatch(/provide ids/);
+    expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
+  it("does not change the selection when the filter cannot be resolved", async () => {
+    const { store, byName } = mapReady({ selection: ["osm:way:10"] });
+    const out = await call(byName.select_features, { near: "PX Mart" });
+    expect(out.error).toBe("ambiguous place");
+    expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
+  it("returns names but no geometry", async () => {
+    const { byName } = mapReady();
+    const out = await call(byName.select_features, { ids: ["osm:way:10"] });
+    expect(out.selected?.[0]).toMatchObject({ name: "大安森林公園", name_en: "Daan Forest Park" });
+    expect(JSON.stringify(out)).not.toMatch(/coordinates|geometry/);
+  });
+});
+
+describe("selection ids", () => {
+  it("are properties.id, the same string the UI and every other tool uses", async () => {
+    // map-ui-dev highlights on this value; find_features returns it; a mismatch
+    // would show up as "the agent selected something and nothing lit up".
+    const store: MapToolStore = createMemoryToolStore({ features: FIXTURE_FEATURES, bounds: VIEW_BOUNDS, view: VIEW });
+    const { byName } = toolsFor(store);
+    const found = await call(byName.find_features, { query: "Daan Forest" });
+    const id = found.features?.[0].id;
+    expect(id).toBe(FIXTURE_FEATURES.find((f) => f.properties.nameEn === "Daan Forest Park")!.properties.id);
+    await call(byName.select_features, { ids: [id!] });
+    expect(store.getSelection()).toEqual([id]);
   });
 });

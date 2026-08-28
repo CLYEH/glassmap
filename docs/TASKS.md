@@ -29,10 +29,11 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-20 | `draw_shape` (circle/polygon/line) + hand-drawing UI; drawings visible to `get_map_state` / `find_features({within})` | tool-dev / map-ui-dev | todo | the "human draws, agent reads" moment |
-| T-21 | `annotate` (imperative) + declarative `<form toolname>` version | tool-dev / map-ui-dev | todo | shows both APIs |
-| T-22 | `describe_surroundings` (direction-grouped, from geometry) | tool-dev | todo | Persona B |
-| T-23 | E2E for D3 | qa | todo | |
+| T-20 | `draw_shape` (circle/polygon/line) + hand-drawing UI; drawings visible to `get_map_state` / `find_features({within})` | tool-dev / map-ui-dev | review | tool half this PR; UI half on `feat/ui-t20-drawing-annotations` |
+| T-21 | `annotate` (imperative) + declarative `<form toolname>` version | tool-dev / map-ui-dev | review | tool half this PR; declarative form on the UI branch |
+| T-22 | `describe_surroundings` (direction-grouped, from geometry; district with ≤300 m seam fallback) | tool-dev | review | this PR |
+| T-23 | E2E for D3 (drawing round-trip, declarative form, no-WebGL bounds wiring) | qa | todo | dev-only `window.__glassmapStore` available for store-level setup |
+| T-24 | Regenerate `districts.geojson`: simplification makes 萬華區 overshoot ~400 m across the river (Banqiao resolves as inside it) | data-engineer | doing(data-engineer) | tighter tolerance or city-boundary clip |
 
 ## D4 — 2026-08-31 · nice-to-have, in order
 
@@ -63,3 +64,6 @@ Append-only. `date · from → to · what`.
 - 2026-08-28 · reviewer → tool-dev · District polygons are simplified independently, so shared borders have seams up to ~150 m; a point-in-polygon "current district" lookup returns none for ~1/700 map centres near borders. When implementing district lookup: fall back to nearest district by boundary distance; if two match, take the first.
 - 2026-08-28 · map-ui-dev → qa · Add e2e: two `set_map_view` calls back-to-back without awaiting the first flight; assert the second call's return matches its request (re-entrancy guard), and `get_map_state().bounds` is non-null immediately after `window.__glassmap` appears.
 - 2026-08-28 · orchestrator → all · Selection ids are `feature.properties.id`; GeoJSON features have no top-level `Feature.id` (UI filters on `["get","id"]`).
+- 2026-08-28 · tool-dev → map-ui-dev · Hand-drawn circles must be polygonised Polygon geometry (Point+radius is invisible to `within`); UI must display `drawing:<n>` / `annotation:<n>` ids so a human can name them; delete is UI-only.
+- 2026-08-28 · reviewer → qa (T-23) · The no-WebGL bounds fallback has no failing-capable test: stub `getContext("webgl2")`→null, assert `map-status="unavailable"` and non-null bounds. Headless CI HAS WebGL (SwiftShader) — do not assume otherwise.
+- 2026-08-28 · tool-dev → data-engineer · T-24: simplified 萬華區 polygon contains Banqiao Station (393 m inside); Tamsui/Sanchong similar overshoots. Regenerate districts.

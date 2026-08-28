@@ -129,6 +129,32 @@ export function measureGeometry(geometry: Geometry): ShapeMeasure {
   return {};
 }
 
+export interface ExtentMeasure extends ShapeMeasure {
+  /** Areas only, metres: the length of the outline, holes included. */
+  perimeter_m?: number;
+}
+
+/**
+ * What `measure` reports: the numbers measureGeometry gives, plus the perimeter
+ * of an area. Kept apart from measureGeometry because map state lists every
+ * drawing on every call and does not need a second number per shape, while
+ * `measure` is asked about one shape at a time and "how far is it around" is
+ * half of what a human means by "how big is that".
+ */
+export function measureExtent(geometry: Geometry): ExtentMeasure {
+  const base = measureGeometry(geometry);
+  if (base.area_m2 === undefined) return base;
+  try {
+    // turf's length walks every ring of a (Multi)Polygon, so this is the
+    // outline of the shape as drawn, not of its bounding box.
+    const feature = { type: "Feature", properties: {}, geometry } as Feature;
+    return { ...base, perimeter_m: Math.round(turfLength(feature, { units: "meters" })) };
+  } catch {
+    // An area we can measure but not walk still answers with its area.
+    return base;
+  }
+}
+
 /**
  * Is this feature in that area? A point has to be inside; anything with extent
  * only has to overlap, for the same reason list_features_in_view keeps a park

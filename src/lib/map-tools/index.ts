@@ -1,6 +1,6 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
+import type { Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
 import {
@@ -21,6 +21,7 @@ import {
   MAX_NOTE_CHARS,
   MAX_RADIUS_M,
   MAX_SHAPE_POINTS,
+  measureExtent,
   measureGeometry,
   SHAPE_KINDS,
   toRing,
@@ -101,6 +102,10 @@ export interface CompareAreasInput {
   b?: unknown;
   radius_m?: unknown;
   categories?: unknown;
+}
+
+export interface MeasureInput {
+  target?: unknown;
 }
 
 export interface ListFeaturesInViewInput {
@@ -240,6 +245,29 @@ function resolvePoint(
 }
 
 /**
+ * A drawing by id. Shared by `within` and `measure` so there is one story about
+ * an id we cannot resolve: never an empty filter or a silent zero, always the
+ * ids that do exist plus the true count.
+ */
+function findDrawing(
+  store: MapToolStore,
+  value: unknown,
+  field: string,
+): { drawing: Drawing } | QueryError {
+  const drawings = store.getDrawings();
+  // Most recent, like map state: past the cap, the oldest ids are the least
+  // likely to be the one the caller meant.
+  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
+  const known_count = drawings.length;
+  if (typeof value !== "string" || !value.trim()) {
+    return { error: `${field} must be a drawing id like "drawing:1"`, known_ids, known_count };
+  }
+  const drawing = drawings.find((d) => d.id === value.trim());
+  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
+  return { drawing };
+}
+
+/**
  * A drawing id turned into the area to test against. Guessing here would be
  * the worst failure in the tool layer: "the shops inside the circle I drew"
  * must never quietly mean "every shop in Taipei", so an id we cannot resolve
@@ -249,16 +277,9 @@ function resolveWithin(
   store: MapToolStore,
   value: unknown,
 ): { area: Polygon | MultiPolygon } | QueryError {
-  const drawings = store.getDrawings();
-  // Most recent, like map state: past the cap, the oldest ids are the least
-  // likely to be the one the caller meant.
-  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
-  const known_count = drawings.length;
-  if (typeof value !== "string" || !value.trim()) {
-    return { error: 'within must be a drawing id like "drawing:1"', known_ids, known_count };
-  }
-  const drawing = drawings.find((d) => d.id === value.trim());
-  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
+  const found = findDrawing(store, value, "within");
+  if ("error" in found) return found;
+  const { drawing } = found;
   if (!isAreaGeometry(drawing.geometry)) {
     return {
       error: `within requires an area drawing (a circle or a polygon); ${drawing.id} is a ${drawing.kind}`,
@@ -893,6 +914,83 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const measure: GlassMapTool<MeasureInput> = {
+    name: "measure",
+    description:
+      'Measure one thing on the map and get whole metres back: a shape drawn by you or by the human ("drawing:1", the ids map state lists under drawings), or a loaded feature (an id from find_features, list_features_in_view or describe_surroundings). A line answers with length_m; a circle or a polygon with area_m2 and perimeter_m. A point has a location but no extent, so measuring one is refused - ask find_features for distances instead.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description:
+            'What to measure: a drawing id such as "drawing:1" (yours or the human\'s) or a feature id such as "osm:way:123". Names are not accepted; look the place up with find_features first and pass the id it returns.',
+        },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    // A drawing's label is text the human typed; a feature's name comes from OSM.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      if (typeof inp.target !== "string" || !inp.target.trim()) {
+        return {
+          error:
+            'target is required: a drawing id like "drawing:1", or a feature id like "osm:way:123"',
+        };
+      }
+      const target = inp.target.trim();
+      // A mistyped drawing id must not fall through to the feature lookup and
+      // come back as "unknown feature": the caller would go looking in the
+      // wrong place for a shape that is right there on the map.
+      const empty = (id: string) => ({
+        error: `${id} has no measurable extent: its geometry is empty or unusable`,
+      });
+
+      if (target.startsWith("drawing:")) {
+        const found = findDrawing(store, target, "target");
+        if ("error" in found) return found;
+        const { drawing } = found;
+        const extent = measureExtent(drawing.geometry);
+        if (!extent.area_m2 && !extent.length_m) return empty(drawing.id);
+        return {
+          measured: "drawing" as const,
+          target: drawing.id,
+          kind: drawing.kind,
+          ...(drawing.label ? { label: drawing.label } : {}),
+          source: drawing.source,
+          ...extent,
+        };
+      }
+
+      const feature = store.getFeatures().find((f) => f.properties?.id === target);
+      if (!feature) {
+        return {
+          error: `unknown target: no drawing and no loaded feature has id ${target}. Use find_features to get a feature id, or get_map_state for the drawing ids.`,
+        };
+      }
+      const geometry = feature.geometry;
+      if (!geometry) return empty(target);
+      if (geometry.type === "Point" || geometry.type === "MultiPoint") {
+        return {
+          error: `${target} is a point: it has a location but no length or area. Use find_features({near:"${target}"}) for distances to what is around it, or draw_shape to put an area on the map.`,
+        };
+      }
+      const extent = measureExtent(geometry);
+      if (!extent.area_m2 && !extent.length_m) return empty(target);
+      const p = feature.properties;
+      return {
+        measured: "feature" as const,
+        target,
+        name: p.name,
+        ...(p.nameEn ? { name_en: p.nameEn } : {}),
+        category: p.category,
+        ...extent,
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
@@ -903,5 +1001,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     annotate as GlassMapTool,
     describeSurroundings as GlassMapTool,
     compareAreas as GlassMapTool,
-    ];
+    measure as GlassMapTool,
+  ];
 }

@@ -56,6 +56,7 @@ describe("tool contract", () => {
     expect(byName.find_features.annotations?.readOnlyHint).toBe(true);
     expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
     expect(byName.compare_areas.annotations?.readOnlyHint).toBe(true);
+    expect(byName.measure.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.draw_shape.annotations?.readOnlyHint).toBeFalsy();
@@ -124,6 +125,7 @@ describe("tool contract", () => {
         "draw_shape",
         "annotate",
         "compare_areas",
+        "measure",
       ],
     },
     // Not an object at all — some clients pass the raw argument through.
@@ -135,6 +137,7 @@ describe("tool contract", () => {
         "draw_shape",
         "annotate",
         "compare_areas",
+        "measure",
       ],
     },
     {
@@ -145,6 +148,7 @@ describe("tool contract", () => {
         "draw_shape",
         "annotate",
         "compare_areas",
+        "measure",
       ],
     },
     { input: { type: "blob", coordinates: [] }, rejectedBy: ["draw_shape"] },
@@ -202,6 +206,11 @@ describe("tool contract", () => {
     { input: { a: "Pxmart", b: "Daan Station" }, rejectedBy: ["compare_areas"] },
     { input: { a: "Daan Station", b: "Shibuya" }, rejectedBy: ["compare_areas"] },
     { input: { a: { lng: 999, lat: 0 }, b: "Daan Station" }, rejectedBy: ["compare_areas"] },
+    { input: { target: 7 }, rejectedBy: ["measure"] },
+    { input: { target: "drawing:404" }, rejectedBy: ["measure"] },
+    // A station is a point: measuring it must fail loudly rather than come back
+    // as an area of zero, which reads as "a place with no size".
+    { input: { target: "osm:node:2" }, rejectedBy: ["measure"] },
   ];
 
   it.each(HOSTILE)("refuses $input without throwing or changing state", async ({ input, rejectedBy }) => {

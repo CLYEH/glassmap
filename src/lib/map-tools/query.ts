@@ -18,7 +18,13 @@ export const DEFAULT_RADIUS_M = 800;
 export const MAX_QUERY_RADIUS_M = MAX_RADIUS_M;
 
 export type NearResolution =
-  | { kind: "point"; center: LngLat }
+  /**
+   * `name` is the name of whatever the string resolved to, absent for a raw
+   * coordinate. Callers that echo the origin back (compare_areas) can then say
+   * which "大安" they measured from, which is the one thing the agent that
+   * typed a name cannot check for itself.
+   */
+  | { kind: "point"; center: LngLat; name?: string }
   | { kind: "ambiguous"; candidates: PlaceCandidate[] }
   | { kind: "none" }
   | { kind: "invalid"; error: string };
@@ -76,10 +82,12 @@ export function resolveNear(
     if (byId) {
       const center = featureCenter(byId);
       if (!center) return { kind: "invalid", error: `feature ${trimmed} has no usable geometry` };
-      return { kind: "point", center };
+      return { kind: "point", center, name: byId.properties.name };
     }
     const place = resolvePlaceOne(trimmed, features, viewCenter);
-    if (place.kind === "found") return { kind: "point", center: place.entry.center };
+    if (place.kind === "found") {
+      return { kind: "point", center: place.entry.center, name: place.entry.name };
+    }
     if (place.kind === "ambiguous") return { kind: "ambiguous", candidates: place.candidates };
     return { kind: "none" };
   }

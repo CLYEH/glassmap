@@ -35,7 +35,14 @@ test.describe("WebMCP tool surface", () => {
     });
 
     expect(result.set).toMatchObject({ center: { lng: 121.5436, lat: 25.0264 }, zoom: 15 });
-    expect(result.get).toEqual(result.set);
+    // Compare only fields the map cannot legitimately change between the two
+    // calls: `bounds` may appear when map initialisation completes in between
+    // (race caught in CI), so it is asserted by shape, not by equality.
+    const stable = ({ bounds: _bounds, ...rest }: typeof result.set) => rest;
+    expect(stable(result.get)).toEqual(stable(result.set));
+    for (const b of [result.set.bounds, result.get.bounds]) {
+      expect(b === null || typeof b.west === "number").toBe(true);
+    }
     await expect(page.getByTestId("zoom")).toHaveText("15");
     await expect(page.getByTestId("center")).toHaveText("121.5436, 25.0264");
   });

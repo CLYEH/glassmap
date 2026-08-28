@@ -22,26 +22,26 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 |---|---|---|---|---|
 | T-10 | GeoJSON: MRT stations, districts, parks, schools, supermarkets, sample listings | data-engineer | done | PR #4; 2,063 features, 586 KB; gazetteer moved to tool layer |
 | T-11 | `list_features_in_view`, `find_features` (query / categories / near / radius_m), gazetteer, `set_map_view` place/feature_id | tool-dev | done | PR #5; `within` deferred to D3 |
-| T-12 | `select_features` + highlight on map + sidebar list | tool-dev (tool) / map-ui-dev (UI) | review | tool + map highlight done (PR #5 + this PR); sidebar list pending — fold into D3 UI work |
+| T-12 | `select_features` + highlight on map + sidebar list | tool-dev (tool) / map-ui-dev (UI) | done | |
 | T-13 | E2E for T-11/T-12 through `document.modelContext` | qa | todo | include: two rapid `set_map_view` calls (re-entrancy), bounds non-null before `ready`, find/select through modelContext |
 
 ## D3 — 2026-08-30 · gate: demo steps 6–8 run
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-20 | `draw_shape` (circle/polygon/line) + hand-drawing UI; drawings visible to `get_map_state` / `find_features({within})` | tool-dev / map-ui-dev | review | tool half this PR; UI half on `feat/ui-t20-drawing-annotations` |
-| T-21 | `annotate` (imperative) + declarative `<form toolname>` version | tool-dev / map-ui-dev | review | tool half this PR; declarative form on the UI branch |
-| T-22 | `describe_surroundings` (direction-grouped, from geometry; district with ≤300 m seam fallback) | tool-dev | review | this PR |
-| T-23 | E2E for D3 (drawing round-trip, declarative form, no-WebGL bounds wiring) | qa | todo | dev-only `window.__glassmapStore` available for store-level setup |
-| T-24 | Sharpen `districts.geojson` (tolerance 0.00003) + boundary sanity tests | data-engineer | review | premise partially refuted: the reported point was a Wanhua neighbourhood, not Banqiao Stn; real Banqiao was never inside any polygon. Seam gaps are OSM source properties (adjacent relations share no nodes) — handled by the 300 m fallback, not by tolerance |
+| T-20 | `draw_shape` (circle/polygon/line) + hand-drawing UI; drawings visible to `get_map_state` / `find_features({within})` | tool-dev / map-ui-dev | done | |
+| T-21 | `annotate` (imperative) + declarative `<form toolname>` version | tool-dev / map-ui-dev | done | |
+| T-22 | `describe_surroundings` (direction-grouped, from geometry; district with ≤300 m seam fallback) | tool-dev | done | |
+| T-23 | E2E for D3 (drawing round-trip, declarative form, no-WebGL bounds wiring) | qa | done | folded into the merged suite; test.fail debt resolved in PR #16 |
+| T-24 | Sharpen `districts.geojson` (tolerance 0.00003) + boundary sanity tests | data-engineer | done | premise partially refuted: the reported point was a Wanhua neighbourhood, not Banqiao Stn; real Banqiao was never inside any polygon. Seam gaps are OSM source properties (adjacent relations share no nodes) — handled by the 300 m fallback, not by tolerance |
 
 ## D4 — 2026-08-31 · nice-to-have, in order
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-30 | `compare_areas` | tool-dev | todo | |
-| T-31 | `get_share_link` (state in URL hash) | tool-dev / map-ui-dev | todo | |
-| T-32 | `measure` | tool-dev | todo | |
+| T-30 | `compare_areas` | tool-dev | done | PR #16 |
+| T-31 | `get_share_link` (state in URL hash) | tool-dev / map-ui-dev | doing(tool-dev) | codec + tool in flight; UI hash wiring follows |
+| T-32 | `measure` | tool-dev | done | PR #16 |
 | T-33 | `set_layers` | tool-dev / map-ui-dev | todo | |
 | T-34 | Screenshot-vs-WebMCP comparison (3 tasks, one run each) | orchestrator + qa | todo | numbers go to README |
 

@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all eight tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the sidebar are live. Remaining: the screenshot-vs-WebMCP comparison measurement, `get_share_link`, the nice-to-have `measure`/`compare_areas`/`set_layers` tools, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all ten tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the sidebar are live. Remaining: `get_share_link`, the nice-to-have `set_layers` tool, the screenshot-vs-WebMCP comparison measurement, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -27,11 +27,13 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 | "Which parks are in view?" | screenshot → guess that green blobs are parks → can't read names | `list_features_in_view({ categories: ["park"] })` |
 | "Circle an 800 m walk from the station" | nearly impossible: compute a pixel radius at the right zoom, then drag | `draw_shape({ type: "circle", center: …, radius_m: 800 })` |
 | "What's inside the area I just drew?" | impossible — the agent cannot see vector geometry | `find_features({ within: "drawing:1" })` |
+| "How big is the circle I just drew?" | impossible — a screenshot has no scale, so area has to be guessed from pixels | `measure({ target: "drawing:1" })` → `{ area_m2, perimeter_m }` |
+| "Is Daan or Zhongshan better connected?" | screenshot both, eyeball the pins on each, guess which side has more | `compare_areas({ a: "Daan Park Station", b: "Zhongshan Station" })` → per-category counts and nearest match on each side |
 | "I can't see the map. Where's the nearest park?" | impossible | `describe_surroundings()` → nearest features grouped by direction, each with a name, distance in metres and id |
 
 ## Tools
 
-Three layers, all eight tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, ten of twelve tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
@@ -39,8 +41,8 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
 ├─ find_features ✅                                                   ├─ annotate ✅
 ├─ describe_surroundings ✅                                           └─ get_share_link
-├─ measure
-└─ compare_areas
+├─ measure ✅
+└─ compare_areas ✅
 ```
 
 ✅ = implemented and covered by unit tests. Everything else is planned — see [Roadmap](#roadmap).
@@ -55,6 +57,8 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 | `draw_shape` | Draws a circle, polygon or line on the map so the human can see the area being discussed; returns its area (circle/polygon) or length (line) and a `drawing:<n>` id. | `type`, `center`+`radius_m` (circle) or `coordinates` (polygon/line), `label` |
 | `annotate` | Pins a short note to a place on the map, so the human sees what was found where it was found. | `at`, `note`, `icon` |
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
+| `compare_areas` | Compares two places in one call: per-category counts of what's within `radius_m` of each, plus the nearest match of each category on each side; if a place name doesn't resolve, the error names which side (`a` or `b`) failed. | `a`, `b`, `radius_m`, `categories` |
+| `measure` | Measures one drawing or loaded feature: area and perimeter for a circle or polygon, length for a line. A point has no extent and is refused, with a pointer to `find_features` for distances instead. | `target` |
 
 `within: "drawing:<n>"` on `find_features` and `select_features` is the read half of the collaborative loop: any circle or polygon on the map — agent-drawn or hand-drawn by a human — becomes something an agent can query by id, not just something rendered on screen. (A line has no inside, so `within` does not apply to it.)
 
@@ -179,7 +183,7 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 | D1 | MapLibre + OpenFreeMap on Vercel; `get_map_state` and `set_map_view` on a real map; verify a WebMCP client can call them | done |
 | D2 | GeoJSON data; `list_features_in_view`, `find_features`, `select_features` + sidebar | done |
 | D3 | `draw_shape` (agent- and hand-drawn), `annotate`, `describe_surroundings` | done |
-| D4 | `compare_areas`, `get_share_link`, `measure`, `set_layers`; screenshot-vs-WebMCP comparison | todo |
+| D4 | `compare_areas`, `measure` (done); `get_share_link`, `set_layers`, screenshot-vs-WebMCP comparison (todo) | in progress |
 | D5 | Demo video, submission text | todo |
 
 ## Data and licensing

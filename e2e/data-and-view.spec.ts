@@ -111,46 +111,22 @@ test.describe("data + view state", () => {
     expect(state.features_loaded).toBe(FEATURE_COUNT);
   });
 
-  test("KNOWN DEFECT: bounds never becomes available once WebGL2 is unavailable", async ({ page }) => {
-    // Kept minimal on purpose (just goto + wait for tools + the one
-    // assertion): test.fail() marks the WHOLE test body as "expected to
-    // fail", so a regression anywhere else in a larger test (e.g. tool
-    // registration breaking, or forceNoWebGL2 silently stopping working)
-    // would be swallowed as "expected" too. The previous test above already
-    // covers "map-status is unavailable" and "features still load" as
-    // ordinary, must-pass assertions; this test isolates only the genuinely
-    // broken part.
+  test("bounds becomes available even when WebGL2 is unavailable (approximate fallback)", async ({ page }) => {
+    // Formerly a test.fail()-marked known defect: the no-WebGL2 path in
+    // MapCanvas never called setBounds. Fixed by the approximateBounds
+    // fallback (MapCanvas.tsx); this test now guards the fix.
     //
-    // MapCanvas.tsx:
-    //   if (!hasWebGL2()) {
-    //     setStatus("unavailable");
-    //     return;               // <-- never reaches pushViewFromMap()
-    //   }
-    // `pushViewFromMap()` is the ONLY place that calls
-    // `store.getState().setBounds(...)`. Bounds starts `null` in the store
-    // and this early return means nothing ever sets it, so it stays `null`
-    // forever on this path.
-    //
-    // Expected (per docs/TASKS.md's map-ui-dev -> qa handoff, "get_map_state
-    // ().bounds is non-null immediately after window.__glassmap appears",
-    // and this task's items 1/3, "non-null bounds ... in BOTH ready and
-    // unavailable states"): bounds is non-null here too.
-    // Actual: bounds is `null` and never changes.
-    //
-    // This also falsifies the comment on that early return itself ("no map,
-    // but ... every tool keep[s] working"): list_features_in_view requires
-    // `store.getBounds()` to be non-null and therefore returns
-    // {"error":"map not ready"} forever in this state.
-    //
-    // Repro: see forceNoWebGL2() in e2e/helpers.ts (monkey-patches
-    // HTMLCanvasElement.prototype.getContext("webgl2") to return null before
-    // the page's own scripts run) -- no CI-specific environment needed.
-    test.fail();
-
+    // The guarantee is "eventually non-null", not "instantly": MapCanvas is
+    // a code-split dynamic import, so window.__glassmap (WebMcpProvider,
+    // main bundle) exists before the fallback has run. A single read right
+    // after waitForTools races that mount — poll instead.
     await forceNoWebGL2(page);
     await page.goto("/");
     await waitForTools(page);
-    const state = await callTool(page, "get_map_state");
-    expect(state.bounds).not.toBeNull();
+    await expect
+      .poll(async () => (await callTool(page, "get_map_state")).bounds, {
+        message: "bounds should become non-null via the approximate fallback",
+      })
+      .not.toBeNull();
   });
 });

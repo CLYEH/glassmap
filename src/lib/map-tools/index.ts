@@ -1,6 +1,6 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
+import type { Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
 import {
@@ -21,6 +21,7 @@ import {
   MAX_NOTE_CHARS,
   MAX_RADIUS_M,
   MAX_SHAPE_POINTS,
+  measureExtent,
   measureGeometry,
   SHAPE_KINDS,
   toRing,
@@ -37,6 +38,11 @@ import {
   NEIGHBOUR_CATEGORIES,
   SURROUNDINGS_ITEM_LIMIT,
 } from "./surroundings";
+import {
+  COMPARE_CATEGORIES,
+  compareSummary,
+  summariseArea,
+} from "./compare";
 import {
   DEFAULT_LIMIT,
   DEFAULT_RADIUS_M,
@@ -89,6 +95,17 @@ export interface AnnotateInput {
 export interface DescribeSurroundingsInput {
   from?: unknown;
   radius_m?: unknown;
+}
+
+export interface CompareAreasInput {
+  a?: unknown;
+  b?: unknown;
+  radius_m?: unknown;
+  categories?: unknown;
+}
+
+export interface MeasureInput {
+  target?: unknown;
 }
 
 export interface ListFeaturesInViewInput {
@@ -210,17 +227,44 @@ type QueryError = {
  * One location out of the three forms every location parameter accepts.
  * Rounded to 5 decimals (~1 m) so what the store keeps is what the agent is
  * told, and two calls that name the same place cannot differ in float dust.
+ * `name` is what the id or the place name resolved to, absent for a coordinate.
  */
 function resolvePoint(
   store: MapToolStore,
   value: unknown,
   field: string,
-): { point: LngLat } | QueryError {
+): { point: LngLat; name?: string } | QueryError {
   const near = resolveNear(value, store.getFeatures(), store.getView().center, field);
   if (near.kind === "invalid") return { error: near.error };
   if (near.kind === "none") return { error: "unknown place" };
   if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
-  return { point: [round5(near.center[0]), round5(near.center[1])] };
+  return {
+    point: [round5(near.center[0]), round5(near.center[1])],
+    ...(near.name ? { name: near.name } : {}),
+  };
+}
+
+/**
+ * A drawing by id. Shared by `within` and `measure` so there is one story about
+ * an id we cannot resolve: never an empty filter or a silent zero, always the
+ * ids that do exist plus the true count.
+ */
+function findDrawing(
+  store: MapToolStore,
+  value: unknown,
+  field: string,
+): { drawing: Drawing } | QueryError {
+  const drawings = store.getDrawings();
+  // Most recent, like map state: past the cap, the oldest ids are the least
+  // likely to be the one the caller meant.
+  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
+  const known_count = drawings.length;
+  if (typeof value !== "string" || !value.trim()) {
+    return { error: `${field} must be a drawing id like "drawing:1"`, known_ids, known_count };
+  }
+  const drawing = drawings.find((d) => d.id === value.trim());
+  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
+  return { drawing };
 }
 
 /**
@@ -233,16 +277,9 @@ function resolveWithin(
   store: MapToolStore,
   value: unknown,
 ): { area: Polygon | MultiPolygon } | QueryError {
-  const drawings = store.getDrawings();
-  // Most recent, like map state: past the cap, the oldest ids are the least
-  // likely to be the one the caller meant.
-  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
-  const known_count = drawings.length;
-  if (typeof value !== "string" || !value.trim()) {
-    return { error: 'within must be a drawing id like "drawing:1"', known_ids, known_count };
-  }
-  const drawing = drawings.find((d) => d.id === value.trim());
-  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
+  const found = findDrawing(store, value, "within");
+  if ("error" in found) return found;
+  const { drawing } = found;
   if (!isAreaGeometry(drawing.geometry)) {
     return {
       error: `within requires an area drawing (a circle or a polygon); ${drawing.id} is a ${drawing.kind}`,
@@ -818,6 +855,142 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const compareAreas: GlassMapTool<CompareAreasInput> = {
+    name: "compare_areas",
+    description:
+      'Compare two places in one call: how many features of each category are within radius_m of a, how many are within radius_m of b, and the nearest one of each category on each side. Both places are given the same way as anywhere else - a feature id, a place name such as "Zhongshan Station", or a coordinate - and both are counted with exactly the filter find_features uses, so the numbers match what a per-category search would return. Read "summary" out; use by_category to reason and its feature ids to act (select_features, set_map_view). This replaces one find_features call per category per place.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        a: pointProperty(
+          'The first place: a feature id from an earlier call, a place name such as "Daan Park Station", or an explicit coordinate. If a name matches several places nothing is counted and the answer lists the candidates.',
+        ),
+        b: pointProperty("The second place, in any of the same three forms as a."),
+        radius_m: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: MAX_RADIUS_M,
+          description: `How far around each place to count, in metres (default ${DEFAULT_RADIUS_M}, a comfortable walk; at most ${MAX_RADIUS_M}). The same radius is used on both sides - that is what makes the two counts comparable. A larger radius is refused rather than quietly narrowed.`,
+        },
+        categories: {
+          ...categoriesProperty,
+          description: `Which categories to count. Omit to count ${COMPARE_CATEGORIES.join(", ")} - every category except district, which is a property of a place rather than something near it. Values: ${FEATURE_CATEGORIES.join(", ")}.`,
+        },
+      },
+      required: ["a", "b"],
+      additionalProperties: false,
+    },
+    // Echoes OSM names: the resolved place names and the nearest feature of each category.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const cats = validateCategories(inp.categories);
+      if ("error" in cats) return { error: cats.error };
+      // Same order as asked for, without repeats: a duplicated category would
+      // otherwise produce two identical summary lines and look like two results.
+      const categories = [...new Set(cats.categories ?? COMPARE_CATEGORIES)];
+      const radius = validateRadiusM(inp.radius_m, DEFAULT_RADIUS_M);
+      if ("error" in radius) return { error: radius.error };
+
+      if (inp.a === undefined || inp.b === undefined) {
+        return { error: "compare_areas needs both a and b: two places to compare" };
+      }
+      // Which side failed matters: the agent has to know which of the two names
+      // to ask the human about, and both errors otherwise read the same.
+      const a = resolvePoint(store, inp.a, "a");
+      if ("error" in a) return { ...a, field: "a" };
+      const b = resolvePoint(store, inp.b, "b");
+      if ("error" in b) return { ...b, field: "b" };
+
+      const features = store.getFeatures();
+      const left = summariseArea(features, a.point, radius.radius_m, categories, a.name);
+      const right = summariseArea(features, b.point, radius.radius_m, categories, b.name);
+      return {
+        a: left,
+        b: right,
+        radius_m: radius.radius_m,
+        summary: compareSummary(left, right, categories),
+      };
+    },
+  };
+
+  const measure: GlassMapTool<MeasureInput> = {
+    name: "measure",
+    description:
+      'Measure one thing on the map and get whole metres back: a shape drawn by you or by the human ("drawing:1", the ids map state lists under drawings), or a loaded feature (an id from find_features, list_features_in_view or describe_surroundings). A line answers with length_m; a circle or a polygon with area_m2 and perimeter_m. A point has a location but no extent, so measuring one is refused - ask find_features for distances instead.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description:
+            'What to measure: a drawing id such as "drawing:1" (yours or the human\'s) or a feature id such as "osm:way:123". Names are not accepted; look the place up with find_features first and pass the id it returns.',
+        },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    // A drawing's label is text the human typed; a feature's name comes from OSM.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      if (typeof inp.target !== "string" || !inp.target.trim()) {
+        return {
+          error:
+            'target is required: a drawing id like "drawing:1", or a feature id like "osm:way:123"',
+        };
+      }
+      const target = inp.target.trim();
+      // A mistyped drawing id must not fall through to the feature lookup and
+      // come back as "unknown feature": the caller would go looking in the
+      // wrong place for a shape that is right there on the map.
+      const empty = (id: string) => ({
+        error: `${id} has no measurable extent: its geometry is empty or unusable`,
+      });
+
+      if (target.startsWith("drawing:")) {
+        const found = findDrawing(store, target, "target");
+        if ("error" in found) return found;
+        const { drawing } = found;
+        const extent = measureExtent(drawing.geometry);
+        if (!extent.area_m2 && !extent.length_m) return empty(drawing.id);
+        return {
+          measured: "drawing" as const,
+          target: drawing.id,
+          kind: drawing.kind,
+          ...(drawing.label ? { label: drawing.label } : {}),
+          source: drawing.source,
+          ...extent,
+        };
+      }
+
+      const feature = store.getFeatures().find((f) => f.properties?.id === target);
+      if (!feature) {
+        return {
+          error: `unknown target: no drawing and no loaded feature has id ${target}. Use find_features to get a feature id, or get_map_state for the drawing ids.`,
+        };
+      }
+      const geometry = feature.geometry;
+      if (!geometry) return empty(target);
+      if (geometry.type === "Point" || geometry.type === "MultiPoint") {
+        return {
+          error: `${target} is a point: it has a location but no length or area. Use find_features({near:"${target}"}) for distances to what is around it, or draw_shape to put an area on the map.`,
+        };
+      }
+      const extent = measureExtent(geometry);
+      if (!extent.area_m2 && !extent.length_m) return empty(target);
+      const p = feature.properties;
+      return {
+        measured: "feature" as const,
+        target,
+        name: p.name,
+        ...(p.nameEn ? { name_en: p.nameEn } : {}),
+        category: p.category,
+        ...extent,
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
@@ -827,5 +1000,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     drawShape as GlassMapTool,
     annotate as GlassMapTool,
     describeSurroundings as GlassMapTool,
+    compareAreas as GlassMapTool,
+    measure as GlassMapTool,
   ];
 }

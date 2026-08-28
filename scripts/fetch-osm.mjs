@@ -242,6 +242,12 @@ function simplifyGeometry(geometry, tolerance = 0.00012) {
   return simplified.geometry;
 }
 
+// Districts are only 12 features, so they can afford much finer detail than
+// parks' 0.00012 (which exists mainly to keep parks.geojson under budget).
+// See public/data/README.md ("Districts" > "Simplify tolerance (T-24)") for
+// what this tolerance change does and does not fix.
+const DISTRICT_SIMPLIFY_TOLERANCE = 0.00003;
+
 function roundGeometry(geometry) {
   const depthByType = { Point: 0, LineString: 1, Polygon: 2, MultiPolygon: 3 };
   const depth = depthByType[geometry.type];
@@ -320,7 +326,7 @@ out geom;`;
       console.warn(`  district relation ${rel.id} (${rel.tags?.name}) clipped to nothing, skipping`);
       continue;
     }
-    geometry = sanitizeGeometry(roundGeometry(simplifyGeometry(clipped)));
+    geometry = sanitizeGeometry(roundGeometry(simplifyGeometry(clipped, DISTRICT_SIMPLIFY_TOLERANCE)));
     if (!geometry) {
       console.warn(`  district relation ${rel.id} (${rel.tags?.name}) simplified to nothing, skipping`);
       continue;
@@ -456,26 +462,44 @@ function validate(filename, features) {
 }
 
 async function main() {
+  // --only=districts (comma-separated: mrt,districts,parks,schools,supermarkets)
+  // regenerates a subset of files without touching the others - used to fix
+  // a single dataset (e.g. district boundary tolerance) without re-fetching
+  // and possibly perturbing everything else.
+  const onlyArg = process.argv.find((a) => a.startsWith("--only="));
+  const wanted = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",")) : null;
+  const wants = (name) => !wanted || wanted.has(name);
+
   const results = {};
 
-  console.log("Fetching MRT stations...");
-  results.mrt = await fetchMrtStations();
-  await sleep(1000);
+  if (wants("mrt")) {
+    console.log("Fetching MRT stations...");
+    results.mrt = await fetchMrtStations();
+    await sleep(1000);
+  }
 
-  console.log("Fetching districts...");
-  results.districts = await fetchDistricts();
-  await sleep(1000);
+  if (wants("districts")) {
+    console.log("Fetching districts...");
+    results.districts = await fetchDistricts();
+    await sleep(1000);
+  }
 
-  console.log("Fetching parks...");
-  results.parks = await fetchParks();
-  await sleep(1000);
+  if (wants("parks")) {
+    console.log("Fetching parks...");
+    results.parks = await fetchParks();
+    await sleep(1000);
+  }
 
-  console.log("Fetching schools...");
-  results.schools = await fetchPoiCenters("amenity", "school", "school", ["operator"], isElementarySchool);
-  await sleep(1000);
+  if (wants("schools")) {
+    console.log("Fetching schools...");
+    results.schools = await fetchPoiCenters("amenity", "school", "school", ["operator"], isElementarySchool);
+    await sleep(1000);
+  }
 
-  console.log("Fetching supermarkets...");
-  results.supermarkets = await fetchPoiCenters("shop", "supermarket", "supermarket", ["operator"]);
+  if (wants("supermarkets")) {
+    console.log("Fetching supermarkets...");
+    results.supermarkets = await fetchPoiCenters("shop", "supermarket", "supermarket", ["operator"]);
+  }
 
   const files = [
     ["mrt-stations.geojson", results.mrt],
@@ -483,7 +507,7 @@ async function main() {
     ["parks.geojson", results.parks],
     ["schools.geojson", results.schools],
     ["supermarkets.geojson", results.supermarkets],
-  ];
+  ].filter(([, features]) => features !== undefined);
 
   console.log("\n--- validation ---");
   const allIds = new Set();

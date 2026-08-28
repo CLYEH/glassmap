@@ -72,29 +72,24 @@ function applySelection(map: MapLibreMap, selection: readonly string[]) {
   }
 }
 
-/** Move the camera to a store view, unless the map is already there. */
-function applyView(map: MapLibreMap, view: MapView) {
-  const center = map.getCenter();
-  const settled =
-    Math.abs(center.lng - view.center[0]) < 1e-6 &&
-    Math.abs(center.lat - view.center[1]) < 1e-6 &&
-    Math.abs(map.getZoom() - view.zoom) < 1e-4 &&
-    Math.abs(map.getBearing() - view.bearing) < 1e-4 &&
-    Math.abs(map.getPitch() - view.pitch) < 1e-4;
-  if (settled) return;
-  map.flyTo({
-    center: view.center,
-    zoom: view.zoom,
-    bearing: view.bearing,
-    pitch: view.pitch,
-    essential: true,
-  });
-}
+const sameView = (a: MapView, b: MapView) =>
+  Math.abs(a.center[0] - b.center[0]) < 1e-6 &&
+  Math.abs(a.center[1] - b.center[1]) < 1e-6 &&
+  Math.abs(a.zoom - b.zoom) < 1e-4 &&
+  Math.abs(a.bearing - b.bearing) < 1e-4 &&
+  Math.abs(a.pitch - b.pitch) < 1e-4;
 
 /**
  * The map is a mirror of the store: tools write `view`/`selection` and the map
- * follows; user gestures write back through `moveend`. `fromMap` marks the
- * write-backs so they are never re-applied to the camera.
+ * follows; user gestures write back through `moveend`.
+ *
+ * Two guards keep the two directions from chasing each other:
+ *  - `fromMap` - set while the map writes the store, so the store subscriber
+ *    does not re-command the camera with the position it just reported.
+ *  - `toMap` - set while we command the camera. `flyTo` begins with `stop()`,
+ *    which fires `moveend` SYNCHRONOUSLY when an animation is already running;
+ *    without this guard that re-entrant `moveend` writes the mid-flight camera
+ *    back over the request a tool is about to read.
  */
 export default function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,30 +135,63 @@ export default function MapCanvas() {
 
     let ready = false;
     let fromMap = false;
+    let toMap = false;
+    // The camera target we last commanded or observed. `applyView` compares a
+    // request against THIS, never the live (possibly mid-flight) camera, so a
+    // request is not dropped just because it momentarily matches an unrelated
+    // interpolated position.
+    let lastView: MapView = initial;
 
     const pushViewFromMap = () => {
+      // A `moveend` our own flyTo caused, not a user gesture - ignore it.
+      if (toMap) return;
       const center = map.getCenter();
-      const bounds = map.getBounds();
+      const b = map.getBounds();
+      const view: MapView = {
+        center: [center.lng, center.lat],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      };
+      lastView = view;
       fromMap = true;
       try {
-        store.getState().setView({
-          center: [center.lng, center.lat],
-          zoom: map.getZoom(),
-          bearing: map.getBearing(),
-          pitch: map.getPitch(),
-        });
-        store
-          .getState()
-          .setBounds([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]);
+        store.getState().setView(view);
+        store.getState().setBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
       } finally {
         fromMap = false;
       }
     };
 
-    // Tile and glyph failures are reported here; keep them out of the console
-    // in production but never let them reach the user as a dialog.
+    const applyView = (view: MapView) => {
+      if (sameView(view, lastView)) return;
+      lastView = view;
+      toMap = true;
+      try {
+        map.flyTo({
+          center: view.center,
+          zoom: view.zoom,
+          bearing: view.bearing,
+          pitch: view.pitch,
+          essential: true,
+        });
+      } finally {
+        toMap = false;
+      }
+    };
+
+    // The transform is valid as soon as the constructor returns, so bounds is
+    // available immediately - a tool must not see `bounds: null` for the ~1.4 s
+    // until tiles arrive, and it must stay set even if the basemap never loads.
+    pushViewFromMap();
+
+    // Tile and glyph failures are reported here. A failure BEFORE the map is
+    // ready means the basemap never came up: report it as a distinct "error"
+    // so a dead basemap is not indistinguishable from a slow one. A later
+    // successful `load` overwrites this back to "ready".
     map.on("error", (event) => {
       if (isDev) console.warn("[GlassMap] map error:", event.error?.message ?? event);
+      if (!ready) setStatus("error");
     });
 
     map.on("load", () => {
@@ -200,7 +228,7 @@ export default function MapCanvas() {
     map.on("moveend", pushViewFromMap);
 
     const unsubscribe = store.subscribe((state, previous) => {
-      if (state.view !== previous.view && !fromMap) applyView(map, state.view);
+      if (state.view !== previous.view && !fromMap) applyView(state.view);
       if (!ready) return;
       if (state.features !== previous.features) applyFeatures(map, state.features);
       if (state.selection !== previous.selection) applySelection(map, state.selection);

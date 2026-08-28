@@ -1,8 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import { DATASETS, type GlassMapFeature } from "@/lib/data/schema";
+import { DATASETS, isFeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import { useMapStore } from "@/lib/store/map-store";
+
+/**
+ * Keep only features the map can actually draw and the tools can key on, so the
+ * `feature-count` an agent reads matches what is on screen: a string id, a known
+ * category and a geometry. Anything else is dropped rather than counted.
+ */
+function isRenderableFeature(x: unknown): x is GlassMapFeature {
+  if (typeof x !== "object" || x === null) return false;
+  const f = x as { geometry?: unknown; properties?: { id?: unknown; category?: unknown } };
+  return (
+    !!f.geometry &&
+    typeof f.properties?.id === "string" &&
+    isFeatureCategory(f.properties?.category)
+  );
+}
 
 /**
  * A dataset that has not been produced yet simply contributes nothing:
@@ -15,7 +30,7 @@ async function loadCollection(file: string): Promise<GlassMapFeature[]> {
     if (!response.ok) return [];
     const json: unknown = await response.json();
     const features = (json as { features?: unknown }).features;
-    return Array.isArray(features) ? (features as GlassMapFeature[]) : [];
+    return Array.isArray(features) ? features.filter(isRenderableFeature) : [];
   } catch {
     return [];
   }

@@ -44,7 +44,7 @@ Parallel work is safe only because each area has one owner. Edit outside your ar
 | Data | `data-engineer` | `public/data/**`, `scripts/**`, `src/lib/data/**` |
 | Tests | `qa` | `e2e/**`, `playwright.config.ts`, `vitest.config.mts`, new cross-area `*.test.ts` (a unit test co-locates with its subject and belongs to that area's owner) |
 | Docs | `docs-writer` | `README.md`, `docs/**` |
-| Everything else | orchestrator | `package.json`, lockfile, `.github/**`, `src/lib/webmcp/**`, `CLAUDE.md`, this file |
+| Everything else | orchestrator | `package.json`, lockfile, `.github/**`, `src/lib/webmcp/**`, `scripts/ship-pr.sh`, `CLAUDE.md`, this file |
 
 Two hard rules that follow from this:
 

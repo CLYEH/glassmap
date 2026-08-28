@@ -14,7 +14,7 @@
  * changing one will change several assertions on purpose.
  */
 import type { GlassMapFeature } from "@/lib/data/schema";
-import type { Bounds, MapView } from "@/lib/store/map-store";
+import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 
 type Props = GlassMapFeature["properties"];
 
@@ -152,3 +152,60 @@ export const BROKEN_FEATURES: GlassMapFeature[] = [
     geometry: { type: "Polygon", coordinates: [] },
   },
 ];
+
+/**
+ * A shape the *human* drew by hand. The tool layer must treat it exactly like
+ * one of its own: this is the collaboration moment the demo is built on —
+ * "I drew a circle, what supermarkets are in it?".
+ * Covers DAAN_STATION and PX_MART_DAAN, and nothing else.
+ */
+export const USER_DRAWN_AREA: Drawing = {
+  id: "drawing:1",
+  source: "user",
+  kind: "polygon",
+  label: "my walk",
+  geometry: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [121.54, 25.031],
+        [121.546, 25.031],
+        [121.546, 25.036],
+        [121.54, 25.036],
+        [121.54, 25.031],
+      ],
+    ],
+  },
+};
+
+/** A hand-drawn route. It has no inside, so it can never answer "within". */
+export const USER_DRAWN_LINE: Drawing = {
+  id: "drawing:2",
+  source: "user",
+  kind: "line",
+  geometry: {
+    type: "LineString",
+    coordinates: [
+      [121.53, 25.03],
+      [121.54, 25.03],
+    ],
+  },
+};
+
+/**
+ * Two districts whose simplified outlines do not meet: there is a ~200 m gap
+ * between lng 121.510 and 121.512, the same kind of seam the real
+ * independently simplified district polygons have.
+ */
+export const WEST_DISTRICT = box(
+  { id: "district:west", name: "西區", nameEn: "West District", category: "district", source: "sample" },
+  [121.5, 25.0, 121.51, 25.01],
+);
+
+export const EAST_DISTRICT = box(
+  { id: "district:east", name: "東區", nameEn: "East District", category: "district", source: "sample" },
+  [121.512, 25.0, 121.52, 25.01],
+);
+
+/** In the seam: inside neither polygon, ~81 m from West and ~121 m from East. */
+export const SEAM_POINT: LngLat = [121.5108, 25.005];

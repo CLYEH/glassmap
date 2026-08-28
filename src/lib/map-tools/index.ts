@@ -1,7 +1,8 @@
+import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
-import { describeState, SELECTION_ID_LIMIT } from "./state";
+import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
 import {
   boundsIntersect,
   describeFeature,
@@ -10,6 +11,32 @@ import {
   type FeatureOutput,
 } from "./output";
 import { resolvePlaceOne } from "./gazetteer";
+import {
+  circleGeometry,
+  DEFAULT_CIRCLE_RADIUS_M,
+  isAreaGeometry,
+  isShapeKind,
+  MAX_ICON_CHARS,
+  MAX_LABEL_CHARS,
+  MAX_NOTE_CHARS,
+  MAX_RADIUS_M,
+  MAX_SHAPE_POINTS,
+  measureGeometry,
+  SHAPE_KINDS,
+  toRing,
+  validateOptionalText,
+  validatePositions,
+  validateRadiusM,
+  validateRequiredText,
+  type ShapeKind,
+} from "./shapes";
+import {
+  DEFAULT_SURROUNDINGS_RADIUS_M,
+  findDistrict,
+  groupByDirection,
+  NEIGHBOUR_CATEGORIES,
+  SURROUNDINGS_ITEM_LIMIT,
+} from "./surroundings";
 import {
   DEFAULT_LIMIT,
   DEFAULT_RADIUS_M,
@@ -43,6 +70,25 @@ export interface FindFeaturesInput {
   radius_m?: unknown;
   limit?: unknown;
   within?: unknown;
+}
+
+export interface DrawShapeInput {
+  type?: unknown;
+  center?: unknown;
+  radius_m?: unknown;
+  coordinates?: unknown;
+  label?: unknown;
+}
+
+export interface AnnotateInput {
+  at?: unknown;
+  note?: unknown;
+  icon?: unknown;
+}
+
+export interface DescribeSurroundingsInput {
+  from?: unknown;
+  radius_m?: unknown;
 }
 
 export interface ListFeaturesInViewInput {
@@ -104,9 +150,12 @@ const limitProperty = {
   description: `Maximum number of features to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}). The "total" field reports how many matched in all.`,
 };
 
-const nearProperty = {
-  description:
-    'Origin for distances and for the radius filter: a feature id returned by an earlier call (e.g. "osm:node:123"), a place name to look up in the loaded data (e.g. "Daan Station"), or an explicit coordinate. Omit to measure from the centre of the current view.',
+/**
+ * The three ways an agent can say "here": an id it already has, a name a human
+ * said, or a coordinate. Every tool that takes a location takes all three.
+ */
+const pointProperty = (description: string) => ({
+  description,
   anyOf: [
     { type: "string", description: "A feature id, or the name of a station, park or district." },
     {
@@ -120,12 +169,23 @@ const nearProperty = {
       description: "Explicit coordinate.",
     },
   ],
+});
+
+const nearProperty = pointProperty(
+  'Origin for distances and for the radius filter: a feature id returned by an earlier call (e.g. "osm:node:123"), a place name to look up in the loaded data (e.g. "Daan Station"), or an explicit coordinate. Omit to measure from the centre of the current view.',
+);
+
+const withinProperty = {
+  type: "string",
+  description:
+    '"drawing:<n>" - restrict results to features inside that drawing, as returned by draw_shape or listed in map state under drawings (the ten most recent; drawings.count is the true total). A circle or polygon works; a line has no inside. Combines with the other filters instead of replacing them.',
 };
 
 const radiusProperty = {
   type: "number",
   exclusiveMinimum: 0,
-  description: `Keep only features within this many metres of "near" (default ${DEFAULT_RADIUS_M} when "near" is given, no radius filter otherwise). Measured to a feature point, or to the centroid of an area.`,
+  maximum: MAX_RADIUS_M,
+  description: `Keep only features within this many metres of "near" (default ${DEFAULT_RADIUS_M} when "near" is given, no radius filter otherwise, at most ${MAX_RADIUS_M}). A larger radius is refused rather than quietly narrowed. Measured to a feature point, or to the centroid of an area.`,
 };
 
 // ------------------------------------------------------------------ internals
@@ -135,10 +195,61 @@ interface ResolvedQuery {
   radius_m?: number;
   categories?: FeatureCategory[];
   query?: string;
+  within?: Polygon | MultiPolygon;
   limit: number;
 }
 
-type QueryError = { error: string; candidates?: unknown };
+type QueryError = {
+  error: string;
+  candidates?: unknown;
+  known_ids?: string[];
+  known_count?: number;
+};
+
+/**
+ * One location out of the three forms every location parameter accepts.
+ * Rounded to 5 decimals (~1 m) so what the store keeps is what the agent is
+ * told, and two calls that name the same place cannot differ in float dust.
+ */
+function resolvePoint(
+  store: MapToolStore,
+  value: unknown,
+  field: string,
+): { point: LngLat } | QueryError {
+  const near = resolveNear(value, store.getFeatures(), store.getView().center, field);
+  if (near.kind === "invalid") return { error: near.error };
+  if (near.kind === "none") return { error: "unknown place" };
+  if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
+  return { point: [round5(near.center[0]), round5(near.center[1])] };
+}
+
+/**
+ * A drawing id turned into the area to test against. Guessing here would be
+ * the worst failure in the tool layer: "the shops inside the circle I drew"
+ * must never quietly mean "every shop in Taipei", so an id we cannot resolve
+ * comes back with the ids that do exist instead of an empty filter.
+ */
+function resolveWithin(
+  store: MapToolStore,
+  value: unknown,
+): { area: Polygon | MultiPolygon } | QueryError {
+  const drawings = store.getDrawings();
+  // Most recent, like map state: past the cap, the oldest ids are the least
+  // likely to be the one the caller meant.
+  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
+  const known_count = drawings.length;
+  if (typeof value !== "string" || !value.trim()) {
+    return { error: 'within must be a drawing id like "drawing:1"', known_ids, known_count };
+  }
+  const drawing = drawings.find((d) => d.id === value.trim());
+  if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
+  if (!isAreaGeometry(drawing.geometry)) {
+    return {
+      error: `within requires an area drawing (a circle or a polygon); ${drawing.id} is a ${drawing.kind}`,
+    };
+  }
+  return { area: drawing.geometry };
+}
 
 /**
  * Validation shared by find_features and select_features, so that "the parks I
@@ -162,6 +273,13 @@ function resolveQueryInput(
     query = input.query.trim() || undefined;
   }
 
+  let within: Polygon | MultiPolygon | undefined;
+  if (input.within !== undefined) {
+    const area = resolveWithin(store, input.within);
+    if ("error" in area) return area;
+    within = area.area;
+  }
+
   const viewCenter = store.getView().center;
   let origin = viewCenter;
   let radius_m = rad.radius_m;
@@ -174,7 +292,7 @@ function resolveQueryInput(
     radius_m = radius_m ?? DEFAULT_RADIUS_M;
   }
 
-  return { origin, radius_m, categories: cats.categories, query, limit: lim.limit };
+  return { origin, radius_m, categories: cats.categories, query, within, limit: lim.limit };
 }
 
 interface FeatureListOutput {
@@ -198,9 +316,10 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, and the selection. selection.count is the exact number of selected features; selection.ids lists at most the first 20 of them. Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). Use this instead of a screenshot to know what the map shows.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true },
+    // State echoes labels and notes a human may have typed on the page.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: () => describeState(store),
   };
 
@@ -348,7 +467,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category and distance from a place, a feature or a coordinate. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
     inputSchema: {
       type: "object",
       properties: {
@@ -360,6 +479,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         categories: categoriesProperty,
         near: nearProperty,
         radius_m: radiusProperty,
+        within: withinProperty,
         limit: limitProperty,
       },
       additionalProperties: false,
@@ -367,7 +487,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: (input) => {
       const inp = input ?? {};
-      if (inp.within !== undefined) return { error: "within is not available yet" };
       const resolved = resolveQueryInput(store, inp);
       if ("error" in resolved) return resolved;
       return listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit);
@@ -377,7 +496,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
   const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
     name: "select_features",
     description:
-      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids, or the same query/near/radius_m/categories filter as find_features — the filter selects exactly the features find_features would return for it. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 features while state.selection.count is the true total.",
+      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at `limit`: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -394,6 +513,7 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         },
         near: nearProperty,
         radius_m: radiusProperty,
+        within: withinProperty,
         categories: categoriesProperty,
         replace: {
           type: "boolean",
@@ -407,14 +527,6 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     execute: (input) => {
       const inp = input ?? {};
       const state = () => describeState(store);
-      if (inp.within !== undefined) {
-        // Silently ignoring it would select every feature the rest of the
-        // filter matches — the opposite of what "within this shape" asked for.
-        return {
-          error: "within is not available yet; call find_features first and pass ids",
-          state: state(),
-        };
-      }
       if (inp.replace !== undefined && typeof inp.replace !== "boolean") {
         return { error: "replace must be a boolean", state: state() };
       }
@@ -425,10 +537,11 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
         inp.query !== undefined ||
         inp.near !== undefined ||
         inp.categories !== undefined ||
-        inp.radius_m !== undefined;
+        inp.radius_m !== undefined ||
+        inp.within !== undefined;
       if (!hasIds && !hasFilter) {
         return {
-          error: "provide ids, or query/near/categories/radius_m to select by filter",
+          error: "provide ids, or query/near/categories/radius_m/within to select by filter",
           state: state(),
         };
       }
@@ -479,11 +592,240 @@ export function createMapTools(store: MapToolStore): GlassMapTool[] {
     },
   };
 
+  const drawShape: GlassMapTool<DrawShapeInput> = {
+    name: "draw_shape",
+    description:
+      "Draw a circle, a polygon or a line on the map, so the human can see the area you are talking about. A circle takes a centre (a coordinate, a feature id or a place name) and a radius in metres; a polygon and a line take a list of [lng, lat] points. Returns the drawing id plus its area in square metres (circle, polygon) or its length in metres (line), and the new map state. Pass the id to find_features({within}) or select_features({within}) to ask what is inside it. Shapes the human drew by hand appear in the same list with source \"user\" and can be queried the same way.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: {
+          type: "string",
+          enum: [...SHAPE_KINDS],
+          description:
+            "circle: centre plus radius_m. polygon: a closed area from coordinates. line: a route or a measurement from coordinates.",
+        },
+        center: pointProperty(
+          'Circle only: where the circle is centred. A coordinate, a feature id from an earlier call, or a place name such as "Daan Station". If a name matches several places the map is left alone and the answer lists the candidates.',
+        ),
+        radius_m: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: MAX_RADIUS_M,
+          description: `Circle only: radius in metres (default ${DEFAULT_CIRCLE_RADIUS_M}, a comfortable walk; at most ${MAX_RADIUS_M}). A larger radius is refused rather than shrunk, so what you draw is always what you asked for.`,
+        },
+        coordinates: {
+          type: "array",
+          minItems: 2,
+          maxItems: MAX_SHAPE_POINTS,
+          items: {
+            type: "array",
+            minItems: 2,
+            maxItems: 2,
+            items: { type: "number" },
+            description: "One point as [lng, lat] in degrees.",
+          },
+          description: `Polygon or line only: the points, as [lng, lat] pairs. A polygon needs at least 3 distinct points and is closed for you if you do not repeat the first one; a line needs at least 2. At most ${MAX_SHAPE_POINTS} points.`,
+        },
+        label: {
+          type: "string",
+          maxLength: MAX_LABEL_CHARS,
+          description: `Short name shown on the map and in map state, e.g. "10-minute walk" (at most ${MAX_LABEL_CHARS} characters).`,
+        },
+      },
+      required: ["type"],
+      additionalProperties: false,
+    },
+    // The state it returns carries labels and notes typed by the human.
+    annotations: { untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+
+      if (!isShapeKind(inp.type)) {
+        return { error: `type must be one of ${SHAPE_KINDS.join(", ")}`, state: state() };
+      }
+      const kind: ShapeKind = inp.type;
+      const label = validateOptionalText(inp.label, "label", MAX_LABEL_CHARS);
+      if ("error" in label) return { error: label.error, state: state() };
+
+      let geometry: Geometry;
+      let center: LngLat | undefined;
+      let radius_m: number | undefined;
+
+      if (kind === "circle") {
+        if (inp.coordinates !== undefined) {
+          return { error: "a circle takes center and radius_m, not coordinates", state: state() };
+        }
+        if (inp.center === undefined) {
+          return {
+            error: "circle requires center: a coordinate, a feature id or a place name",
+            state: state(),
+          };
+        }
+        const resolved = resolvePoint(store, inp.center, "center");
+        if ("error" in resolved) return { ...resolved, state: state() };
+        const radius = validateRadiusM(inp.radius_m, DEFAULT_CIRCLE_RADIUS_M);
+        if ("error" in radius) return { error: radius.error, state: state() };
+        center = resolved.point;
+        radius_m = radius.radius_m;
+        geometry = circleGeometry(center, radius_m);
+      } else {
+        if (inp.center !== undefined || inp.radius_m !== undefined) {
+          return { error: `a ${kind} takes coordinates, not center/radius_m`, state: state() };
+        }
+        const points = validatePositions(inp.coordinates, kind === "polygon" ? 3 : 2);
+        if ("error" in points) return { error: points.error, state: state() };
+        if (kind === "polygon") {
+          const ring = toRing(points.points);
+          if ("error" in ring) return { error: ring.error, state: state() };
+          geometry = { type: "Polygon", coordinates: [ring.ring] };
+        } else {
+          geometry = { type: "LineString", coordinates: points.points };
+        }
+      }
+
+      // A shape with no extent is invisible to the human and still matches
+      // `within`, so "what is in the area I drew" would answer about an area
+      // nobody can see. Refuse it where it is made.
+      const measure = measureGeometry(geometry);
+      if (kind !== "line" && !measure.area_m2) {
+        return {
+          error:
+            kind === "circle"
+              ? "radius_m is too small: the circle encloses no area"
+              : "the points are collinear or the ring is self-intersecting; it encloses no area",
+          state: state(),
+        };
+      }
+
+      const drawing = store.addDrawing({
+        source: "agent",
+        kind,
+        ...(label.text ? { label: label.text } : {}),
+        geometry,
+        ...(center ? { center } : {}),
+        ...(radius_m !== undefined ? { radius_m } : {}),
+      });
+
+      return { drawing_id: drawing.id, ...measure, state: describeState(store) };
+    },
+  };
+
+  const annotate: GlassMapTool<AnnotateInput> = {
+    name: "annotate",
+    description:
+      "Pin a short note to a place on the map, so the human sees what you found where you found it. The location can be a coordinate, a feature id from an earlier call, or a place name. Returns the annotation id and the new map state; map state lists notes with their first 80 characters and says whether the agent or the human wrote each one.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        at: pointProperty(
+          'Where to pin the note: a coordinate, a feature id such as "osm:node:123", or a place name such as "Daan Station". If a name matches several places nothing is pinned and the answer lists the candidates.',
+        ),
+        note: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_NOTE_CHARS,
+          description: `The note itself, at most ${MAX_NOTE_CHARS} characters. One or two sentences a human can read on the map, not a paragraph.`,
+        },
+        icon: {
+          type: "string",
+          maxLength: MAX_ICON_CHARS,
+          description: `Optional short marker label or emoji, e.g. "star" (at most ${MAX_ICON_CHARS} characters).`,
+        },
+      },
+      required: ["at", "note"],
+      additionalProperties: false,
+    },
+    // Echoes the note back, and notes are user-entered text.
+    annotations: { untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+
+      const note = validateRequiredText(inp.note, "note", MAX_NOTE_CHARS);
+      if ("error" in note) return { error: note.error, state: state() };
+      const icon = validateOptionalText(inp.icon, "icon", MAX_ICON_CHARS);
+      if ("error" in icon) return { error: icon.error, state: state() };
+      if (inp.at === undefined) {
+        return {
+          error: "at is required: a coordinate, a feature id or a place name",
+          state: state(),
+        };
+      }
+      const at = resolvePoint(store, inp.at, "at");
+      if ("error" in at) return { ...at, state: state() };
+
+      const annotation = store.addAnnotation({
+        source: "agent",
+        at: at.point,
+        note: note.text,
+        ...(icon.text ? { icon: icon.text } : {}),
+      });
+      return { annotation_id: annotation.id, state: describeState(store) };
+    },
+  };
+
+  const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
+    name: "describe_surroundings",
+    description:
+      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. total is how many features are inside radius_m, returned is how many are described (at most 30, the nearest ones): when total is larger, narrow radius_m or use find_features with a category filter - widening the radius will not reveal the ones that were left out.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: pointProperty(
+          "Where to look from: a coordinate, a feature id from an earlier call, or a place name. Omit to describe the surroundings of the centre of the current view.",
+        ),
+        radius_m: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: MAX_RADIUS_M,
+          description: `How far to look, in metres (default ${DEFAULT_SURROUNDINGS_RADIUS_M}, roughly a five-minute walk; at most ${MAX_RADIUS_M}).`,
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const radius = validateRadiusM(inp.radius_m, DEFAULT_SURROUNDINGS_RADIUS_M);
+      if ("error" in radius) return { error: radius.error };
+
+      let origin = store.getView().center;
+      if (inp.from !== undefined) {
+        const resolved = resolvePoint(store, inp.from, "from");
+        if ("error" in resolved) return resolved;
+        origin = resolved.point;
+      }
+
+      const features = store.getFeatures();
+      const near = queryFeatures(features, {
+        origin,
+        radius_m: radius.radius_m,
+        categories: NEIGHBOUR_CATEGORIES,
+      });
+      const groups = groupByDirection(near.slice(0, SURROUNDINGS_ITEM_LIMIT), origin);
+
+      return {
+        origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
+        district: findDistrict(features, origin),
+        // Truncating in silence would teach the agent that a wider radius adds
+        // nothing, and it would deny matches it was never shown.
+        total: near.length,
+        returned: groups.reduce((n, g) => n + g.items.length, 0),
+        groups,
+      };
+    },
+  };
+
   return [
     getMapState,
     setMapView as GlassMapTool,
     listFeaturesInView as GlassMapTool,
     findFeatures as GlassMapTool,
     selectFeatures as GlassMapTool,
+    drawShape as GlassMapTool,
+    annotate as GlassMapTool,
+    describeSurroundings as GlassMapTool,
   ];
 }

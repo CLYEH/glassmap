@@ -11,6 +11,7 @@ This file is the working protocol for everyone who commits to this repo — huma
 | `feat/<scope>-<slug>` | One task, one branch, short-lived. Cut from `develop`. | Vercel preview (per branch) |
 | `fix/<scope>-<slug>` | Bug fix. Cut from `develop`. | — |
 | `hotfix/<slug>` | Urgent production fix. Cut from `main`, merged to `main` **and** `develop`. | — |
+| `test/<scope>-<slug>` | Test-only work (e2e suites, test infrastructure). Cut from `develop`. | — |
 | `docs/<slug>` | Documentation only. | — |
 
 `<scope>` is one of `tools`, `ui`, `data`, `qa`, `docs`, `harness`. Tasks live in `docs/TASKS.md` (orchestrator-owned); put the task id in the slug: `feat/tools-t11-find-features`.
@@ -99,7 +100,8 @@ A task is done only when **all** of these hold. Anything missing must be stated 
 - Relevant e2e spec green.
 - No `alert` / `confirm` / `prompt`; no external API calls or keys; nothing from the banned list (Shopify, Google Maps, geocoders, QR, GPS).
 - Docs updated if the change is visible to judges or users.
-- Everything in the repo is English.
+- Everything in the repo is English. The only permitted CJK is inside string literals that are genuine data — OSM tag values in queries, place-name test inputs. Comments, prose and commit messages are always English.
+- A PR whose suite contains `test.fail()`-marked known-defect tests must say so explicitly in "How verified" — green CI must never hide a known defect.
 
 ## Ports
 

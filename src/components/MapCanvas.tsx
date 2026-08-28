@@ -12,6 +12,7 @@ import {
   paintOf,
   sourceId,
 } from "./map-style";
+import { approximateBounds } from "./viewport-bounds";
 
 declare global {
   interface Window {
@@ -104,14 +105,33 @@ export default function MapCanvas() {
       if (statusRef.current) statusRef.current.textContent = value;
     };
 
+    const store = useMapStore;
+
+    /**
+     * No map, so nothing will ever report a viewport. Compute one instead:
+     * without it `bounds` stays null forever and every viewport tool answers
+     * "map not ready" on a page whose store, overlay and tools all work. The
+     * subscription keeps it right after a tool moves the camera.
+     */
+    const startBoundsFallback = () => {
+      const pushBounds = () => {
+        const width = container.clientWidth || window.innerWidth;
+        const height = container.clientHeight || window.innerHeight;
+        store.getState().setBounds(approximateBounds(store.getState().view, width, height));
+      };
+      pushBounds();
+      return store.subscribe((state, previous) => {
+        if (state.view !== previous.view) pushBounds();
+      });
+    };
+
     if (!hasWebGL2()) {
       // Headless CI or a blocked GPU: no map, but the store, the overlay and
       // every tool keep working.
       setStatus("unavailable");
-      return;
+      return startBoundsFallback();
     }
 
-    const store = useMapStore;
     const initial = store.getState().view;
     let map: MapLibreMap;
     try {
@@ -128,7 +148,7 @@ export default function MapCanvas() {
       // No WebGL (headless CI, blocked GPU). Tools and the overlay keep working.
       setStatus("unavailable");
       if (isDev) console.warn("[GlassMap] MapLibre could not start:", error);
-      return;
+      return startBoundsFallback();
     }
 
     if (isDev) window.__glassmapMap = map;

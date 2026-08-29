@@ -31,9 +31,11 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
+  SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
   paintOf,
+  selectionAnchorsToGeoJson,
   sourceId,
 } from "./map-style";
 import { approximateBounds } from "./viewport-bounds";
@@ -84,6 +86,19 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
   }
 }
 
+/**
+ * The lane the inspector covers, in CSS pixels, read from the same custom
+ * property the stylesheet lays the inspector out with — so the map's padding
+ * and the chrome can never disagree about where the visible corridor is. Zero
+ * below 921px, where the inspector is a bottom sheet and the map container is
+ * shortened instead of overlaid.
+ */
+function inspectorLane(): number {
+  if (window.matchMedia("(max-width: 920px)").matches) return 0;
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
+  return Number.parseFloat(value) || 0;
+}
+
 type PaintPropertyName = Parameters<MapLibreMap["setPaintProperty"]>[1];
 type PaintPropertyValue = Parameters<MapLibreMap["setPaintProperty"]>[2];
 
@@ -95,6 +110,16 @@ function applySelection(map: MapLibreMap, selection: readonly string[]) {
       map.setPaintProperty(layer.id, prop as PaintPropertyName, value as PaintPropertyValue);
     }
   }
+}
+
+/** Re-place the selection halo rings; see `selectionAnchorsToGeoJson`. */
+function applySelectionHalo(
+  map: MapLibreMap,
+  features: readonly GlassMapFeature[],
+  selection: readonly string[],
+) {
+  const source = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
+  source?.setData(selectionAnchorsToGeoJson(features, selection));
 }
 
 /** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
@@ -221,7 +246,10 @@ export default function MapCanvas() {
         zoom: initial.zoom,
         bearing: initial.bearing,
         pitch: initial.pitch,
-        attributionControl: { compact: true },
+        // The licence attribution is rendered by <Attribution /> in the bottom
+        // bar instead: the built-in control sits in the map's own bottom-right
+        // corner, which the inspector covers on every desktop width.
+        attributionControl: false,
       });
     } catch (error) {
       // No WebGL (headless CI, blocked GPU). Tools and the overlay keep working.
@@ -300,9 +328,11 @@ export default function MapCanvas() {
       for (const category of FEATURE_CATEGORIES) {
         map.addSource(sourceId(category), { type: "geojson", data: EMPTY });
       }
+      map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
       const { features, selection, drawings } = store.getState();
       for (const layer of buildLayerSpecs(selection)) map.addLayer(layer);
       applyFeatures(map, features);
+      applySelectionHalo(map, features, selection);
 
       // Drawings sit on top of the data layers: a shape is always about the
       // features under it.
@@ -341,6 +371,16 @@ export default function MapCanvas() {
     });
 
     map.on("moveend", pushViewFromMap);
+
+    // The inspector floats over the map's east edge, so without padding the
+    // camera centre a tool reads back would sit behind it. `setPadding` keeps
+    // the centre coordinate and moves where it lands on screen, into the
+    // corridor the human can actually see.
+    const applyPadding = () => {
+      map.setPadding({ top: 0, bottom: 0, left: 0, right: inspectorLane() });
+    };
+    applyPadding();
+    window.addEventListener("resize", applyPadding);
 
     // --- Hand drawing -----------------------------------------------------
     // Registered outside `load` so drawing works even if the basemap never
@@ -381,6 +421,9 @@ export default function MapCanvas() {
       if (!ready) return;
       if (state.features !== previous.features) applyFeatures(map, state.features);
       if (state.selection !== previous.selection) applySelection(map, state.selection);
+      if (state.selection !== previous.selection || state.features !== previous.features) {
+        applySelectionHalo(map, state.features, state.selection);
+      }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
 
@@ -393,6 +436,7 @@ export default function MapCanvas() {
     applyDrawCursor(draw.getState().mode);
 
     return () => {
+      window.removeEventListener("resize", applyPadding);
       unsubscribe();
       unsubscribeDraw();
       for (const marker of markers.values()) marker.remove();
@@ -416,11 +460,10 @@ export default function MapCanvas() {
       <div className="absolute inset-0">
         <div ref={containerRef} data-testid="map" className="h-full w-full" />
       </div>
-      <span
-        ref={statusRef}
-        data-testid="map-status"
-        className="absolute bottom-2 left-2 z-10 rounded bg-black/60 px-2 py-1 font-mono text-xs text-white"
-      >
+      {/* Off screen, not removed: the design has no place for a loading pill,
+          but "did the basemap come up" is exactly what a headless run needs to
+          read back. See `.gm-machine` in globals.css. */}
+      <span ref={statusRef} data-testid="map-status" className="gm-machine">
         loading
       </span>
     </>

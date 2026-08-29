@@ -57,31 +57,29 @@ export function AddNoteForm() {
       tooldescription="Pin a note to the current map centre"
       toolautosubmit=""
       onSubmit={onSubmit}
-      className="flex flex-col gap-1"
+      className="note-form"
     >
-      <label htmlFor="add-note-input" className="font-medium">
-        Pin a note at the map centre
-      </label>
-      <input
-        id="add-note-input"
-        name="note"
-        type="text"
-        required
-        maxLength={200}
-        autoComplete="off"
-        placeholder="e.g. quiet street, good light"
-        toolparamdescription="Text of the note to pin at the current map centre"
-        data-testid="add-note-input"
-        className="rounded border border-zinc-300 px-2 py-1 font-sans"
-      />
-      <button
-        type="submit"
-        data-testid="add-note-submit"
-        className="self-start rounded bg-zinc-800 px-2 py-1 font-sans font-medium text-white hover:bg-zinc-700"
-      >
-        Pin note
-      </button>
-      <p data-testid="add-note-status" className="text-zinc-600" aria-live="polite">
+      <label htmlFor="add-note-input">Pin a note at the map centre</label>
+      <div className="note-form-row">
+        <input
+          id="add-note-input"
+          name="note"
+          type="text"
+          required
+          maxLength={200}
+          autoComplete="off"
+          placeholder="e.g. quiet street, good light"
+          toolparamdescription="Text of the note to pin at the current map centre"
+          data-testid="add-note-input"
+        />
+        <button type="submit" data-testid="add-note-submit">
+          Pin note
+        </button>
+      </div>
+      <p className="note-hint">
+        This form is itself a WebMCP tool: <code>add_note</code>
+      </p>
+      <p data-testid="add-note-status" className="note-status" aria-live="polite">
         {status}
       </p>
     </form>

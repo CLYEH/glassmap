@@ -34,6 +34,9 @@
   --human: #f48fb1; /* text/icon tint of the canvas colour #c2255c */
   --human-deep: #c2255c;
   --live: #4ade80;
+  /* A call that failed is neither agent nor human: amber, not the rose that
+     means "a person did this". Also the share-warning chip's fill. */
+  --warn: #fab005;
   /* Exact CATEGORY_COLOR values from src/components/map-style.ts */
   --c-mrt: #d7263d;
   --c-park: #2f9e44;
@@ -405,8 +408,8 @@ button {
   box-shadow: 0 0 8px rgba(45, 212, 191, 0.5);
 }
 .call.failed .dot {
-  background: var(--human-deep);
-  border-color: var(--human);
+  background: var(--warn);
+  border-color: var(--warn);
 }
 .call-head {
   display: flex;
@@ -423,7 +426,7 @@ button {
   color: var(--agent);
 }
 .call.failed .tool {
-  color: var(--human);
+  color: var(--warn);
 }
 .call-fold {
   font-family: var(--font-mono);
@@ -687,7 +690,7 @@ button {
   font-size: 10.5px;
   line-height: 1.35;
   color: #2a1c00;
-  background: rgba(250, 176, 5, 0.94);
+  background: color-mix(in srgb, var(--warn) 94%, transparent);
   box-shadow: var(--shadow);
 }
 .attribution {

@@ -141,7 +141,8 @@ export function drawingsToGeoJson(drawings: readonly Drawing[]): FeatureCollecti
   };
 }
 
-function positionsOf(geometry: Geometry): Position[] {
+/** Every coordinate in a geometry, flattened. Shared with the selection halo. */
+export function positionsOf(geometry: Geometry): Position[] {
   switch (geometry.type) {
     case "Point":
       return [geometry.coordinates];

@@ -19,7 +19,10 @@ test.describe("WebMCP tool surface", () => {
 
   test("tools are registered on a modelContext surface", async ({ page }) => {
     const status = page.getByTestId("webmcp-status");
-    await expect(status).toContainText("11 tools");
+    // 12 = the 11 imperative registrations asserted below, plus the
+    // declarative `<form toolname="add_note">`, which a WebMCP browser picks
+    // up from the markup and which the badge counts out of the DOM.
+    await expect(status).toContainText("12 tools");
     await expect(status).not.toContainText("none");
 
     const names = await page.evaluate(async () =>

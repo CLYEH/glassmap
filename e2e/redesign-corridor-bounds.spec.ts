@@ -75,43 +75,21 @@ test.describe("visible-corridor bounds (T-54 / PR #36)", () => {
   });
 
   test("center stays at the bounds midpoint after a set_map_view flight settles", async ({ page }) => {
-    // KNOWN DEFECT, found while writing this test (T-54) -- reported, not
-    // fixed here (out of e2e/** ownership; belongs to map-ui-dev,
-    // src/components/MapCanvas.tsx).
-    //
-    // Repro: under this suite's default network isolation (fixtures.ts,
-    // T-13 -- the basemap style fetch always fails, map-status: "error"),
-    // calling set_map_view a second time (after the map's first camera is
-    // already established) starts a `flyTo` whose animation never
-    // completes: `movestart` fires once, `moveend` never does, and
-    // `map.getCenter()` stays frozen at the PRE-flight position indefinitely
-    // (measured: still frozen 3s later; probed with `E2E_LIVE_BASEMAP=1`,
-    // a real reachable basemap, in the same headless browser -- there
-    // `moveend` fires normally and the camera reaches its target, isolating
-    // the cause to "style never loaded", not headless rAF throttling).
-    //
-    // MapCanvas.tsx's `pushViewFromMap` (the only writer of `bounds`, called
-    // from the constructor once and from `map.on("moveend", ...)`
-    // thereafter) is therefore never called again, so `bounds` stays stuck
-    // at whatever it was before the failed flight -- forever, for the rest
-    // of the session. Meanwhile `center` in the SAME get_map_state answer
-    // keeps reporting the new position (`store.setView` writes it directly,
-    // independent of the live map). Expected: `bounds`'s midpoint converges
-    // on the new `center.lng` once the flight settles, per PR #36's
-    // corridor-bounds invariant. Actual: it never converges -- an agent
-    // calling set_map_view then get_map_state, on a page whose basemap
-    // failed to load, gets a `center` and a `bounds` describing two
-    // different places, permanently.
+    // Regression guard for the defect this test was written against and
+    // MapCanvas.tsx now fixes: under this suite's default network isolation
+    // (fixtures.ts, T-13 -- the basemap style fetch always fails,
+    // map-status: "error") a `flyTo` could never advance, because MapLibre
+    // only schedules render frames while a style is loaded, so `moveend`
+    // never fired, `pushViewFromMap` (the only writer of `bounds`) was never
+    // called again, and `bounds` froze at the pre-flight extent while
+    // `center` followed the store -- one get_map_state answer describing two
+    // places, permanently. MapCanvas.tsx now jumps instead of flying while
+    // the style is missing and publishes the corridor itself.
     //
     // This is not a network-isolation-only curiosity: "every tool still
     // working when the basemap style/tiles never load" is a documented
     // product guarantee (data-and-view.spec.ts), and any real user/agent
     // whose CDN request is briefly unreachable hits exactly this state.
-    test.fail(
-      true,
-      "MapCanvas.tsx: flyTo never fires moveend once the basemap failed to load, so bounds freezes and desyncs from center after any subsequent set_map_view -- see the comment above for the full repro",
-    );
-
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await waitForTools(page);

@@ -274,6 +274,22 @@ export default function MapCanvas() {
     const markers = new Map<string, Marker>();
 
     let ready = false;
+    /**
+     * True once the style JSON itself has arrived — NOT once the map is fully
+     * loaded. It gates animation in `applyView`, because MapLibre only ever
+     * schedules a render frame through `Map._update`, which begins with
+     * `if (!this.style?._loaded) return this;`. With no style nothing drives
+     * the render loop, so an eased camera never advances: `flyTo` queues its
+     * ease callback on a render-task queue no frame ever runs, `movestart`
+     * fires, `moveend` never does, and `map.getCenter()` stays at the
+     * pre-flight position for the rest of the session.
+     *
+     * Deliberately not `map.isStyleLoaded()` (that also waits for tiles and
+     * images, so a healthy map mid-tile-load would stop animating) and not
+     * the "error" status (that is also set when the style loaded but its
+     * tiles failed — a map whose render loop is perfectly alive).
+     */
+    let styleLoaded = false;
     let fromMap = false;
     let toMap = false;
     // The camera target we last commanded or observed. `applyView` compares a
@@ -281,6 +297,24 @@ export default function MapCanvas() {
     // request is not dropped just because it momentarily matches an unrelated
     // interpolated position.
     let lastView: MapView = initial;
+
+    /**
+     * Publish the extent of the corridor the camera is currently over. Not
+     * `map.getBounds()`: that spans the whole canvas, whose eastern
+     * 300-336 px are behind the inspector. See `visibleBounds`.
+     */
+    const pushBoundsFromMap = () => {
+      store
+        .getState()
+        .setBounds(
+          visibleBounds(
+            (point) => map.unproject(point),
+            container.clientWidth,
+            container.clientHeight,
+            inspectorLane(),
+          ),
+        );
+    };
 
     const pushViewFromMap = () => {
       // A `moveend` our own flyTo caused, not a user gesture - ignore it.
@@ -296,18 +330,7 @@ export default function MapCanvas() {
       fromMap = true;
       try {
         store.getState().setView(view);
-        // Not `map.getBounds()`: that spans the whole canvas, whose eastern
-        // 300-336 px are behind the inspector. See `visibleBounds`.
-        store
-          .getState()
-          .setBounds(
-            visibleBounds(
-              (point) => map.unproject(point),
-              container.clientWidth,
-              container.clientHeight,
-              inspectorLane(),
-            ),
-          );
+        pushBoundsFromMap();
       } finally {
         fromMap = false;
       }
@@ -316,18 +339,33 @@ export default function MapCanvas() {
     const applyView = (view: MapView) => {
       if (sameView(view, lastView)) return;
       lastView = view;
+      const camera = {
+        center: view.center,
+        zoom: view.zoom,
+        bearing: view.bearing,
+        pitch: view.pitch,
+      };
       toMap = true;
       try {
-        map.flyTo({
-          center: view.center,
-          zoom: view.zoom,
-          bearing: view.bearing,
-          pitch: view.pitch,
-          essential: true,
-        });
+        // Animate only when there is a render loop to animate in. Without a
+        // style (the basemap is unreachable - a state every tool is supposed
+        // to keep working in) the flight would stall on its first frame and
+        // never end, so the camera would sit at the old position while the
+        // store reports the new one, and `bounds` - only ever written from
+        // `moveend` - would freeze there with it. A jump has no animation to
+        // stall: the map really is where the store says it is.
+        if (styleLoaded) map.flyTo({ ...camera, essential: true });
+        else map.jumpTo(camera);
       } finally {
         toMap = false;
       }
+      // `jumpTo` fires its `moveend` synchronously, i.e. inside the `toMap`
+      // guard above, whose whole job is to ignore re-entrant camera events -
+      // so the corridor has to be published from here instead. The camera has
+      // already arrived, so this is the very rectangle that `moveend` would
+      // have reported. `view` is what the store already holds, so only
+      // `bounds` needs to catch up.
+      if (!styleLoaded) pushBoundsFromMap();
     };
 
     // The inspector floats over the map's east edge, so without padding the
@@ -354,6 +392,13 @@ export default function MapCanvas() {
     map.on("error", (event) => {
       if (isDev) console.warn("[GlassMap] map error:", event.error?.message ?? event);
       if (!ready) setStatus("error");
+    });
+
+    // Fired the moment the style JSON is parsed, long before the tiles that
+    // `load` waits for. From here on the render loop runs, so camera flights
+    // complete and report themselves - see `styleLoaded`.
+    map.on("style.load", () => {
+      styleLoaded = true;
     });
 
     map.on("load", () => {

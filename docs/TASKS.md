@@ -42,7 +42,7 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 | T-30 | `compare_areas` | tool-dev | done | PR #16 |
 | T-31 | `get_share_link` (state in URL hash) | tool-dev / map-ui-dev | done | codec + tool + UI wiring + 7 e2e; address bar mirrors the map |
 | T-32 | `measure` | tool-dev | done | PR #16 |
-| T-33 | `set_layers` | tool-dev / map-ui-dev | todo | |
+| T-33 | `set_layers` | tool-dev / map-ui-dev | cut | the flagship demo script uses no layer toggling; cut confirmed 2026-08-29 |
 | T-34 | Screenshot-vs-WebMCP comparison (3 tasks, one run each) | orchestrator + qa | done | `docs/comparison.md`; headline: 4 calls/4.5 KB vs 16 actions+11 screenshots, control failed task B (1/11 names) |
 
 ## D5 — 2026-09-01 · submission assets
@@ -62,11 +62,11 @@ Design handoff: `docs/design/ui-redesign-handoff.md` (tokens, component inventor
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-50 | Activity feed data layer: record every tool call (tool, humanized summary, read/write, ok, ref ids, timestamp) into a store slice from the map-tools execute path; unit tests | tool-dev | doing(tool-dev) | interface contract fixed in dispatch; newest last, cap 50; real call order — no storytelling reorder |
-| T-51 | Smoked Glass chrome: brand bar, camera/Share chips, glass inspector, legend footer, Try-asking cards, breakpoint tiers incl. 769–920 sheet; WebMCP badge counts page-declared tools (11 imperative + declarative `add_note` = 12) per the handoff SHIP-GATE | map-ui-dev | doing(map-ui-dev) | keep every data-testid and the real `<form toolname="add_note">`; attribution links stay; no modals |
-| T-52 | `map-style.ts` calm ramp (z≤13 dot treatment) + selection halos per handoff | map-ui-dev | doing(map-ui-dev) | same branch as T-51 |
-| T-53 | Activity feed UI wired to the T-50 slice | map-ui-dev | doing(map-ui-dev) | build last; merge develop after T-50 lands — do not touch the store yourself |
-| T-54 | e2e: suite green on the new chrome; share-link restore shows provenance labels on the receiving window (experience-case gate) | qa | todo | dispatch after T-51 merges |
+| T-50 | Activity feed data layer: record every tool call (tool, humanized summary, read/write, ok, ref ids, timestamp) into a store slice from the map-tools execute path; unit tests | tool-dev | done | PR #35 |
+| T-51 | Smoked Glass chrome: brand bar, camera/Share chips, glass inspector, legend footer, Try-asking cards, breakpoint tiers incl. 769–920 sheet; WebMCP badge counts page-declared tools (11 imperative + declarative `add_note` = 12) per the handoff SHIP-GATE | map-ui-dev | done | PR #36; visual parity gate passed on independent production-build captures; bounds are the visible corridor |
+| T-52 | `map-style.ts` calm ramp (z≤13 dot treatment) + selection halos per handoff | map-ui-dev | done | PR #36 |
+| T-53 | Activity feed UI wired to the T-50 slice | map-ui-dev | done | PR #36; declarative add_note records agent-invoked submissions too |
+| T-54 | e2e: suite green on the new chrome; share-link restore shows provenance labels on the receiving window (experience-case gate) | qa | done | PR #38 — provenance gate PASS; found the frozen-bounds defect, fixed as PR #39 (jump, don't fly, without a style) |
 
 ## Handoff log
 
@@ -82,3 +82,6 @@ Append-only. `date · from → to · what`.
 - 2026-08-28 · qa → tool-dev · get_share_link's over-budget error returns bare number counts (drawings/selection) while the success path's state.drawings is {count, items} — align the shapes in the next tool batch (LLM friction, not a defect).
 - 2026-08-28 · data-engineer → all · T-24 verified: coordinate 121.4933,25.0143 is inside Wanhua (a real neighbourhood), NOT Banqiao Station (real: 121.4618,25.0132, outside all polygons at every tolerance). Seam gaps (~150 m) are source-data properties; tolerance cannot close them — the describe_surroundings 300 m fallback is the correct mechanism.
 - 2026-08-29 · orchestrator → tool-dev/map-ui-dev · UI redesign approved by the user; activity-feed interface contract is in the dispatch; durable design handoff committed at docs/design/ui-redesign-handoff.md.
+- 2026-08-29 · reviewer → qa · e2e/set-map-view.spec.ts:11-24 comment is stale after PR #39: under network isolation the re-entrant moveend now comes from jumpTo, not flyTo's stop(); the mid-flight-clobber race is only exercised with E2E_LIVE_BASEMAP=1 — update the comment, consider a live-basemap variant.
+- 2026-08-29 · reviewer → docs-writer (T-41) · docs/comparison.md:57 "camera animates, state settles at moveend" is over-cautious since PR #39 (no-style path jumps synchronously); soften when T-41 touches the file.
+- 2026-08-29 · qa/map-ui-dev → orchestrator · "Hide" collapses only the inspector body; the glass lane still covers the map, so bounds keep excluding it (correct). If Hide should return the lane to the map, that is a layout decision — padding and bounds would follow for free.

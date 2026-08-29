@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  NO_ACTIVITY,
   callCountLabel,
   formatCallTime,
   groupActivity,
@@ -20,16 +19,11 @@ const entry = (over: Partial<ActivityEntry> = {}): ActivityEntry => ({
 });
 
 describe("selectActivity", () => {
-  it("reads the slice when the store has one", () => {
+  it("hands back the store's own array, not a copy", () => {
+    // zustand compares selector results by identity: a copy would look like a
+    // change on every unrelated store write and re-render the whole feed.
     const activity = [entry()];
     expect(selectActivity({ activity })).toBe(activity);
-  });
-
-  it("answers with one shared empty array when the slice is absent", () => {
-    // Two calls must return the SAME array: zustand compares selector results
-    // by identity, so a fresh [] would re-render the feed on every store write.
-    expect(selectActivity({})).toBe(selectActivity({}));
-    expect(selectActivity({})).toBe(NO_ACTIVITY);
   });
 });
 

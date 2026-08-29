@@ -1,45 +1,26 @@
 /**
- * What the activity feed renders. The slice itself is written by the tool
- * layer (`src/lib/store/map-store.ts`, filled from the `createMapTools`
- * execute path): one entry per tool call, newest LAST, capped at 50.
+ * The UI's half of the agent-activity contract: the pure formatting the feed
+ * does to the slice the tool layer writes (`ActivityEntry` in the store, one
+ * entry per call, newest LAST, capped at ACTIVITY_LIMIT).
  *
- * This file is the UI's half of that contract — the shape it reads, and the
- * pure formatting it does to it. Everything here is a deterministic string
- * transform: no model is in the loop, and the feed never reorders a call.
+ * Everything here is a deterministic string transform: no model is in the
+ * loop, the feed never reorders a call, and summaries are rendered as text
+ * nodes — they echo OSM and human wording on purpose.
  */
-export interface ActivityEntry {
-  /** 1-based, assigned by the store; survives the cap, so it is the call number. */
-  seq: number;
-  tool: string;
-  /** One line, written by the tool layer from the call's input and result. */
-  summary: string;
-  /** A read tool changed nothing; the dot is hollow. */
-  readOnly: boolean;
-  ok: boolean;
-  /** `Date.now()` at the moment the call returned. */
-  at: number;
-  /** Ids the call produced or acted on, e.g. `drawing:1`. */
-  refIds?: string[];
-}
+import type { ActivityEntry } from "@/lib/store/map-store";
 
-/** Stable empty reference: the slice may not exist yet on a page load. */
-export const NO_ACTIVITY: readonly ActivityEntry[] = [];
-
-interface MaybeActivity {
-  activity?: readonly ActivityEntry[];
-}
+export type { ActivityEntry };
 
 /**
- * Read the slice out of the store without assuming it is there. Returning one
- * shared empty array matters: a fresh `[]` per call would make every zustand
- * selector look changed and re-render the feed on every unrelated store write.
- *
- * The parameter is widened because the slice is the tool layer's to declare:
- * this selector has to compile against a store that does not have the field
- * yet, and keep working the moment it does.
+ * Where the feed reads its rows. One named selector rather than four inline
+ * ones, so the components never have to know which store field this is; the
+ * store's own array is returned as-is, because zustand compares selector
+ * results by identity and a copy would re-render the feed on every write.
  */
-export function selectActivity(state: object): readonly ActivityEntry[] {
-  return (state as MaybeActivity).activity ?? NO_ACTIVITY;
+export function selectActivity(state: {
+  activity: readonly ActivityEntry[];
+}): readonly ActivityEntry[] {
+  return state.activity;
 }
 
 /** HH:MM:SS in the reader's own clock — the same wall time they watched. */

@@ -13,7 +13,7 @@ import {
 } from "./activity-model";
 import { SHEET_ASK_CARDS, TryAsking } from "./TryAsking";
 import { TOOL_ROSTER } from "./tool-roster";
-import { MID_TIER, useMediaQuery } from "./useMediaQuery";
+import { MID_TIER, SHEET_TIER, useMediaQuery } from "./useMediaQuery";
 
 /** How many tools this page declares; the badge counts the same thing. */
 function useDeclaredToolCount(): number {
@@ -103,6 +103,7 @@ export function ActivityFeed() {
   const activity = useMapStore(selectActivity);
   const toolCount = useDeclaredToolCount();
   const midTier = useMediaQuery(MID_TIER);
+  const sheet = useMediaQuery(SHEET_TIER);
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -115,6 +116,11 @@ export function ActivityFeed() {
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
   }, [activity.length, collapsed]);
+
+  // The sheet tier renders the feed inside the inspector instead. CSS hides
+  // this panel there anyway; not rendering it keeps one feed in the DOM, so a
+  // row is never two elements with the same test id.
+  if (sheet) return null;
 
   return (
     <section
@@ -166,7 +172,7 @@ export function ActivityFeed() {
           <CallList activity={activity} />
         </div>
       ) : (
-        <div className="feed-empty">
+        <div className="feed-empty" data-testid="activity-pitch">
           <LandingPitch />
         </div>
       )}
@@ -182,6 +188,9 @@ export function ActivityFeed() {
  */
 export function ActivityPanel() {
   const activity = useMapStore(selectActivity);
+  const sheet = useMediaQuery(SHEET_TIER);
+  // Above 920px the floating panel is the feed; see `ActivityFeed`.
+  if (!sheet) return null;
   if (activity.length === 0) {
     return (
       <div data-testid="activity-pitch">

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { ACTIVITY_NOTE_CHARS } from "@/lib/map-tools/activity";
+import { truncate } from "@/lib/map-tools/shapes";
 import { useMapStore } from "@/lib/store/map-store";
 
 /** ~1 m, the same precision the tools report coordinates in. */
@@ -37,13 +39,27 @@ export function AddNoteForm() {
       setStatus("Type a note first.");
       return;
     }
-    const { view, addAnnotation } = useMapStore.getState();
+    const { view, addAnnotation, recordActivity } = useMapStore.getState();
     const agentInvoked = (event.nativeEvent as SubmitEvent).agentInvoked === true;
     const stored = addAnnotation({
       source: agentInvoked ? "agent" : "user",
       at: view.center,
       note,
     });
+    // An agent-submitted form is a tool call like any other, and the activity
+    // feed says it shows every one. The tool layer cannot record this one --
+    // it never goes through `createMapTools` -- so the form reports itself, in
+    // the same words `annotate` uses. A human typing here is not agent
+    // activity and is deliberately not recorded.
+    if (agentInvoked) {
+      recordActivity({
+        tool: "add_note",
+        summary: `Pinned “${truncate(note, ACTIVITY_NOTE_CHARS)}” → ${stored.id}`,
+        readOnly: false,
+        ok: true,
+        refIds: [stored.id],
+      });
+    }
     setStatus(
       `Pinned ${stored.id} at ${round5(view.center[0])}, ${round5(view.center[1])}.`,
     );

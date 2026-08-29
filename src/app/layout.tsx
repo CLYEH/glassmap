@@ -6,24 +6,19 @@ import { WebMcpProvider } from "@/components/WebMcpProvider";
 /**
  * Both faces are self-hosted by `next/font`: the files are downloaded at build
  * time and served from this origin, so a running GlassMap makes no request to
- * Google — the same zero-backend rule the rest of the app follows. The fallback
- * stacks are what shows if a font file ever fails to arrive.
+ * Google — the same zero-backend rule the rest of the app follows.
  *
  * Inter carries the UI; JetBrains Mono is the data face (tool names, ids,
- * coordinates, counts, timestamps).
+ * coordinates, counts, timestamps). Each variable resolves to the face plus
+ * the metric-matched local fallback `next/font` generates; the system stacks
+ * behind them are in `globals.css`, with the rest of the type tokens.
  */
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-inter",
-  fallback: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
-});
+const inter = Inter({ subsets: ["latin"], display: "swap", variable: "--font-inter" });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-jetbrains-mono",
-  fallback: ["SF Mono", "ui-monospace", "Menlo", "monospace"],
 });
 
 export const metadata: Metadata = {

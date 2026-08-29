@@ -1,14 +1,21 @@
 "use client";
 
 import { describeView, round5 } from "@/lib/map-tools/state";
-import { FEATURE_CATEGORIES } from "@/lib/data/schema";
 import { useMapStore } from "@/lib/store/map-store";
-import { CATEGORY_COLOR, CATEGORY_LABEL } from "./map-style";
 
 /**
- * The store rendered as text. Every value a tool can change has a
- * `data-testid` so e2e can assert the effect without reading the canvas.
- * It stays useful when WebGL is unavailable and no map is drawn.
+ * The store as text, at full precision: every value a tool can change, with a
+ * `data-testid` a test can read without touching the canvas.
+ *
+ * The design gives each of these a home in the chrome — the camera in the
+ * camera chip, the counts in the legend and the inspector's section pills —
+ * but rounded and worded for a person ("z12", "2,063 places"). This block
+ * keeps the exact numbers a tool returned, so an assertion about a tool's
+ * effect never has to be written against a human sentence.
+ *
+ * It is off screen, not `display: none` and not deleted: `bounds`, `bearing`
+ * and `pitch` appear nowhere in the design, and a headless run with no WebGL
+ * still has to be able to prove the store moved.
  */
 export function StateOverlay() {
   const view = useMapStore((s) => s.view);
@@ -20,12 +27,8 @@ export function StateOverlay() {
   const state = describeView(view);
 
   return (
-    <div
-      data-testid="state-overlay"
-      className="absolute top-3 left-3 z-10 max-w-xs rounded-lg bg-white/90 p-3 font-mono text-xs text-zinc-900 shadow-lg backdrop-blur"
-    >
-      <h1 className="mb-2 text-sm font-semibold">GlassMap</h1>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+    <div data-testid="state-overlay" className="gm-machine" aria-hidden>
+      <dl>
         <dt>center</dt>
         <dd data-testid="center">
           {state.center.lng}, {state.center.lat}
@@ -47,18 +50,6 @@ export function StateOverlay() {
         <dt>notes</dt>
         <dd data-testid="annotation-count">{annotationCount}</dd>
       </dl>
-      <ul data-testid="legend" className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5">
-        {FEATURE_CATEGORIES.map((category) => (
-          <li key={category} className="flex items-center gap-1.5">
-            <span
-              aria-hidden
-              className="inline-block size-2 rounded-full"
-              style={{ backgroundColor: CATEGORY_COLOR[category] }}
-            />
-            {CATEGORY_LABEL[category]}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMapTools, PLACE_ZOOM, validateSetMapView } from "./index";
-import { createMemoryToolStore, DEFAULT_VIEW, type MapToolStore } from "@/lib/store/map-store";
+import { createMemoryToolStore, DEFAULT_VIEW, type MemoryToolStore } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
@@ -729,7 +729,7 @@ describe("selection ids", () => {
   it("are properties.id, the same string the UI and every other tool uses", async () => {
     // map-ui-dev highlights on this value; find_features returns it; a mismatch
     // would show up as "the agent selected something and nothing lit up".
-    const store: MapToolStore = createMemoryToolStore({ features: FIXTURE_FEATURES, bounds: VIEW_BOUNDS, view: VIEW });
+    const store: MemoryToolStore = createMemoryToolStore({ features: FIXTURE_FEATURES, bounds: VIEW_BOUNDS, view: VIEW });
     const { byName } = toolsFor(store);
     // "Daan Forest" also proves query folding: OSM spells it "Da-an Forest Park".
     const found = await call(byName.find_features, { query: "Daan Forest" });

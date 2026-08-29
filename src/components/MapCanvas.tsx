@@ -31,12 +31,14 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
+  SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
   paintOf,
+  selectionAnchorsToGeoJson,
   sourceId,
 } from "./map-style";
-import { approximateBounds } from "./viewport-bounds";
+import { approximateBounds, visibleBounds } from "./viewport-bounds";
 
 declare global {
   interface Window {
@@ -84,6 +86,25 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
   }
 }
 
+/**
+ * The lane the inspector covers, in CSS pixels, read from the same custom
+ * property the stylesheet lays the inspector out with — so the map's padding
+ * and the chrome can never disagree about where the visible corridor is. Zero
+ * below 921px, where the inspector is a bottom sheet and the map container is
+ * shortened instead of overlaid.
+ *
+ * This is the single source of truth for the corridor: `applyPadding` puts the
+ * camera centre in it and `pushViewFromMap` publishes its edges as `bounds`,
+ * so the two can never describe different rectangles. It does not follow the
+ * Hide button, because hiding only empties the panel's body — the glass sheet
+ * still covers the lane, so the map under it is still not visible.
+ */
+function inspectorLane(): number {
+  if (window.matchMedia("(max-width: 920px)").matches) return 0;
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
+  return Number.parseFloat(value) || 0;
+}
+
 type PaintPropertyName = Parameters<MapLibreMap["setPaintProperty"]>[1];
 type PaintPropertyValue = Parameters<MapLibreMap["setPaintProperty"]>[2];
 
@@ -95,6 +116,16 @@ function applySelection(map: MapLibreMap, selection: readonly string[]) {
       map.setPaintProperty(layer.id, prop as PaintPropertyName, value as PaintPropertyValue);
     }
   }
+}
+
+/** Re-place the selection halo rings; see `selectionAnchorsToGeoJson`. */
+function applySelectionHalo(
+  map: MapLibreMap,
+  features: readonly GlassMapFeature[],
+  selection: readonly string[],
+) {
+  const source = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
+  source?.setData(selectionAnchorsToGeoJson(features, selection));
 }
 
 /** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
@@ -191,7 +222,11 @@ export default function MapCanvas() {
       const pushBounds = () => {
         const width = container.clientWidth || window.innerWidth;
         const height = container.clientHeight || window.innerHeight;
-        store.getState().setBounds(approximateBounds(store.getState().view, width, height));
+        // The same corridor a live map publishes: the inspector's lane is not
+        // part of what anyone can see, and `view.center` is the corridor's
+        // centre, so the extent stays symmetric around it — just narrower.
+        const corridor = Math.max(width - inspectorLane(), 0);
+        store.getState().setBounds(approximateBounds(store.getState().view, corridor, height));
       };
       pushBounds();
       const unsubscribe = store.subscribe((state, previous) => {
@@ -221,7 +256,10 @@ export default function MapCanvas() {
         zoom: initial.zoom,
         bearing: initial.bearing,
         pitch: initial.pitch,
-        attributionControl: { compact: true },
+        // The licence attribution is rendered by <Attribution /> in the bottom
+        // bar instead: the built-in control sits in the map's own bottom-right
+        // corner, which the inspector covers on every desktop width.
+        attributionControl: false,
       });
     } catch (error) {
       // No WebGL (headless CI, blocked GPU). Tools and the overlay keep working.
@@ -248,7 +286,6 @@ export default function MapCanvas() {
       // A `moveend` our own flyTo caused, not a user gesture - ignore it.
       if (toMap) return;
       const center = map.getCenter();
-      const b = map.getBounds();
       const view: MapView = {
         center: [center.lng, center.lat],
         zoom: map.getZoom(),
@@ -259,7 +296,18 @@ export default function MapCanvas() {
       fromMap = true;
       try {
         store.getState().setView(view);
-        store.getState().setBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+        // Not `map.getBounds()`: that spans the whole canvas, whose eastern
+        // 300-336 px are behind the inspector. See `visibleBounds`.
+        store
+          .getState()
+          .setBounds(
+            visibleBounds(
+              (point) => map.unproject(point),
+              container.clientWidth,
+              container.clientHeight,
+              inspectorLane(),
+            ),
+          );
       } finally {
         fromMap = false;
       }
@@ -282,6 +330,18 @@ export default function MapCanvas() {
       }
     };
 
+    // The inspector floats over the map's east edge, so without padding the
+    // camera centre a tool reads back would sit behind it. `setPadding` keeps
+    // the centre coordinate and moves where it lands on screen, into the
+    // corridor the human can actually see. Applied before the first
+    // `pushViewFromMap` so the very first `center`/`bounds` pair a tool can
+    // read already describes that corridor and not the full canvas.
+    const applyPadding = () => {
+      map.setPadding({ top: 0, bottom: 0, left: 0, right: inspectorLane() });
+    };
+    applyPadding();
+    window.addEventListener("resize", applyPadding);
+
     // The transform is valid as soon as the constructor returns, so bounds is
     // available immediately - a tool must not see `bounds: null` for the ~1.4 s
     // until tiles arrive, and it must stay set even if the basemap never loads.
@@ -300,9 +360,11 @@ export default function MapCanvas() {
       for (const category of FEATURE_CATEGORIES) {
         map.addSource(sourceId(category), { type: "geojson", data: EMPTY });
       }
+      map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
       const { features, selection, drawings } = store.getState();
       for (const layer of buildLayerSpecs(selection)) map.addLayer(layer);
       applyFeatures(map, features);
+      applySelectionHalo(map, features, selection);
 
       // Drawings sit on top of the data layers: a shape is always about the
       // features under it.
@@ -381,6 +443,9 @@ export default function MapCanvas() {
       if (!ready) return;
       if (state.features !== previous.features) applyFeatures(map, state.features);
       if (state.selection !== previous.selection) applySelection(map, state.selection);
+      if (state.selection !== previous.selection || state.features !== previous.features) {
+        applySelectionHalo(map, state.features, state.selection);
+      }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
 
@@ -393,6 +458,7 @@ export default function MapCanvas() {
     applyDrawCursor(draw.getState().mode);
 
     return () => {
+      window.removeEventListener("resize", applyPadding);
       unsubscribe();
       unsubscribeDraw();
       for (const marker of markers.values()) marker.remove();
@@ -416,11 +482,10 @@ export default function MapCanvas() {
       <div className="absolute inset-0">
         <div ref={containerRef} data-testid="map" className="h-full w-full" />
       </div>
-      <span
-        ref={statusRef}
-        data-testid="map-status"
-        className="absolute bottom-2 left-2 z-10 rounded bg-black/60 px-2 py-1 font-mono text-xs text-white"
-      >
+      {/* Off screen, not removed: the design has no place for a loading pill,
+          but "did the basemap come up" is exactly what a headless run needs to
+          read back. See `.gm-machine` in globals.css. */}
+      <span ref={statusRef} data-testid="map-status" className="gm-machine">
         loading
       </span>
     </>

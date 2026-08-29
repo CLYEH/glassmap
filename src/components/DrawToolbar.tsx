@@ -7,6 +7,9 @@ import { useDrawStore } from "./draw-store";
  * The "human draws, agent reads" entry point: toggles polygon drawing on the
  * map. The clicks themselves are handled in MapCanvas (it owns the map); this
  * component owns the switch, the hint and the keyboard shortcuts.
+ *
+ * Rose, like every hand-drawn shape on the map, against the teal the agent's
+ * own tools use. On a phone the label goes and the pentagon carries it.
  */
 export function DrawToolbar() {
   const mode = useDrawStore((s) => s.mode);
@@ -19,7 +22,7 @@ export function DrawToolbar() {
   useEffect(() => {
     if (!drawing) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // Typing a note in the sidebar must not finish or cancel a drawing.
+      // Typing a note in the inspector must not finish or cancel a drawing.
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -37,29 +40,32 @@ export function DrawToolbar() {
   }, [drawing, cancel, finish]);
 
   return (
-    <div
-      data-testid="draw-toolbar"
-      // Bottom right on a phone-width map, where it does not land on the state
-      // overlay; top right once there is room beside it.
-      className="absolute right-3 bottom-9 z-10 w-56 rounded-lg bg-white/90 p-2 font-mono text-xs text-zinc-900 shadow-lg backdrop-blur md:top-3 md:bottom-auto"
-    >
+    <div className="draw-zone" data-testid="draw-toolbar">
       <button
         type="button"
+        className="draw-chip"
         data-testid="draw-toggle"
         aria-pressed={drawing}
         onClick={() => (drawing ? cancel() : start())}
-        className={`w-full rounded px-2 py-1 font-sans font-medium text-white ${
-          drawing ? "bg-rose-600 hover:bg-rose-700" : "bg-zinc-800 hover:bg-zinc-700"
-        }`}
       >
-        {drawing ? "Cancel drawing" : "Draw a polygon"}
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+          <path
+            d="M7 1.8 12.4 5.7 10.3 12H3.7L1.6 5.7 7 1.8Z"
+            stroke="#f48fb1"
+            strokeWidth="1.4"
+            strokeLinejoin="round"
+          />
+          <circle cx="7" cy="1.8" r="1.4" fill="#f48fb1" />
+        </svg>
+        <span>{drawing ? "Cancel drawing" : "Draw polygon"}</span>
       </button>
-      <p className="mt-1.5 flex justify-between">
-        <span>draw mode</span>
-        <span data-testid="draw-mode">{drawing ? "on" : "off"}</span>
-      </p>
+      {/* Off screen: the chip's pressed state is the visible answer, but a
+          test should not have to read a CSS class to know the mode. */}
+      <span data-testid="draw-mode" className="gm-machine">
+        {drawing ? "on" : "off"}
+      </span>
       {drawing && (
-        <p data-testid="draw-hint" className="mt-1 leading-snug text-zinc-600">
+        <p data-testid="draw-hint" className="draw-hint glass">
           {vertexCount < 3
             ? `Click the map to add points (${vertexCount} of at least 3).`
             : `${vertexCount} points. Double-click or Enter to finish, Esc to cancel.`}

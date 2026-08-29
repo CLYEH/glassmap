@@ -1,26 +1,1390 @@
 @import "tailwindcss";
 
+/* ============================================================
+   GlassMap — "Smoked Glass" (design handoff v5).
+
+   Dark tinted-glass chrome floating over the light Taipei basemap.
+   Teal = agent, rose = human — the same semantics the map drawings use
+   (DRAWING_COLOR in src/components/drawing-style.ts).
+
+   The tokens below are the handoff's token table, value for value; the
+   category colours are CATEGORY_COLOR from src/components/map-style.ts and
+   must stay in step with it (legend and map are the same six colours).
+
+   The chrome is written as plain CSS rather than utility classes because
+   the handoff specifies exact blur/alpha/mask/breakpoint values, and the
+   four tiers (1360 / 1240 / 920 / 600) are not Tailwind's.
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --lane: 336px; /* inspector width; drives draw chip + bottom bar geometry */
+  --ink-0: #0a0d12;
+  --panel: #10141b;
+  --panel-2: #131822;
+  --glass: rgba(12, 16, 22, 0.88);
+  --glass-strong: rgba(8, 12, 17, 0.92);
+  --sheet: rgba(9, 13, 19, 0.9);
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-2: rgba(255, 255, 255, 0.06);
+  --text-hi: #f2f5f7;
+  --text-mid: #b9c3ce;
+  --text-low: #9aa7b4;
+  --agent: #2dd4bf;
+  --agent-deep: #0b7285;
+  --human: #f48fb1; /* text/icon tint of the canvas colour #c2255c */
+  --human-deep: #c2255c;
+  --live: #4ade80;
+  /* A call that failed is neither agent nor human: amber, not the rose that
+     means "a person did this". Also the share-warning chip's fill. */
+  --warn: #fab005;
+  /* Exact CATEGORY_COLOR values from src/components/map-style.ts */
+  --c-mrt: #d7263d;
+  --c-park: #2f9e44;
+  --c-school: #1c7ed6;
+  --c-market: #f08c00;
+  --c-listing: #9c36b5;
+  --c-district: #495057;
+  --font-ui: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "SF Mono", ui-monospace, Menlo, monospace;
+  --radius: 14px;
+  --radius-s: 9px;
+  --shadow:
+    0 12px 32px rgba(3, 7, 13, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@media (max-width: 1240px) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --lane: 300px;
   }
 }
 
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--ink-0);
+  color: var(--text-hi);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--agent);
+  outline-offset: 2px;
+}
+
+/* Values a tool changed that the design does not print anywhere on screen
+   (bounds, bearing, pitch, raw camera, map status). Kept in the DOM and off
+   screen rather than removed: they are the machine-readable mirror the e2e
+   suite asserts against, and `display: none` would take them out of it. */
+.gm-machine {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.glass {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
+    var(--glass);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* ---------------------------------------------------- layout
+   The map is full-bleed; the inspector is a glass sheet laid over its east
+   edge, and MapCanvas answers with map.setPadding({ right: lane }) so the
+   camera centre stays in the visible corridor. */
+.app {
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.map-wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #e9e5dd;
+}
+
+.inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--lane);
+  z-index: 30;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 140px),
+    var(--sheet);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-left: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrims: seat the glass chrome onto the basemap. */
+.scrim-top,
+.scrim-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.scrim-top {
+  top: 0;
+  height: 130px;
+  background: linear-gradient(180deg, rgba(9, 12, 17, 0.34), rgba(9, 12, 17, 0));
+}
+.scrim-bottom {
+  bottom: 0;
+  height: 90px;
+  background: linear-gradient(0deg, rgba(9, 12, 17, 0.3), rgba(9, 12, 17, 0));
+}
+
+/* ---------------------------------------------------- top-left cluster */
+.brand-cluster {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px 8px 11px;
+}
+.logomark {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.brand-name {
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.brand-city {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-low);
+  border-left: 1px solid var(--hairline);
+  padding-left: 9px;
+  margin-left: 1px;
+  align-self: center;
+  padding-top: 1px;
+}
+.cam-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.cam-chip .z {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+.cam-chip svg {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.share-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-mid);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
+    var(--glass);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.share-chip:hover {
+  color: var(--text-hi);
+}
+
+/* ---------------------------------------------------- agent activity feed */
+.feed {
+  position: absolute;
+  top: 62px;
+  left: 14px;
+  z-index: 15;
+  width: 302px;
+  max-height: calc(100% - 150px);
+  display: flex;
+  flex-direction: column;
+}
+.feed-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px 10px 14px;
+  border-bottom: 1px solid var(--hairline-2);
+}
+.feed-head h2 {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.feed-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  white-space: nowrap;
+}
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--agent);
+  position: relative;
+  flex-shrink: 0;
+}
+.pulse::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--agent);
+  opacity: 0;
+  animation: ring 2.4s ease-out infinite;
+}
+@keyframes ring {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.feed-toggle {
+  background: none;
+  border: none;
+  color: var(--text-mid);
+  padding: 2px 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.feed-toggle:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.06);
+}
+.feed-toggle svg {
+  transition: transform 0.18s ease;
+}
+/* collapsed: one compact pill, the map's west third comes back */
+.feed.collapsed {
+  width: auto;
+  max-height: none;
+}
+.feed.collapsed .feed-head {
+  border-bottom: none;
+  padding: 8px 10px 8px 13px;
+}
+.feed.collapsed .feed-body,
+.feed.collapsed .feed-empty,
+.feed.collapsed .feed-count {
+  display: none;
+}
+.feed.collapsed .feed-toggle svg {
+  transform: rotate(180deg);
+}
+.feed-mini {
+  display: none;
+  align-items: baseline;
+  gap: 7px;
+  white-space: nowrap;
+}
+.feed.collapsed .feed-mini {
+  display: flex;
+}
+.feed-mini .tool {
+  font-size: 10.5px;
+  color: var(--agent);
+}
+.feed-mini-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
+.feed-body {
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+  scrollbar-width: none;
+}
+.feed-body::-webkit-scrollbar {
+  display: none;
+}
+/* Both live feeds rest at the newest call, so their top scroll edge always
+   clips a row. A 12px fade turns that shear into a deliberate soft edge. */
+.feed-body,
+.insp-body {
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12px);
+  mask-image: linear-gradient(180deg, transparent 0, #000 12px);
+}
+
+.feed-list {
+  position: relative;
+}
+.feed-list::before {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.call {
+  position: relative;
+  padding: 0 0 13px 20px;
+}
+.call:last-child {
+  padding-bottom: 2px;
+}
+.call .dot {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1.5px solid var(--text-low);
+}
+.call.write .dot {
+  background: var(--agent);
+  border-color: var(--agent);
+  box-shadow: 0 0 8px rgba(45, 212, 191, 0.5);
+}
+.call.failed .dot {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.call-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.tool {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+}
+.call.write .tool {
+  color: var(--agent);
+}
+.call.failed .tool {
+  color: var(--warn);
+}
+.call-fold {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 20px;
+  padding: 0 5px;
+}
+.call-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  flex-shrink: 0;
+}
+.call-sum {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-mid);
+  overflow-wrap: anywhere;
+}
+.call-sum code {
+  font-size: 10px;
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+/* waiting row: deliberately NOT the tool-call grammar (no mono name) */
+.call.wait .dot {
+  border-color: var(--agent);
+  background: transparent;
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.call.wait .wait-sum {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-low);
+  line-height: 1.45;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* feed empty state (landing) */
+.feed-empty {
+  padding: 16px 15px 15px;
+}
+.fe-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.fe-copy {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-mid);
+}
+.fe-tools {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.fe-tools code {
+  font-size: 10px;
+  color: var(--text-mid);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline-2);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+/* ---------------------------------------------------- draw chip */
+.draw-zone {
+  position: absolute;
+  top: 14px;
+  right: calc(var(--lane) + 14px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 260px;
+}
+.draw-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px 8px 12px;
+  font-size: 12px;
+  font-weight: 570;
+  color: var(--text-hi);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
+    var(--glass);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.draw-chip svg {
+  flex-shrink: 0;
+}
+.draw-chip:hover {
+  border-color: rgba(242, 123, 163, 0.45);
+}
+.draw-chip[aria-pressed="true"] {
+  border-color: rgba(242, 123, 163, 0.55);
+}
+.draw-hint {
+  padding: 7px 11px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-mid);
+  text-align: right;
+}
+
+/* ---------------------------------------------------- bottom bar
+   One flex row spanning the corridor: legend left, attribution + badge
+   right, so overlap is impossible by construction. */
+.bottom-bar {
+  position: absolute;
+  left: 14px;
+  right: calc(var(--lane) + 14px);
+  bottom: 14px;
+  z-index: 15;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+}
+.bottom-bar > * {
+  pointer-events: auto;
+}
+
+.legend-zone {
+  min-width: 0;
+}
+.legend-full {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 12px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.legend-full::-webkit-scrollbar {
+  display: none;
+}
+.legend-total {
+  font-size: 11px;
+  font-weight: 620;
+  color: var(--text-hi);
+  white-space: nowrap;
+  padding-right: 10px;
+  margin-right: 6px;
+  border-right: 1px solid var(--hairline);
+}
+.lg-chip {
+  display: flex;
+  align-items: center;
+  gap: 5.5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.lg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+/* district: exact map colour; the white outer ring is the shared swatch
+   treatment (map dots carry the same white circle-stroke) */
+.lg-dot.ring {
+  background: transparent !important;
+  border: 1.5px solid var(--c-district);
+}
+.lg-name {
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.lg-name-short {
+  display: none;
+}
+.lg-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
+/* collapsed legend (mid + sheet tiers): count + expand affordance, no dots */
+.legend-pillbox {
+  position: relative;
+  display: none;
+}
+.legend-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 620;
+  color: var(--text-hi);
+  white-space: nowrap;
+}
+.legend-pill svg {
+  color: var(--text-low);
+  transition: transform 0.18s ease;
+}
+.legend-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: none;
+  padding: 9px 12px;
+  min-width: 168px;
+}
+.legend-pillbox.open .legend-pop {
+  display: block;
+}
+.legend-pillbox.open .legend-pill svg {
+  transform: rotate(180deg);
+}
+.legend-pop .lg-chip {
+  padding: 3.5px 2px;
+}
+.legend-pop .lg-n {
+  margin-left: auto;
+  padding-left: 14px;
+}
+
+.corner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.share-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #2a1c00;
+  background: color-mix(in srgb, var(--warn) 94%, transparent);
+  box-shadow: var(--shadow);
+}
+.attribution {
+  font-size: 10px;
+  color: #ced6dd;
+  white-space: nowrap;
+  line-height: 1.35;
+  background: rgba(9, 12, 17, 0.78);
+  border-radius: 8px;
+  padding: 4px 9px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.attribution a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(206, 214, 221, 0.55);
+}
+.attribution a:hover {
+  text-decoration-color: #ced6dd;
+}
+.badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+}
+.badge .live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  position: relative;
+  flex-shrink: 0;
+}
+.badge .live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--live);
+  opacity: 0;
+  animation: ring 2.4s ease-out infinite;
+}
+.badge.offline .live-dot {
+  background: var(--text-low);
+}
+.badge.offline .live-dot::after {
+  animation: none;
+}
+.badge-label {
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.badge-tools {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--agent);
+  border-left: 1px solid var(--hairline);
+  padding-left: 8px;
+  white-space: nowrap;
+}
+.badge-surface {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  border-left: 1px solid var(--hairline);
+  padding-left: 8px;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------- note pin (map marker)
+   Styles for the DOM marker built in src/components/annotation-marker.ts. */
+.note-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+.pin-card {
+  position: relative;
+  background: var(--glass-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(45, 212, 191, 0.4);
+  border-radius: 10px;
+  padding: 6px 10px 7px;
+  box-shadow: 0 8px 20px rgba(3, 7, 13, 0.45);
+  width: max-content;
+  max-width: 210px;
+  text-align: left;
+}
+.pin-card.user {
+  border-color: rgba(244, 143, 177, 0.45);
+}
+.pin-src {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--agent);
+  margin-bottom: 2px;
+}
+.pin-card.user .pin-src {
+  color: var(--human);
+}
+.pin-note {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-hi);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pin-stem {
+  width: 1.5px;
+  height: 13px;
+  background: var(--agent);
+  opacity: 0.85;
+}
+.pin-anchor {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--agent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+.note-pin[data-annotation-source="user"] .pin-stem,
+.note-pin[data-annotation-source="user"] .pin-anchor {
+  background: var(--human);
+}
+.pin-card.hidden {
+  display: none;
+}
+
+/* ---------------------------------------------------- inspector */
+.grab {
+  display: none;
+}
+.insp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--hairline-2);
+  flex-shrink: 0;
+}
+.insp-head h2 {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.insp-sub {
+  font-size: 10.5px;
+  color: var(--text-low);
+  margin-left: 2px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-hide {
+  margin-left: auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text-low);
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.insp-hide:hover {
+  color: var(--text-mid);
+  background: rgba(255, 255, 255, 0.06);
+}
+.insp-tabs {
+  display: none;
+}
+
+.insp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 16px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.insp-body[hidden] {
+  display: none;
+}
+.view-activity {
+  display: none;
+}
+
+.insp-section {
+  padding-top: 14px;
+}
+.sec-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.sec-head svg {
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+.sec-head h3 {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+}
+.sec-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-mid);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 20px;
+  padding: 1px 8px;
+  min-width: 24px;
+  text-align: center;
+}
+.sec-count.active {
+  color: #04302b;
+  background: var(--agent);
+  font-weight: 600;
+}
+
+.sel-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 8px;
+}
+.sel-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.sel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.sel-dot.unknown {
+  background: transparent;
+  border: 1.5px solid var(--text-low);
+  box-shadow: none;
+}
+.sel-name {
+  font-size: 12px;
+  color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sel-cat {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-low);
+  flex-shrink: 0;
+}
+
+.obj-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline-2);
+  border-radius: var(--radius-s);
+  padding: 9px 10px;
+  margin-bottom: 6px;
+}
+.obj-swatch {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.obj-main {
+  min-width: 0;
+  flex: 1;
+}
+.obj-title {
+  font-size: 12px;
+  font-weight: 570;
+  color: var(--text-hi);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.obj-meta {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  overflow-wrap: anywhere;
+}
+.obj-meta .src-agent {
+  color: var(--agent);
+}
+.obj-meta .src-user {
+  color: var(--human);
+}
+.obj-x {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-low);
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 6px;
+}
+.obj-x:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.empty-note {
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-low);
+}
+
+/* landing-only "Try asking": prompts a judge can hand the agent verbatim,
+   each tagged with the tools that answer it. Static text on purpose —
+   these are things to SAY to the agent, not buttons in the app. */
+.ask-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline-2);
+  border-radius: var(--radius-s);
+  padding: 9px 11px;
+  margin-bottom: 6px;
+}
+.ask-q {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-hi);
+}
+.ask-tools {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
+/* pin-note form (the declarative add_note WebMCP tool — never display:none) */
+.note-form {
+  border-top: 1px solid var(--hairline-2);
+  padding: 13px 16px 14px;
+  flex-shrink: 0;
+}
+.note-form label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-mid);
+  margin-bottom: 7px;
+}
+.note-form-row {
+  display: flex;
+  gap: 7px;
+}
+.note-form input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--text-hi);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+.note-form input::placeholder {
+  color: var(--text-low);
+}
+.note-form input:focus {
+  outline: none;
+  border-color: rgba(242, 123, 163, 0.55);
+}
+.note-form button {
+  flex-shrink: 0;
+  background: var(--human-deep);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 620;
+  padding: 7px 13px;
+}
+.note-form button:hover {
+  background: #d6336c;
+}
+.note-hint {
+  margin-top: 7px;
+  font-size: 10px;
+  color: var(--text-low);
+}
+.note-hint code {
+  font-size: 10px;
+  color: var(--text-mid);
+}
+.note-status {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--agent);
+}
+.note-status:empty {
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------- sheet-tier ticker */
+.ticker {
+  display: none;
+}
+
+/* ==================================================== tier: <=1360 */
+@media (max-width: 1360px) {
+  .badge-surface {
+    display: none;
+  }
+  .legend-full {
+    padding: 6px 10px;
+  }
+  .legend-full .lg-chip {
+    padding: 3px 5px;
+  }
+  .legend-full .lg-name {
+    font-size: 10.5px;
+  }
+  .legend-full .legend-total {
+    padding-right: 8px;
+    margin-right: 4px;
+  }
+  /* narrow-tier abbreviation only; the category label stays "Supermarkets" */
+  .legend-full .lg-name-full {
+    display: none;
+  }
+  .legend-full .lg-name-short {
+    display: inline;
+  }
+}
+
+/* ==================================================== tier: 921-1240 (mid) */
+@media (max-width: 1240px) {
+  .brand-city {
+    display: none;
+  }
+  .share-chip span {
+    display: none;
+  }
+  .share-chip {
+    padding: 8px 10px;
+  }
+  .legend-full {
+    display: none;
+  }
+  .legend-pillbox {
+    display: flex;
+  }
+  .insp-head h2 {
+    font-size: 12.5px;
+  }
+  .insp-sub {
+    font-size: 10px;
+  }
+}
+@media (min-width: 1241px) {
+  .legend-pillbox {
+    display: none;
+  }
+}
+/* mid tier, busy: an expanded feed ends above the note-pin card, so the
+   presenter's expand click never buries the annotation payoff. */
+@media (min-width: 921px) and (max-width: 1240px) {
+  .feed.has-calls:not(.collapsed) {
+    max-height: calc(50vh - 145px);
+  }
+}
+
+/* ==================================================== sheet <=920
+   Below 921px a desktop corridor beside a 300px lane cannot hold the map's
+   own artefacts (the handoff's halo-span measurement), so the whole band
+   gets the sheet layout: full-width map over a near-opaque bottom sheet —
+   the declared material exception, since nothing is behind it. */
+@media (max-width: 920px) {
+  .map-wrap {
+    bottom: 46vh;
+  }
+  .inspector {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: 46vh;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+    background: rgba(13, 17, 23, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .grab {
+    display: block;
+    position: absolute;
+    top: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 34px;
+    height: 4px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .feed {
+    display: none;
+  }
+  .brand {
+    padding: 7px 12px 7px 10px;
+  }
+  .brand-name {
+    font-size: 13.5px;
+  }
+  .draw-zone {
+    right: 12px;
+  }
+  .brand-cluster {
+    top: 12px;
+    left: 12px;
+  }
+
+  /* wider-than-phone sheet: centre the content column so cards don't
+     stretch edge to edge (no effect at <=660px) */
+  .insp-head,
+  .insp-body {
+    width: 100%;
+    max-width: 660px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .note-form > * {
+    max-width: 628px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .ticker {
+    position: absolute;
+    top: 58px;
+    left: 12px;
+    right: 12px;
+    z-index: 15;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .ticker .tool {
+    font-size: 10.5px;
+    color: var(--agent);
+  }
+  .ticker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+  .ticker-sum {
+    font-size: 11px;
+    color: var(--text-mid);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .ticker-n {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-low);
+    flex-shrink: 0;
+  }
+
+  .pin-card {
+    max-width: 185px;
+  }
+
+  .bottom-bar {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+  .attribution {
+    white-space: normal;
+    max-width: 235px;
+    text-align: right;
+  }
+  .badge {
+    padding: 6px 10px;
+  }
+
+  /* sheet header: tabs instead of Hide */
+  .insp-head {
+    padding: 12px 16px 9px;
+  }
+  .insp-hide {
+    display: none;
+  }
+  .insp-sub {
+    display: none;
+  }
+  .insp-head h2 {
+    font-size: 12.5px;
+  }
+  .insp-tabs {
+    display: flex;
+    margin-left: auto;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 9px;
+    padding: 3px;
+  }
+  .insp-tabs button {
+    border: none;
+    background: none;
+    color: var(--text-low);
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 7px;
+  }
+  .insp-tabs button.on {
+    background: rgba(255, 255, 255, 0.11);
+    color: var(--text-hi);
+  }
+
+  /* Activity tab: the hero feed lives in the sheet below 921px */
+  .inspector[data-tab="activity"] .view-contents {
+    display: none;
+  }
+  .inspector[data-tab="activity"] .view-activity {
+    display: block;
+    padding-top: 12px;
+  }
+
+  .insp-body {
+    padding: 0 16px 10px;
+  }
+  .note-form {
+    padding: 10px 16px 12px;
+  }
+  .note-hint {
+    display: none;
+  }
+}
+
+/* phone: no room for the camera chip or the Draw label */
+@media (max-width: 600px) {
+  .cam-chip {
+    display: none;
+  }
+  .draw-chip span {
+    display: none;
+  }
+  .draw-chip {
+    padding: 9px 10px;
+  }
+  .draw-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse::after,
+  .badge .live-dot::after,
+  .call.wait .dot {
+    animation: none;
+  }
+  .feed-toggle svg,
+  .legend-pill svg {
+    transition: none;
+  }
 }

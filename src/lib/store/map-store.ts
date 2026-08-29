@@ -32,6 +32,7 @@ export const DEFAULT_VIEW: MapView = {
  *  - bounds: written by the map only, after every move; null until the map has rendered
  *  - features: written by the data loader once; read by tools and the map
  *  - selection: written by tools (select_features) and by the UI (click)
+ *  - activity: written by the tool layer only; read by the page
  */
 export interface MapToolStore {
   getView(): MapView;
@@ -50,6 +51,11 @@ export interface MapToolStore {
   addAnnotation(annotation: Omit<Annotation, "id">): Annotation;
   /** False when the id does not exist. */
   removeAnnotation(id: string): boolean;
+  /**
+   * Append one call to the agent-activity feed. Write-only from here: tools
+   * report what they did, only the page reads it back.
+   */
+  recordActivity(entry: Omit<ActivityEntry, "seq" | "at">): void;
 }
 
 /**
@@ -80,6 +86,44 @@ export interface Annotation {
   icon?: string;
 }
 
+/**
+ * One WebMCP tool call, as the page shows it in the agent-activity feed.
+ * The tool layer records every call it serves, so the human watching the
+ * screen sees what the agent is doing without reading JSON.
+ */
+export interface ActivityEntry {
+  /** Store-assigned, increasing from 1; keeps counting past the cap. */
+  seq: number;
+  /** Tool name, e.g. "draw_shape". */
+  tool: string;
+  /** One humanised line, e.g. `Circle, 800 m — “10-min walk” → drawing:1`. */
+  summary: string;
+  /** The tool's readOnlyHint: reads and writes are shown differently. */
+  readOnly: boolean;
+  /** False when the call answered with an error instead of a result. */
+  ok: boolean;
+  /** Epoch ms. */
+  at: number;
+  /** Ids the call produced or acted on — exactly those named in `summary`. */
+  refIds?: string[];
+}
+
+/**
+ * How many entries the feed keeps. It is a live view of what just happened,
+ * not a log: an unbounded list would grow for as long as the tab is open and
+ * nothing reads past the visible rows.
+ */
+export const ACTIVITY_LIMIT = 50;
+
+/** Newest last, capped; `seq` is unaffected by dropping the oldest. */
+function appendActivity(
+  list: readonly ActivityEntry[],
+  entry: Omit<ActivityEntry, "seq" | "at">,
+  seq: number,
+): ActivityEntry[] {
+  return [...list, { ...entry, seq, at: Date.now() }].slice(-ACTIVITY_LIMIT);
+}
+
 /** Which WebMCP surfaces picked up our tools; null until registration ran. */
 export interface WebMcpInfo {
   surfaces: string[];
@@ -103,6 +147,9 @@ interface MapStore {
   annotationSeq: number;
   addAnnotation: (annotation: Omit<Annotation, "id">) => Annotation;
   removeAnnotation: (id: string) => boolean;
+  activity: ActivityEntry[];
+  activitySeq: number;
+  recordActivity: (entry: Omit<ActivityEntry, "seq" | "at">) => void;
   webmcp: WebMcpInfo | null;
   setWebMcp: (info: WebMcpInfo | null) => void;
 }
@@ -140,6 +187,13 @@ export const useMapStore = create<MapStore>((set, get) => ({
     if (exists) set((s) => ({ annotations: s.annotations.filter((a) => a.id !== id) }));
     return exists;
   },
+  activity: [],
+  activitySeq: 1,
+  recordActivity: (entry) =>
+    set((s) => ({
+      activity: appendActivity(s.activity, entry, s.activitySeq),
+      activitySeq: s.activitySeq + 1,
+    })),
   webmcp: null,
   setWebMcp: (webmcp) => set({ webmcp }),
 }));
@@ -158,6 +212,7 @@ export const zustandToolStore: MapToolStore = {
   getAnnotations: () => useMapStore.getState().annotations,
   addAnnotation: (annotation) => useMapStore.getState().addAnnotation(annotation),
   removeAnnotation: (id) => useMapStore.getState().removeAnnotation(id),
+  recordActivity: (entry) => useMapStore.getState().recordActivity(entry),
 };
 
 export interface MemoryToolStoreInit {
@@ -169,8 +224,17 @@ export interface MemoryToolStoreInit {
   annotations?: Annotation[];
 }
 
+/**
+ * The in-memory adapter plus the one reader tests need. Activity is
+ * write-only on `MapToolStore` because no tool ever reads it back.
+ */
+export interface MemoryToolStore extends MapToolStore {
+  /** Oldest first, capped exactly like the Zustand slice. */
+  getActivity(): readonly ActivityEntry[];
+}
+
 /** In-memory adapter for unit tests. */
-export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MapToolStore {
+export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToolStore {
   let view = { ...(init.view ?? DEFAULT_VIEW) };
   const bounds = init.bounds ?? null;
   const features = init.features ?? [];
@@ -179,6 +243,8 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MapToolSt
   let drawingSeq = drawings.length + 1;
   let annotations = [...(init.annotations ?? [])];
   let annotationSeq = annotations.length + 1;
+  let activity: ActivityEntry[] = [];
+  let activitySeq = 1;
   return {
     getView: () => view,
     setView: (patch) => {
@@ -212,5 +278,9 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MapToolSt
       annotations = annotations.filter((a) => a.id !== id);
       return exists;
     },
+    recordActivity: (entry) => {
+      activity = appendActivity(activity, entry, activitySeq++);
+    },
+    getActivity: () => activity,
   };
 }

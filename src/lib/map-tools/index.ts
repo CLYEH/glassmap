@@ -3,6 +3,7 @@ import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
+import { withActivity } from "./activity";
 import {
   boundsIntersect,
   describeFeature,
@@ -1080,6 +1081,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  // withActivity is applied once, at the only place tools are made: whoever
+  // calls a tool, the human sees that call in the activity feed.
   return [
     getMapState,
     setMapView as GlassMapTool,
@@ -1092,5 +1095,5 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     compareAreas as GlassMapTool,
     measure as GlassMapTool,
     getShareLink,
-  ];
+  ].map((tool) => withActivity(tool, store));
 }

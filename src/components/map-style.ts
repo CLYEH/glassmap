@@ -293,7 +293,13 @@ export function selectionAnchorsToGeoJson(
   return { type: "FeatureCollection", features: out };
 }
 
-/** Layer ids that respond to clicks and show a pointer cursor. */
+/**
+ * Layer ids that respond to clicks and show a pointer cursor: the data layers
+ * only. Labels are excluded so a click never lands on text instead of the
+ * thing it names, and the selection halo is excluded because its rings carry
+ * no feature id — hovering one showed a pointer that promised a selection the
+ * click could not make.
+ */
 export const INTERACTIVE_LAYER_IDS = buildLayerSpecs([])
-  .filter((l) => l.type !== "symbol")
+  .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
   .map((l) => l.id);

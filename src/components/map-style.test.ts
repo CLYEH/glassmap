@@ -7,6 +7,7 @@ import {
   CALM_STROKE_WIDTH,
   INTERACTIVE_LAYER_IDS,
   LABEL_MINZOOM,
+  SELECTION_SOURCE,
   buildLayerSpecs,
   paintOf,
   selectionAnchorsToGeoJson,
@@ -21,7 +22,13 @@ const point = (id: string, at: Position): GlassMapFeature => ({
   properties: props(id),
 });
 
-/** A closed 1-degree square; its coordinate average is its centre. */
+/**
+ * A closed 1-degree square. Its coordinate average is NOT its centre: the ring
+ * repeats the first corner to close itself, so the average of the five stored
+ * positions is pulled 0.1 deg toward the south-west corner — [lng+0.4,
+ * lat+0.4] rather than [lng+0.5, lat+0.5]. That bias is what the halo anchor
+ * actually has, and the assertion below states it rather than hiding it.
+ */
 const square = (id: string, lng: number, lat: number): GlassMapFeature => ({
   type: "Feature",
   geometry: {
@@ -82,11 +89,23 @@ describe("INTERACTIVE_LAYER_IDS", () => {
     for (const id of INTERACTIVE_LAYER_IDS) expect(symbolIds.has(id)).toBe(false);
   });
 
-  it("is exactly the non-symbol layers", () => {
-    const nonSymbol = buildLayerSpecs([])
-      .filter((l) => l.type !== "symbol")
+  it("excludes the selection halo, which is decoration with nothing to select", () => {
+    // The halo rings carry no feature id (see below), so a click on one can
+    // never resolve to a feature. Leaving them interactive gave the user a
+    // pointer cursor over a target that silently does nothing.
+    const halo = buildLayerSpecs([])
+      .filter((l) => "source" in l && l.source === SELECTION_SOURCE)
       .map((l) => l.id);
-    expect(INTERACTIVE_LAYER_IDS).toEqual(nonSymbol);
+    expect(halo.length).toBe(2);
+    for (const id of halo) expect(INTERACTIVE_LAYER_IDS).not.toContain(id);
+  });
+
+  it("is exactly the per-category data layers", () => {
+    const data = buildLayerSpecs([])
+      .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
+      .map((l) => l.id);
+    expect(INTERACTIVE_LAYER_IDS).toEqual(data);
+    expect(INTERACTIVE_LAYER_IDS.length).toBeGreaterThan(0);
   });
 });
 
@@ -167,9 +186,9 @@ describe("the selection halo", () => {
   });
 
   it("carries no feature id, so a ring is not a second way to toggle a feature", () => {
-    // The halo layers are ordinary circle layers and get the click like any
-    // other; if the ring carried the id, clicking it would deselect what it is
-    // pointing at.
+    // The rings are the reason INTERACTIVE_LAYER_IDS excludes their source: a
+    // ring that carried the id of the feature it points at would deselect that
+    // feature when clicked, and one that does not is not a target at all.
     const one = selectionAnchorsToGeoJson([point("osm:node:1", [121.5, 25])], ["osm:node:1"]);
     expect(one.features[0].properties).toEqual({});
   });

@@ -38,7 +38,7 @@ import {
   selectionAnchorsToGeoJson,
   sourceId,
 } from "./map-style";
-import { approximateBounds } from "./viewport-bounds";
+import { approximateBounds, visibleBounds } from "./viewport-bounds";
 
 declare global {
   interface Window {
@@ -92,6 +92,12 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
  * and the chrome can never disagree about where the visible corridor is. Zero
  * below 921px, where the inspector is a bottom sheet and the map container is
  * shortened instead of overlaid.
+ *
+ * This is the single source of truth for the corridor: `applyPadding` puts the
+ * camera centre in it and `pushViewFromMap` publishes its edges as `bounds`,
+ * so the two can never describe different rectangles. It does not follow the
+ * Hide button, because hiding only empties the panel's body — the glass sheet
+ * still covers the lane, so the map under it is still not visible.
  */
 function inspectorLane(): number {
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
@@ -216,7 +222,11 @@ export default function MapCanvas() {
       const pushBounds = () => {
         const width = container.clientWidth || window.innerWidth;
         const height = container.clientHeight || window.innerHeight;
-        store.getState().setBounds(approximateBounds(store.getState().view, width, height));
+        // The same corridor a live map publishes: the inspector's lane is not
+        // part of what anyone can see, and `view.center` is the corridor's
+        // centre, so the extent stays symmetric around it — just narrower.
+        const corridor = Math.max(width - inspectorLane(), 0);
+        store.getState().setBounds(approximateBounds(store.getState().view, corridor, height));
       };
       pushBounds();
       const unsubscribe = store.subscribe((state, previous) => {
@@ -276,7 +286,6 @@ export default function MapCanvas() {
       // A `moveend` our own flyTo caused, not a user gesture - ignore it.
       if (toMap) return;
       const center = map.getCenter();
-      const b = map.getBounds();
       const view: MapView = {
         center: [center.lng, center.lat],
         zoom: map.getZoom(),
@@ -287,7 +296,18 @@ export default function MapCanvas() {
       fromMap = true;
       try {
         store.getState().setView(view);
-        store.getState().setBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+        // Not `map.getBounds()`: that spans the whole canvas, whose eastern
+        // 300-336 px are behind the inspector. See `visibleBounds`.
+        store
+          .getState()
+          .setBounds(
+            visibleBounds(
+              (point) => map.unproject(point),
+              container.clientWidth,
+              container.clientHeight,
+              inspectorLane(),
+            ),
+          );
       } finally {
         fromMap = false;
       }
@@ -309,6 +329,18 @@ export default function MapCanvas() {
         toMap = false;
       }
     };
+
+    // The inspector floats over the map's east edge, so without padding the
+    // camera centre a tool reads back would sit behind it. `setPadding` keeps
+    // the centre coordinate and moves where it lands on screen, into the
+    // corridor the human can actually see. Applied before the first
+    // `pushViewFromMap` so the very first `center`/`bounds` pair a tool can
+    // read already describes that corridor and not the full canvas.
+    const applyPadding = () => {
+      map.setPadding({ top: 0, bottom: 0, left: 0, right: inspectorLane() });
+    };
+    applyPadding();
+    window.addEventListener("resize", applyPadding);
 
     // The transform is valid as soon as the constructor returns, so bounds is
     // available immediately - a tool must not see `bounds: null` for the ~1.4 s
@@ -371,16 +403,6 @@ export default function MapCanvas() {
     });
 
     map.on("moveend", pushViewFromMap);
-
-    // The inspector floats over the map's east edge, so without padding the
-    // camera centre a tool reads back would sit behind it. `setPadding` keeps
-    // the centre coordinate and moves where it lands on screen, into the
-    // corridor the human can actually see.
-    const applyPadding = () => {
-      map.setPadding({ top: 0, bottom: 0, left: 0, right: inspectorLane() });
-    };
-    applyPadding();
-    window.addEventListener("resize", applyPadding);
 
     // --- Hand drawing -----------------------------------------------------
     // Registered outside `load` so drawing works even if the basemap never

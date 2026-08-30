@@ -734,6 +734,29 @@ button {
   gap: 6px;
   flex-shrink: 0;
 }
+/* Categories a shared link declared that this page could not load. Glass and
+   text-mid rather than the amber above it: the map is still usable and there is
+   nothing to act on, so this is disclosure, not a warning. Right-aligned like
+   everything else in the corner, and capped at the warning's width so a long
+   category name wraps instead of pushing the attribution off the map. */
+.share-restore {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-mid);
+  text-align: right;
+}
+.share-restore-cat {
+  font-family: var(--font-mono);
+  color: var(--text-hi);
+}
+
 .share-warning {
   display: flex;
   align-items: center;

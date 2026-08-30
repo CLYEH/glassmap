@@ -133,11 +133,11 @@ export interface MapToolStore {
    * An id with no entry is one nobody claimed: a click or a tool call this
    * page did not watch, or a share link that carried no `su` for it. Those are
    * the ids the surfaces that say "selected by the agent" have to hedge for
-   * rather than assert. Read by `get_share_link` today (through
-   * `userSelectedIds`, for the `su` wire key) and, once the component halves
-   * land, by the address-bar mirror through that same helper and by the UI's
-   * provenance copy — see `userSelectedIds` in `map-tools/share.ts` for why
-   * one writer carrying `su` and the other not is a bug and not a gap.
+   * rather than assert. Read by `get_share_link` (through `userSelectedIds`,
+   * for the `su` wire key), by the address-bar mirror through that same helper
+   * (`components/share-hash.ts`, T-82) and by the UI's provenance copy
+   * (`OnTheMapCard.tsx`) — see `userSelectedIds` in `map-tools/share.ts` for
+   * why one writer carrying `su` and the other not is a bug and not a gap.
    */
   getSelectionSources(): Readonly<Record<string, SelectionSource>>;
   getDrawings(): readonly Drawing[];
@@ -248,7 +248,7 @@ export interface ActivityEntry {
   seq: number;
   /** Tool name, e.g. "draw_shape". */
   tool: string;
-  /** One humanised line, e.g. `Circle, 800 m — “10-min walk” → drawing:1`. */
+  /** One humanised line, e.g. `Drew a circle, 800 m — “10-min walk” → drawing:1`. */
   summary: string;
   /** The tool's readOnlyHint: reads and writes are shown differently. */
   readOnly: boolean;
@@ -420,8 +420,11 @@ interface MapStore {
    * asks the record first and falls back to this bit only for ids the page
    * holds no record for — which after a restore is exactly the complement of
    * `su`. (That fallback is only sound while every live write records a
-   * source; `MapCanvas`'s click path passes none today, which is T-82/T-83's
-   * to close.) The write is unconditional — false is written as loudly as true
+   * source, and since T-82 they all do: the map's tap path and the card's
+   * Remove write `"user"` (`components/MapCanvas.tsx`, `OnTheMapCard.tsx`),
+   * `select_features` writes `"agent"`, and the restore records the `su` ids
+   * as `"user"` — leaving exactly the complement for this bit to speak
+   * for.) The write is unconditional — false is written as loudly as true
    * — so if a document ever restores a second link (`useShareHash` applies at
    * most one per load today) the new link's evidence replaces the old link's
    * instead of outliving it.

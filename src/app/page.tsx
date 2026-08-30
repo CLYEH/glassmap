@@ -7,6 +7,7 @@ import { BrandBar } from "@/components/BrandBar";
 import { DrawToolbar } from "@/components/DrawToolbar";
 import { Inspector } from "@/components/Inspector";
 import { Legend } from "@/components/Legend";
+import { MarkerStatus } from "@/components/MarkerStatus";
 import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
@@ -78,6 +79,10 @@ export default function Home() {
 
       <Inspector />
       <StateOverlay />
+      {/* Off screen: what the bead layers have been asked to draw, in words —
+          the map's marks are pixels on a canvas, and a headless run has no
+          canvas to read. See `MarkerStatus`. */}
+      <MarkerStatus />
     </main>
   );
 }

@@ -55,7 +55,7 @@ export const sourceId = (category: FeatureCategory) => `gm-src-${category}`;
  */
 const asLayer = (spec: object) => spec as AddLayerObject;
 
-/** Paint properties are read back when the selection changes. */
+/** The paint block of a layer spec, for tests that assert the ramp. */
 export const paintOf = (layer: AddLayerObject): Record<string, unknown> =>
   (layer as { paint?: Record<string, unknown> }).paint ?? {};
 
@@ -86,16 +86,112 @@ const HALO_RADIUS = ["interpolate", ["linear"], ["zoom"], 10, 7, 16, 11];
 const POINTS = ["==", ["geometry-type"], "Point"];
 const AREAS = ["!=", ["geometry-type"], "Point"];
 
-/** `true` for features the store currently has selected. */
-const selectedExpr = (ids: readonly string[]) => ["in", ["get", "id"], ["literal", [...ids]]];
+/**
+ * The feature-state key that carries "this one is selected". MapCanvas is the
+ * only writer (`map.setFeatureState`); nothing else puts state on a feature.
+ */
+export const SELECTED_STATE = "selected";
+
+/**
+ * The GeoJSON source every category renders from.
+ *
+ * `promoteId` is what makes the selected look possible at all: a GeoJSON
+ * feature has no id of its own, and `map.setFeatureState` addresses a feature
+ * by *feature id*, never by a property. Promoting `properties.id` — the same
+ * id tools and `store.selection` use — makes the two sides speak one language.
+ */
+export const categorySourceSpec = (): {
+  type: "geojson";
+  data: FeatureCollection;
+  promoteId: string;
+} => ({
+  type: "geojson",
+  data: { type: "FeatureCollection", features: [] },
+  promoteId: "id",
+});
+
+/**
+ * Which category source holds each feature, by id. Feature state is stored per
+ * source, so an id in `store.selection` cannot be marked until we know which
+ * of the six sources to mark it on.
+ */
+export function featureSourceIndex(features: readonly GlassMapFeature[]): Map<string, string> {
+  return new Map(features.map((f) => [f.properties.id, sourceId(f.properties.category)]));
+}
+
+/** How `map.setFeatureState` / `map.removeFeatureState` address one feature. */
+export type FeatureStateTarget = { source: string; id: string };
+
+/**
+ * Move the map's selected-feature state to `selection`, and report what is
+ * flagged afterwards as id -> source (the shape to pass back in as `applied`).
+ *
+ * Only the ids whose membership changed are touched. Clearing everything and
+ * re-setting everything would put the whole selection through MapLibre's paint
+ * -array update on each keystroke of a refinement, which is the cost this
+ * mechanism exists to avoid.
+ *
+ * Ids the store has selected but no dataset has yet are skipped: `featureSources`
+ * only knows the features that are loaded, and feature state cannot be written
+ * without a source to write it to. A later call picks them up.
+ *
+ * `reapply` re-states every addressable selected id even if it was already
+ * flagged. It is for the moment new feature data lands: `setData` reloads the
+ * source's tiles, which ids are even addressable changes with the data, and
+ * whether the reload keeps the previously applied state is MapLibre's internal
+ * business - not something the highlight should depend on.
+ *
+ * Written as a plain function over two callbacks so the diff can be tested
+ * without a live map (the map never loads under the network-isolated e2e run).
+ */
+export function syncSelectionState(args: {
+  selection: readonly string[];
+  /** What the map currently has flagged, id -> source. */
+  applied: ReadonlyMap<string, string>;
+  /** Every feature the store has loaded, id -> source; see `featureSourceIndex`. */
+  featureSources: ReadonlyMap<string, string>;
+  reapply?: boolean;
+  setFeatureState: (target: FeatureStateTarget, state: Record<string, boolean>) => void;
+  removeFeatureState: (target: FeatureStateTarget, key: string) => void;
+}): Map<string, string> {
+  const { selection, applied, featureSources, reapply = false } = args;
+  const next = new Map<string, string>();
+  for (const id of selection) {
+    const source = featureSources.get(id);
+    if (source) next.set(id, source);
+  }
+  for (const [id, source] of applied) {
+    // Only our own key: `removeFeatureState` without one would drop any other
+    // state a future feature might carry.
+    if (next.get(id) !== source) args.removeFeatureState({ source, id }, SELECTED_STATE);
+  }
+  for (const [id, source] of next) {
+    if (reapply || applied.get(id) !== source) {
+      args.setFeatureState({ source, id }, { [SELECTED_STATE]: true });
+    }
+  }
+  return next;
+}
+
+/**
+ * `true` for features the map currently has marked as selected.
+ *
+ * Read from feature state rather than from the ids themselves. The previous
+ * form, `["in", ["get","id"], ["literal", selection]]`, made MapLibre scan the
+ * id array once per feature per evaluation pass — O(features x selected) — and
+ * the whole paint array was re-evaluated on every selection change because the
+ * expression itself changed. A feature-state lookup is O(1), the expressions
+ * are constant, and only the features whose state actually changed are
+ * re-uploaded (see `ProgramConfiguration.updatePaintArrays`).
+ */
+const sel = ["boolean", ["feature-state", SELECTED_STATE], false];
 
 /**
  * Every layer GlassMap adds on top of the basemap, in draw order.
- * Called again whenever the selection changes: the returned `paint` objects are
- * replayed through `setPaintProperty`, so highlighting needs no extra layers.
+ * Built once, at `map.load`: the selected look is driven by feature state, so
+ * no layer or paint property ever has to be rewritten when the selection moves.
  */
-export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] {
-  const sel = selectedExpr(selection);
+export function buildLayerSpecs(): AddLayerObject[] {
   const specs: AddLayerObject[] = [];
 
   for (const category of FEATURE_CATEGORIES) {
@@ -300,6 +396,6 @@ export function selectionAnchorsToGeoJson(
  * no feature id — hovering one showed a pointer that promised a selection the
  * click could not make.
  */
-export const INTERACTIVE_LAYER_IDS = buildLayerSpecs([])
+export const INTERACTIVE_LAYER_IDS = buildLayerSpecs()
   .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
   .map((l) => l.id);

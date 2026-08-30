@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Position } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import {
@@ -7,11 +7,16 @@ import {
   CALM_STROKE_WIDTH,
   INTERACTIVE_LAYER_IDS,
   LABEL_MINZOOM,
+  SELECTED_STATE,
   SELECTION_SOURCE,
   buildLayerSpecs,
+  categorySourceSpec,
+  featureSourceIndex,
   paintOf,
   selectionAnchorsToGeoJson,
   sourceId,
+  syncSelectionState,
+  type FeatureStateTarget,
 } from "./map-style";
 
 const props = (id: string) => ({ id, name: id, category: "park" as const, source: "osm" as const });
@@ -47,30 +52,45 @@ const square = (id: string, lng: number, lat: number): GlassMapFeature => ({
 });
 
 /**
- * map-style.ts is pure, and these three properties are what the rest of T-03
- * relies on: selection highlighting keys on properties.id, clicks must never
+ * map-style.ts is pure, and these properties are what the rest of the map
+ * relies on: the selected look is driven by feature state, clicks must never
  * hit label layers, and every category must have somewhere to render.
  */
 describe("buildLayerSpecs", () => {
-  it("highlights the selected features by matching properties.id", () => {
-    const selection = ["osm:way:1", "listing:02"];
-    const specs = buildLayerSpecs(selection);
-    // The selection reaches the layers as an ["in", ["get","id"], [literal ...]]
-    // expression, so tools that write store.selection light up the right pixels.
-    const wanted = JSON.stringify(["in", ["get", "id"], ["literal", selection]]);
-    expect(JSON.stringify(specs)).toContain(wanted);
+  it("highlights the selected features from feature state", () => {
+    // The map marks a selected feature with `setFeatureState({selected:true})`
+    // and the paint reads it back. This is the whole contract between
+    // MapCanvas and the style; if the key or the shape drifts, the highlight
+    // silently stops appearing while every test that counts ids stays green.
+    const wanted = JSON.stringify(["boolean", ["feature-state", "selected"], false]);
+    expect(JSON.stringify(buildLayerSpecs())).toContain(wanted);
   });
 
-  it("carries the current selection, not a stale one", () => {
-    // An empty selection must still key on id (with an empty literal), otherwise
-    // deselection could never clear a highlight.
-    expect(JSON.stringify(buildLayerSpecs([]))).toContain(
-      JSON.stringify(["in", ["get", "id"], ["literal", []]]),
-    );
+  it("never embeds the selected ids in an expression", () => {
+    // `["in", ["get","id"], ["literal", ids]]` costs a linear scan of the id
+    // array per feature per evaluation pass, and rewriting it on every
+    // selection change re-evaluates the paint array for every feature in the
+    // source. At a few thousand selected ids that was seconds per change; the
+    // layers must therefore not depend on the selection at all.
+    expect(buildLayerSpecs.length).toBe(0);
+    const json = JSON.stringify(buildLayerSpecs());
+    expect(json).not.toContain('"literal"');
+    expect(json).not.toContain('["get","id"]');
+  });
+
+  it("keeps the selected look in paint, where feature state is legal", () => {
+    // MapLibre evaluates `filter` and `layout` without a feature state, so a
+    // selection-dependent value there would either throw at addLayer or
+    // silently never light up.
+    for (const layer of buildLayerSpecs()) {
+      const { filter, layout } = layer as { filter?: unknown; layout?: unknown };
+      expect(JSON.stringify(filter ?? null)).not.toContain("feature-state");
+      expect(JSON.stringify(layout ?? null)).not.toContain("feature-state");
+    }
   });
 
   it("gives every category a source to render into", () => {
-    const specs = buildLayerSpecs([]);
+    const specs = buildLayerSpecs();
     for (const category of FEATURE_CATEGORIES) {
       const src = sourceId(category);
       expect(specs.some((l) => (l as { source?: string }).source === src)).toBe(true);
@@ -78,10 +98,28 @@ describe("buildLayerSpecs", () => {
   });
 });
 
+describe("the sources the selection is addressed through", () => {
+  it("promotes properties.id to the feature id", () => {
+    // `map.setFeatureState` addresses a feature by feature id, and a GeoJSON
+    // feature has none of its own. Without promoteId every call would target
+    // an id no feature has and nothing would ever highlight.
+    expect(categorySourceSpec().promoteId).toBe("id");
+    expect(categorySourceSpec().data).toEqual({ type: "FeatureCollection", features: [] });
+  });
+
+  it("says which source each feature id lives in", () => {
+    // Feature state is stored per source, so a selected id is unusable until
+    // its category is known.
+    const index = featureSourceIndex([point("osm:node:1", [121.5, 25])]);
+    expect(index.get("osm:node:1")).toBe(sourceId("park"));
+    expect(index.get("osm:node:404")).toBeUndefined();
+  });
+});
+
 describe("INTERACTIVE_LAYER_IDS", () => {
   it("excludes symbol/label layers so a click never lands on a label", () => {
     const symbolIds = new Set(
-      buildLayerSpecs([])
+      buildLayerSpecs()
         .filter((l) => l.type === "symbol")
         .map((l) => l.id),
     );
@@ -93,7 +131,7 @@ describe("INTERACTIVE_LAYER_IDS", () => {
     // The halo rings carry no feature id (see below), so a click on one can
     // never resolve to a feature. Leaving them interactive gave the user a
     // pointer cursor over a target that silently does nothing.
-    const halo = buildLayerSpecs([])
+    const halo = buildLayerSpecs()
       .filter((l) => "source" in l && l.source === SELECTION_SOURCE)
       .map((l) => l.id);
     expect(halo.length).toBe(2);
@@ -101,7 +139,7 @@ describe("INTERACTIVE_LAYER_IDS", () => {
   });
 
   it("is exactly the per-category data layers", () => {
-    const data = buildLayerSpecs([])
+    const data = buildLayerSpecs()
       .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
       .map((l) => l.id);
     expect(INTERACTIVE_LAYER_IDS).toEqual(data);
@@ -131,8 +169,7 @@ function forSelected(expr: Expr, selected: boolean): Expr {
   return selected ? list[2] : list[3];
 }
 
-const pointPaint = (selection: string[] = []) =>
-  paintOf(buildLayerSpecs(selection).find((l) => l.id === "gm-park-circle")!);
+const pointPaint = () => paintOf(buildLayerSpecs().find((l) => l.id === "gm-park-circle")!);
 
 describe("the calm ramp below z14", () => {
   it("draws an unselected place as a 2px dot at .55 opacity with a hairline stroke", () => {
@@ -147,7 +184,7 @@ describe("the calm ramp below z14", () => {
   it("does not quieten a selected place at the same zoom", () => {
     // The highlight is the answer to "which ones did you mean": it has to stay
     // exactly as loud as it was before the ramp existed (6 at z10, 12 at z16).
-    const paint = pointPaint(["osm:way:1"]);
+    const paint = pointPaint();
     expect(forSelected(atZoom(paint["circle-radius"], 10), true)).toBe(6);
     expect(forSelected(atZoom(paint["circle-radius"], 13), true)).toBe(9);
     expect(forSelected(atZoom(paint["circle-radius"], 16), true)).toBe(12);
@@ -158,7 +195,7 @@ describe("the calm ramp below z14", () => {
     // Below z14 those two label layers printed a name on every dot in the
     // frame, which is what made the landing view unreadable.
     for (const id of ["gm-mrt_station-label", "gm-listing-label"]) {
-      const layer = buildLayerSpecs([]).find((l) => l.id === id) as { minzoom?: number };
+      const layer = buildLayerSpecs().find((l) => l.id === id) as { minzoom?: number };
       expect(layer.minzoom).toBe(LABEL_MINZOOM);
     }
   });
@@ -168,7 +205,7 @@ describe("the selection halo", () => {
   it("is drawn after everything else GlassMap adds", () => {
     // A ring under a park fill proves nothing. It is the last thing drawn so
     // "highlighted all 8" can be counted by eye.
-    const ids = buildLayerSpecs([]).map((l) => l.id);
+    const ids = buildLayerSpecs().map((l) => l.id);
     expect(ids.slice(-2)).toEqual(["gm-selection-halo-case", "gm-selection-halo"]);
   });
 
@@ -197,5 +234,181 @@ describe("the selection halo", () => {
     // A tool can select an id before the datasets have finished loading, and
     // an unplaceable id must not become a ring at [0, 0].
     expect(selectionAnchorsToGeoJson([], ["osm:node:404"]).features).toEqual([]);
+  });
+});
+
+/**
+ * The selection diff — the one piece of the feature-state highlight with no
+ * other net under it. The e2e suite runs network-isolated, so the basemap never
+ * loads and no browser test ever executes this path; if the diff regresses, the
+ * highlight silently stops matching `store.selection` and everything else stays
+ * green.
+ */
+describe("syncSelectionState", () => {
+  const PARK = sourceId("park");
+  const SCHOOL = sourceId("school");
+  /** Three loaded features across two sources: state is stored per source. */
+  const loaded = new Map([
+    ["a", PARK],
+    ["b", SCHOOL],
+    ["c", PARK],
+  ]);
+
+  const spies = () => ({
+    setFeatureState: vi.fn<(target: FeatureStateTarget, state: Record<string, boolean>) => void>(),
+    removeFeatureState: vi.fn<(target: FeatureStateTarget, key: string) => void>(),
+  });
+
+  it("sets only the ids that entered the selection", () => {
+    // Adding one place to a selection of 500 must cost one setFeatureState,
+    // not 501: re-flagging the whole selection is exactly the paint-array
+    // update this mechanism was built to stop doing.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map([["a", PARK]]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "b" }, { selected: true }]]);
+    expect(calls.removeFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(
+      new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+    );
+  });
+
+  it("removes only the ids that left, and only our own state key", () => {
+    // `removeFeatureState({source, id})` with no key drops *every* state on the
+    // feature. Nothing else writes feature state today, so a blanket removal
+    // would look correct until the first time something does.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a"],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "b" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map([["a", PARK]]));
+  });
+
+  it("touches nothing when the selection only shifts around", () => {
+    // A refinement typically swaps a few ids. The ones that stayed selected are
+    // already flagged and must not be re-written.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["b", "c"],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: PARK, id: "a" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: PARK, id: "c" }, { selected: true }]]);
+    expect(applied).toEqual(
+      new Map([
+        ["b", SCHOOL],
+        ["c", PARK],
+      ]),
+    );
+  });
+
+  it("skips ids no dataset has yet, without touching the map", () => {
+    // A tool can select before the datasets finish loading. Feature state needs
+    // a source to write to, and guessing one would write onto a source that
+    // does not hold the feature.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["osm:node:404"],
+      applied: new Map(),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(calls.removeFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map());
+  });
+
+  it("picks up a select-before-load id when the data arrives", () => {
+    // The whole reason `reapply` exists: select while nothing is loaded (no
+    // call is possible), then feature data lands and the same selection has to
+    // light up. `reapply` also re-states ids that were already flagged, because
+    // `setData` reloads the source's tiles and what survives that is MapLibre's
+    // business, not a guarantee the highlight may lean on.
+    const calls = spies();
+    const early = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map(),
+      featureSources: new Map(),
+      ...calls,
+    });
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(early).toEqual(new Map());
+
+    const afterLoad = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map([["a", PARK]]),
+      featureSources: loaded,
+      reapply: true,
+      ...calls,
+    });
+    expect(calls.setFeatureState.mock.calls).toEqual([
+      [{ source: PARK, id: "a" }, { selected: true }],
+      [{ source: SCHOOL, id: "b" }, { selected: true }],
+    ]);
+    expect(afterLoad).toEqual(
+      new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+    );
+  });
+
+  it("clears exactly the ids it had flagged when the selection empties", () => {
+    // "Clear selection" has to leave no stale highlight behind, and it must not
+    // reach for ids it never set - `applied`, not the whole feature index, is
+    // the list of what is on the map.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: [],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([
+      [{ source: PARK, id: "a" }, SELECTED_STATE],
+      [{ source: SCHOOL, id: "b" }, SELECTED_STATE],
+    ]);
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map());
+  });
+
+  it("moves the flag when a feature's data changes category", () => {
+    // Why the applied ids are tracked with their source rather than as a plain
+    // set: state written on the old source stays there forever if it is not
+    // removed from *that* source, so the feature would keep a highlight nothing
+    // can clear.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a"],
+      applied: new Map([["a", PARK]]),
+      featureSources: new Map([["a", SCHOOL]]),
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: PARK, id: "a" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "a" }, { selected: true }]]);
+    expect(applied).toEqual(new Map([["a", SCHOOL]]));
   });
 });

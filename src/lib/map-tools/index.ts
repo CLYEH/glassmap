@@ -170,15 +170,26 @@ export function validateSetMapView(input: SetMapViewInput): { patch: Partial<Map
 // ---------------------------------------------------------------- schema bits
 
 /**
- * The category vocabulary, and the only place an agent is told how loading
- * works. The wording matters: the old copy said "omit to search every
- * category", which after tier-2 would be a lie — omitting searches what is in
- * memory, and the answer says what it skipped.
+ * The category vocabulary and how loading works: the half of the copy that is
+ * the same for every tool.
+ *
+ * It says nothing about omitting the parameter on purpose. Each tool has its
+ * own default set — find_features filters nothing, describe_surroundings and
+ * compare_areas leave `district` out — so the "omit this" sentence belongs to
+ * the tool, and a schema must never carry two of them saying different things.
+ */
+const CATEGORIES_LOADING =
+  `Always in memory: ${FEATURE_CATEGORIES.join(", ")}. ` +
+  `Points of interest, fetched for the whole city the first time you name one and kept for the rest of the session: ${TIER2_CATEGORIES.join(", ")}. ` +
+  "Naming a category is how you search it - there is no way to search all of them at once.";
+
+/**
+ * The wording of the omit sentence matters: the old copy said "omit to search
+ * every category", which after tier-2 would be a lie — omitting searches what
+ * is in memory, and the answer says what it skipped.
  */
 const CATEGORIES_DESCRIPTION =
-  `Which categories to search. Always in memory: ${FEATURE_CATEGORIES.join(", ")}. ` +
-  `Points of interest, fetched for the whole city the first time you name one and kept for the rest of the session: ${TIER2_CATEGORIES.join(", ")}. ` +
-  "Naming a category is how you search it - there is no way to search all of them at once. " +
+  `Which categories to search. ${CATEGORIES_LOADING} ` +
   "Omit this and the search covers the always-in-memory categories plus the points of interest fetched earlier in this session; the answer then lists what it did not search under unsearched_categories, with how many exist city-wide.";
 
 const categoriesProperty = {
@@ -697,13 +708,19 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         origin = resolved.origin;
         disclosure = resolved.disclosure;
         matched = queryFeatures(store.getFeatures(), resolved);
-        const capped = matched.some((f) => isTier2Category(f.properties.category));
-        if (capped && matched.length > SELECT_MATCH_LIMIT) {
+        // Only the point-of-interest side is counted against the cap. The cap
+        // exists because a citywide category runs to thousands; the six bundled
+        // datasets are small, bounded, and "select every match" has been their
+        // contract since the tool shipped. Counting the whole match set would
+        // let 600 parks refuse a filter that adds three cafes to them, with a
+        // message about POIs that the agent cannot act on.
+        const poiMatches = matched.filter((f) => isTier2Category(f.properties.category)).length;
+        if (poiMatches > SELECT_MATCH_LIMIT) {
           // Selecting a whole citywide category highlights so much that the map
           // says nothing, so the tool refuses instead of doing it: the agent is
           // told the true count and how to ask a smaller question.
           return {
-            error: `${matched.length} features match, more than the ${SELECT_MATCH_LIMIT} select_features will highlight at once. Narrow it with near plus radius_m, within a drawing, or query, then select again.`,
+            error: `${poiMatches} of the ${matched.length} matching features are points of interest, more than the ${SELECT_MATCH_LIMIT} select_features will highlight at once. Narrow it with near plus radius_m, within a drawing, or query, then select again.`,
             matched: matched.length,
             ...disclosure,
             state: state(),
@@ -936,7 +953,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         },
         categories: {
           ...categoriesProperty,
-          description: `Which categories to describe. Omit for ${NEIGHBOUR_CATEGORIES.join(", ")} plus the points of interest already fetched this session - district is never listed, because the district you are standing in is its own field. ${CATEGORIES_DESCRIPTION}`,
+          description: `Which categories to describe. ${CATEGORIES_LOADING} Omit this and the answer describes ${NEIGHBOUR_CATEGORIES.join(", ")} plus the points of interest fetched earlier in this session, and lists what it did not describe under unsearched_categories with how many exist city-wide; district is never described, because the district you are standing in is its own field.`,
         },
       },
       additionalProperties: false,
@@ -983,7 +1000,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const compareAreas: GlassMapTool<CompareAreasInput> = {
     name: "compare_areas",
     description:
-      'Compare two places in one call: how many features of each category are within radius_m of a, how many are within radius_m of b, and the nearest one of each category on each side. Both places are given the same way as anywhere else - a feature id, a place name such as "Zhongshan Station", or a coordinate - and both are counted with exactly the filter find_features uses, so the numbers match what a per-category search would return. Read "summary" out; use by_category to reason and its feature ids to act (select_features, set_map_view). This replaces one find_features call per category per place.',
+      'Compare two places in one call: how many features of each category are within radius_m of a, how many are within radius_m of b, and the nearest one of each category on each side. Both places are given the same way as anywhere else - a feature id, a place name such as "Zhongshan Station", or a coordinate - and both are counted with exactly the filter find_features uses, so the numbers match what a per-category search would return. Read "summary" out; use by_category to reason and its feature ids to act (select_features, set_map_view). A point of interest tagged as two categories - a bakery that also serves fast food - is counted under each of them, exactly as both of their find_features queries return it, so by_category can add up to slightly more than total, which counts places. This replaces one find_features call per category per place.',
     inputSchema: {
       type: "object",
       properties: {
@@ -999,7 +1016,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         },
         categories: {
           ...categoriesProperty,
-          description: `Which categories to count. Omit to count ${COMPARE_CATEGORIES.join(", ")} plus the points of interest already fetched this session - every category except district, which is a property of a place rather than something near it. ${CATEGORIES_DESCRIPTION}`,
+          description: `Which categories to count. ${CATEGORIES_LOADING} Omit this and the answer counts ${COMPARE_CATEGORIES.join(", ")} plus the points of interest fetched earlier in this session, and lists what it did not count under unsearched_categories with how many exist city-wide; district is never counted, because it is a property of a place rather than something near it.`,
         },
       },
       required: ["a", "b"],

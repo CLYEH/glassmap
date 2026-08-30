@@ -245,8 +245,9 @@ describe("naming a category loads it, city-wide", () => {
 
   it("finds a double-tagged POI under either of its categories", async () => {
     /*
-     * A dozen POIs in the real extract are in two category files under one id
-     * (a bakery that is also a fast-food counter). Ids have to stay unique, so
+     * 12 ids in the shipped extract appear in two category files
+     * (public/data/README.md: a bakery that is also a fast-food counter, each
+     * file generated from its own tag query). Ids have to stay unique, so
      * the store merges them — and then a query for the *second* category has to
      * find it, whichever file arrived first. Without this, the answer to "any
      * bakeries?" would depend on what the human asked about ten minutes ago.
@@ -278,12 +279,23 @@ describe("naming a category loads it, city-wide", () => {
 });
 
 describe("the answer is the same whatever order categories were loaded in", () => {
+  /*
+   * Every fixture in this block serves the bakery file as well, so 多那之
+   * (osm:node:112, in both the restaurant and the bakery file) is loaded twice
+   * under one id. That feature is the only place where load order can survive
+   * into an answer - it is the one row the store has to merge - so an
+   * order-invariance test that leaves it out cannot fail for the reason it
+   * exists. The two orders below differ in exactly that: which of its two files
+   * arrives first.
+   */
   it("gives one answer for two load orders", async () => {
-    const forward = tier2Ready();
+    const forward = tier2Ready({}, TIER2_FILES_WITH_BAKERY);
     await call(forward.byName.find_features, { categories: ["cafe"] });
     await call(forward.byName.find_features, { categories: ["restaurant"] });
+    await call(forward.byName.find_features, { categories: ["bakery"] });
 
-    const backward = tier2Ready();
+    const backward = tier2Ready({}, TIER2_FILES_WITH_BAKERY);
+    await call(backward.byName.find_features, { categories: ["bakery"] });
     await call(backward.byName.find_features, { categories: ["restaurant"] });
     await call(backward.byName.find_features, { categories: ["cafe"] });
 
@@ -294,17 +306,20 @@ describe("the answer is the same whatever order categories were loaded in", () =
     expect(await call(forward.byName.get_map_state)).toEqual(
       await call(backward.byName.get_map_state),
     );
+    // category_counts is where a first-file-wins merge shows up loudest: the
+    // same shop would be counted as a restaurant in one session and a bakery in
+    // the other, and the human reading the sidebar would see a different map.
     expect(await call(forward.byName.list_features_in_view)).toEqual(
       await call(backward.byName.list_features_in_view),
     );
   });
 
   it("gives one answer for two orders inside a single call", async () => {
-    const a = tier2Ready();
-    const b = tier2Ready();
+    const a = tier2Ready({}, TIER2_FILES_WITH_BAKERY);
+    const b = tier2Ready({}, TIER2_FILES_WITH_BAKERY);
     expect(
-      await call(a.byName.find_features, { categories: ["cafe", "restaurant"] }),
-    ).toEqual(await call(b.byName.find_features, { categories: ["restaurant", "cafe"] }));
+      await call(a.byName.find_features, { categories: ["bakery", "restaurant"] }),
+    ).toEqual(await call(b.byName.find_features, { categories: ["restaurant", "bakery"] }));
     expect(a.store.getLoadedCategories()).toEqual(b.store.getLoadedCategories());
   });
 });
@@ -415,6 +430,19 @@ describe("a query with no category says what it did not search", () => {
 });
 
 describe("selecting a citywide category", () => {
+  /** Bundled features, in any number: the cap is not about these. */
+  const parks = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      type: "Feature" as const,
+      properties: {
+        id: `osm:way:${5000 + i}`,
+        name: `公園 ${i}`,
+        category: "park" as const,
+        source: "osm" as const,
+      },
+      geometry: { type: "Point" as const, coordinates: [121.53 + i / 100000, 25.03] },
+    }));
+
   it("refuses rather than highlighting the whole city, and says how many", async () => {
     const { byName, store } = tier2Ready({ selection: ["osm:way:10"] });
     const out = await call(byName.select_features, { categories: ["convenience"] });
@@ -444,21 +472,38 @@ describe("selecting a citywide category", () => {
     // The six datasets are small and bounded, and "select every match" has been
     // their contract since the tool shipped. The cap exists for citywide POI
     // files, so it must not quietly change what a park query does.
-    const manyParks = Array.from({ length: SELECT_MATCH_LIMIT + 100 }, (_, i) => ({
-      type: "Feature" as const,
-      properties: {
-        id: `osm:way:${5000 + i}`,
-        name: `公園 ${i}`,
-        category: "park" as const,
-        source: "osm" as const,
-      },
-      geometry: { type: "Point" as const, coordinates: [121.53 + i / 100000, 25.03] },
-    }));
-    const { byName, store } = tier2Ready({ features: manyParks });
+    const { byName, store } = tier2Ready({ features: parks(SELECT_MATCH_LIMIT + 100) });
 
     const out = await call(byName.select_features, { categories: ["park"] });
     expect(out.error).toBeUndefined();
     expect(store.getSelection()).toHaveLength(SELECT_MATCH_LIMIT + 100);
+  });
+
+  it("does not let uncapped bundled matches refuse a mixed filter", async () => {
+    // 600 parks plus 3 cafes: 603 matches, 3 of them points of interest. Arming
+    // the cap on the size of the whole match set refuses this with a sentence
+    // about point-of-interest features the agent cannot act on - the parks were
+    // never the problem, and no narrowing of the POI side would have helped.
+    const { byName, store } = tier2Ready({ features: parks(600) });
+
+    const out = await call(byName.select_features, { categories: ["park", "cafe"] });
+
+    expect(out.error).toBeUndefined();
+    expect(store.getSelection()).toHaveLength(603);
+  });
+
+  it("still refuses when the points of interest alone are over the cap", async () => {
+    // The mirror image: 600 convenience stores plus 3 parks. The refusal names
+    // the 600 that caused it, not the 603 that did not, so "narrow it" is
+    // advice the agent can follow.
+    const { byName, store } = tier2Ready({ features: parks(3), selection: ["osm:way:5000"] });
+
+    const out = await call(byName.select_features, { categories: ["convenience", "park"] });
+
+    expect(out.error).toMatch(String(TIER2_CONVENIENCE_COUNT));
+    expect(out.error).toMatch(String(SELECT_MATCH_LIMIT));
+    expect(out.matched).toBe(TIER2_CONVENIENCE_COUNT + 3);
+    expect(store.getSelection()).toEqual(["osm:way:5000"]);
   });
 });
 
@@ -506,8 +551,8 @@ describe("loaded POI names become places", () => {
 
 describe("a category that will not load", () => {
   it("fails with the category in the message instead of answering nothing", async () => {
-    // The index promises 7 bakeries and the file is missing. "0 bakeries" would
-    // be a confident, wrong answer about a city full of them.
+    // The index lists a bakery file and this server does not serve it.
+    // "0 bakeries" would be a confident, wrong answer about a city full of them.
     const { byName } = tier2Ready();
     const out = await call(byName.find_features, { categories: ["bakery"] });
     expect(out.error).toMatch(/bakery/);
@@ -551,6 +596,20 @@ describe("a category that will not load", () => {
     const out = await call(byName.find_features, { query: "大安" });
     expect(out.error).toBeUndefined();
     expect(Object.keys(out)).toEqual(["total", "returned", "features"]);
+  });
+
+  it("asks for a missing index once, however long the conversation is", async () => {
+    // Every bare query calls for the index to know what it skipped, and on a
+    // page with no tier-2 files it will never be there: five questions were
+    // five 404s. "This deployment has no POI data" is an answer, and answers
+    // are remembered.
+    const { byName, requests } = tier2Ready({}, TIER2_FILES, null);
+
+    for (let i = 0; i < 5; i++) {
+      expect((await call(byName.find_features, { query: "大安" })).error, `query ${i}`).toBeUndefined();
+    }
+
+    expect(requests).toEqual([TIER2_INDEX_URL]);
   });
 });
 
@@ -608,6 +667,48 @@ describe("what the agent is told about categories", () => {
     expect(description).not.toMatch(/Omit to search every category/);
     expect(description).toMatch(/unsearched_categories/);
     expect(description).toMatch(/whole city/i);
+  });
+
+  it("gives each tool exactly one rule for omitting categories", async () => {
+    // describe_surroundings carried two: its own ("omit for the neighbour
+    // categories") and the shared one ("omit and the search covers the
+    // always-in-memory categories"). They disagree about what happens, and an
+    // agent reading a schema has nothing else to check it against - it cannot
+    // try the call and look at the map.
+    const { byName } = tier2Ready();
+    for (const name of [
+      "find_features",
+      "list_features_in_view",
+      "select_features",
+      "describe_surroundings",
+      "compare_areas",
+    ]) {
+      const schema = byName[name].inputSchema as {
+        properties: { categories?: { description?: string } };
+      };
+      const description = schema.properties.categories?.description ?? "";
+      expect(description.match(/\bOmit\b/g) ?? [], name).toHaveLength(1);
+      // Every one of them still explains loading: it is the half no tool can
+      // assume the agent already read somewhere else.
+      expect(description, name).toMatch(/whole city/i);
+    }
+  });
+
+  it("says that a double-tagged POI is counted under each of its categories", async () => {
+    // 多那之 is a restaurant and a bakery, so compare_areas counts it twice and
+    // by_category sums to more than total. Undisclosed, that reads as a bug: an
+    // agent would either report it or "correct" the numbers it reads out.
+    const { byName } = tier2Ready({}, TIER2_FILES_WITH_BAKERY);
+    const out = await call(byName.compare_areas, {
+      a: "Daan Station",
+      b: "Taipei main station",
+      categories: ["bakery", "restaurant"],
+    });
+
+    const a = out.a as { total: number; by_category: Record<string, { count: number }> };
+    const summed = Object.values(a.by_category).reduce((n, c) => n + c.count, 0);
+    expect(summed).toBeGreaterThan(a.total);
+    expect(byName.compare_areas.description).toMatch(/more than total/);
   });
 
   it("still marks POI answers as untrusted content", async () => {

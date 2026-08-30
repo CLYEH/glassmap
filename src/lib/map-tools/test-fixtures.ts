@@ -15,7 +15,7 @@
  */
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
-import { TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
+import { HttpStatusError, TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
 
 type Props = GlassMapFeature["properties"];
 
@@ -264,20 +264,45 @@ export const TIER2_RESTAURANT_COLLECTION = {
     poi("osm:node:111", "越南小吃", "Pho House", "restaurant", [121.544, 25.03], {
       cuisine: "vietnamese",
     }),
-    // Also in the bakery file, under the same id: a dozen POIs in the real
-    // extract are tagged twice, and both queries have to find them.
+    // Also in the bakery file, under the same id: 12 ids in the real extract
+    // appear in two category files, and both queries have to find them.
     poi("osm:node:112", "多那之", "Donutes", "restaurant", [121.5405, 25.0345], {
       cuisine: "bakery;coffee_shop",
     }),
   ],
 };
 
-/** One shop, two files, one id — the double-tagging case, isolated. */
+/**
+ * One shop, two files, one id — the double-tagging case, isolated. Byte-identical
+ * to the restaurant file's copy apart from `category`, which is how all 12
+ * dual-tagged ids look in the shipped extract.
+ */
 export const TIER2_BAKERY_COLLECTION = {
   type: "FeatureCollection",
   features: [
     poi("osm:node:112", "多那之", "Donutes", "bakery", [121.5405, 25.0345], {
       cuisine: "bakery;coffee_shop",
+    }),
+  ],
+};
+
+/**
+ * The same shop, in a bakery file that disagrees with the restaurant file about
+ * every other field.
+ *
+ * This is not hypothetical: `fetch-tier2.mjs --only=<category>` regenerates one
+ * category without touching the others (public/data/README.md), so two files can
+ * be exported weeks apart and an OSM edit in between - a rename, new opening
+ * hours, a nudged centroid - lands in one of them only. The merged feature must
+ * still be one fixed row rather than "whichever file the human's question
+ * happened to fetch first".
+ */
+export const TIER2_BAKERY_COLLECTION_DRIFTED = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:112", "多那之咖啡烘焙", "Donutes Coffee Bakery", "bakery", [121.5406, 25.0346], {
+      cuisine: "bakery;coffee_shop;breakfast",
+      opening_hours: "24/7",
     }),
   ],
 };
@@ -338,10 +363,16 @@ export const TIER2_FILES: Record<string, unknown> = {
   "/data/tier2/convenience.geojson": TIER2_CONVENIENCE_COLLECTION,
 };
 
-/** The same server, plus the bakery file the index promises. */
+/** The same server, plus the bakery file the index lists. */
 export const TIER2_FILES_WITH_BAKERY: Record<string, unknown> = {
   ...TIER2_FILES,
   "/data/tier2/bakery.geojson": TIER2_BAKERY_COLLECTION,
+};
+
+/** The same server, with a bakery file that drifted away from the restaurant one. */
+export const TIER2_FILES_WITH_DRIFTED_BAKERY: Record<string, unknown> = {
+  ...TIER2_FILES,
+  "/data/tier2/bakery.geojson": TIER2_BAKERY_COLLECTION_DRIFTED,
 };
 
 /**
@@ -355,13 +386,17 @@ export function createTier2Fetch(
   index: unknown = TIER2_INDEX,
 ): { fetchJson: FetchJson; requests: string[] } {
   const requests: string[] = [];
+  // A missing file is a 404 with its status attached, exactly as httpFetchJson
+  // reports one: the registry treats 4xx (permanent) and 5xx (a moment)
+  // differently, so a fixture that threw a bare Error would exercise the wrong
+  // branch of the code it is here to test.
   const fetchJson: FetchJson = async (url) => {
     requests.push(url);
     if (url === TIER2_INDEX_URL) {
-      if (index === null) throw new Error(`${url}: 404 Not Found`);
+      if (index === null) throw new HttpStatusError(404, `${url}: 404 Not Found`);
       return index;
     }
-    if (!(url in files)) throw new Error(`${url}: 404 Not Found`);
+    if (!(url in files)) throw new HttpStatusError(404, `${url}: 404 Not Found`);
     return files[url];
   };
   return { fetchJson, requests };

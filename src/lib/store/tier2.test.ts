@@ -9,14 +9,20 @@
  * same session would describe itself differently depending on what the human
  * asked for first.
  */
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryToolStore, useMapStore, zustandToolStore } from "./map-store";
 import {
   createTier2Registry,
   httpFetchJson,
+  HttpStatusError,
+  isPermanentFetchError,
+  parseCategoryFeatures,
   parseManifest,
   resolveTier2File,
   TIER2_CATEGORIES,
+  TIER2_FETCH_TIMEOUT_MS,
   TIER2_INDEX_URL,
   type FetchJson,
   type MapFeature,
@@ -28,6 +34,8 @@ import {
   createTier2Fetch,
   TIER2_CAFE_COLLECTION,
   TIER2_FILES,
+  TIER2_FILES_WITH_BAKERY,
+  TIER2_FILES_WITH_DRIFTED_BAKERY,
   TIER2_INDEX,
 } from "@/lib/map-tools/test-fixtures";
 
@@ -130,8 +138,9 @@ describe("tier-2 loader", () => {
   });
 
   it("names the category when its file is missing, and loads nothing", async () => {
-    // The manifest promises 7 bakeries; the file is not there. Returning an
-    // empty result would tell the agent there are no bakeries in Taipei.
+    // The fixture index lists a bakery file that this server does not serve.
+    // Returning an empty result would tell the agent there are no bakeries in
+    // Taipei, when the truth is that its file never arrived.
     const { registry, loaded, features } = backingFor(createTier2Fetch().fetchJson);
     const result = await registry.loadCategory("bakery");
 
@@ -152,19 +161,54 @@ describe("tier-2 loader", () => {
     expect(result.error).toMatch(TIER2_INDEX_URL);
   });
 
-  it("retries after a failed index instead of poisoning the page", async () => {
-    // One dropped request must not turn every later POI question into "no data"
-    // for as long as the tab is open.
-    let attempts = 0;
-    const fetchJson: FetchJson = async (url) => {
-      if (url === TIER2_INDEX_URL && attempts++ === 0) throw new Error(`${url}: 503 unavailable`);
-      return createTier2Fetch().fetchJson(url);
-    };
-    const { registry, loaded } = backingFor(fetchJson);
+  it("retries after a 5xx or a dropped connection instead of poisoning the page", async () => {
+    // One bad moment must not turn every later POI question into "no data" for
+    // as long as the tab is open. Both flavours are here because they arrive
+    // differently: a mirror returning 503 carries a status, an offline tab
+    // rejects with a bare TypeError from fetch itself.
+    const transient = [
+      new HttpStatusError(503, `${TIER2_INDEX_URL}: 503 Service Unavailable`),
+      new TypeError("Failed to fetch"),
+    ];
+    for (const error of transient) {
+      let attempts = 0;
+      const fetchJson: FetchJson = async (url) => {
+        if (url === TIER2_INDEX_URL && attempts++ === 0) throw error;
+        return createTier2Fetch().fetchJson(url);
+      };
+      const { registry, loaded } = backingFor(fetchJson);
 
-    expect((await registry.loadCategory("cafe")).ok).toBe(false);
-    expect((await registry.loadCategory("cafe")).ok).toBe(true);
-    expect(loaded()).toEqual(["cafe"]);
+      expect((await registry.loadCategory("cafe")).ok, error.name).toBe(false);
+      expect((await registry.loadCategory("cafe")).ok, error.name).toBe(true);
+      expect(loaded()).toEqual(["cafe"]);
+    }
+  });
+
+  it("asks for a missing index once, not once per question", async () => {
+    // The other half of the rule above. A 404 is an answer, not a bad moment:
+    // this deployment ships no POI files, and that cannot change while the tab
+    // is open. Every bare query calls loadManifest to know what it skipped, so
+    // without latching a five-question conversation is five 404s.
+    const { fetchJson, requests } = createTier2Fetch(TIER2_FILES, null);
+    const { registry } = backingFor(fetchJson);
+
+    for (let i = 0; i < 5; i++) expect((await registry.loadManifest()).ok, `call ${i}`).toBe(false);
+
+    expect(requests.filter((u) => u === TIER2_INDEX_URL)).toHaveLength(1);
+  });
+
+  it("keeps saying why after it has stopped asking", async () => {
+    // Latching must not turn into silence: an agent that names a category still
+    // has to be told the index is missing, or "no cafes" reads as "no cafes
+    // exist" rather than "this page has no cafe data".
+    const { registry } = backingFor(createTier2Fetch(TIER2_FILES, null).fetchJson);
+    await registry.loadManifest();
+
+    const result = await registry.loadCategory("cafe");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/cafe/);
+    expect(result.error).toMatch(TIER2_INDEX_URL);
   });
 
   it("refuses a file whose features carry a different category", async () => {
@@ -191,8 +235,10 @@ describe("tier-2 loader", () => {
   });
 
   it("normalises the generator's format into the shape every tool reads", async () => {
-    // The POI files say `name_en` and carry no `source`; the bundled datasets
-    // say `nameEn`. One shape reaches the tools, or every tool needs two paths.
+    // The POI files carry no `source` at all, and spell the English name
+    // `nameEn` exactly as the bundled datasets do (public/data/README.md,
+    // "Tier-2 categories"). One shape reaches the tools, or every tool that
+    // prints a name needs two code paths.
     const { registry, features } = backingFor(createTier2Fetch().fetchJson);
     await registry.loadCategory("cafe");
     expect(features()[0].properties).toEqual({
@@ -204,6 +250,60 @@ describe("tier-2 loader", () => {
       brand: "Louisa Coffee",
       opening_hours: "Mo-Su 07:00-22:00",
     });
+  });
+});
+
+describe("an id that arrives in two category files", () => {
+  /** The merged feature, loaded through the adapter the tools actually use. */
+  async function mergedPoi(files: Record<string, unknown>, order: Tier2Category[]) {
+    const store = createMemoryToolStore({ tier2FetchJson: createTier2Fetch(files).fetchJson });
+    for (const category of order) {
+      expect((await store.loadCategory(category)).ok, category).toBe(true);
+    }
+    const found = store.getFeatures().filter((f) => f.properties.id === "osm:node:112");
+    expect(found, order.join(" then ")).toHaveLength(1);
+    return found[0];
+  }
+
+  it("is one feature under both categories, whichever file arrived first", async () => {
+    const forward = await mergedPoi(TIER2_FILES_WITH_BAKERY, ["restaurant", "bakery"]);
+    const backward = await mergedPoi(TIER2_FILES_WITH_BAKERY, ["bakery", "restaurant"]);
+
+    expect(forward).toEqual(backward);
+    expect(forward.properties.categories).toEqual(["bakery", "restaurant"]);
+    // `category` is the head of the sorted union, not the file that happened to
+    // win the race: it is printed by find_features, select_features and the
+    // activity feed, and two identical questions must print the same word.
+    expect(forward.properties.category).toBe("bakery");
+  });
+
+  it("takes every field from one file, even when the two files disagree", async () => {
+    /*
+     * `fetch-tier2.mjs --only=<category>` regenerates one category without
+     * touching the others (public/data/README.md), so the bakery file and the
+     * restaurant file can be exported weeks apart and an OSM edit in between
+     * lands in one of them only. Merging field by field would then produce a
+     * feature that exists in neither file; taking the lexicographically-first
+     * category's row whole keeps the name, the tags and the category an agent
+     * reads out describing the same place at the same moment in time.
+     */
+    const forward = await mergedPoi(TIER2_FILES_WITH_DRIFTED_BAKERY, ["restaurant", "bakery"]);
+    const backward = await mergedPoi(TIER2_FILES_WITH_DRIFTED_BAKERY, ["bakery", "restaurant"]);
+
+    expect(forward).toEqual(backward);
+    expect(forward.properties).toEqual({
+      id: "osm:node:112",
+      name: "多那之咖啡烘焙",
+      nameEn: "Donutes Coffee Bakery",
+      category: "bakery",
+      categories: ["bakery", "restaurant"],
+      source: "osm",
+      cuisine: "bakery;coffee_shop;breakfast",
+      opening_hours: "24/7",
+    });
+    // Geometry follows the same file, so a distance is measured to the place
+    // that file describes rather than to a blend of two exports.
+    expect(forward.geometry).toEqual({ type: "Point", coordinates: [121.5406, 25.0346] });
   });
 });
 
@@ -356,5 +456,95 @@ describe("httpFetchJson", () => {
     await expect(httpFetchJson("/data/tier2/cafe.geojson")).rejects.toThrow(
       "/data/tier2/cafe.geojson: 404 Not Found",
     );
+  });
+
+  it("says whether the failure is worth asking about again", async () => {
+    // The registry latches a 404 and retries a 500. It decides from the thrown
+    // error, so the status has to survive the throw - matching on the message
+    // text would break the day a mirror words its status line differently.
+    for (const [status, permanent] of [
+      [404, true],
+      [500, false],
+    ] as const) {
+      globalThis.fetch = (async () =>
+        new Response("", { status, statusText: "why" })) as typeof fetch;
+      const error = await httpFetchJson(TIER2_INDEX_URL).catch((e: unknown) => e);
+      expect(isPermanentFetchError(error), String(status)).toBe(permanent);
+    }
+  });
+
+  it("gives a stalled request a deadline, so a tool call cannot hang forever", async () => {
+    // A fetch with no signal waits as long as the tab is open: the tool call
+    // never returns, and an agent has nothing to report or retry - it just
+    // looks like it stopped answering. The 30 s wall clock is not run here (no
+    // test is worth 30 s); what is checked is that a signal is passed at all
+    // and that the abort comes back as a sentence naming the file.
+    let init: RequestInit | undefined;
+    globalThis.fetch = (async (_url: RequestInfo | URL, got?: RequestInit) => {
+      init = got;
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }) as typeof fetch;
+
+    await expect(httpFetchJson("/data/tier2/restaurant.geojson")).rejects.toThrow(
+      `/data/tier2/restaurant.geojson: no response after ${TIER2_FETCH_TIMEOUT_MS / 1000}s`,
+    );
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
+  });
+});
+
+describe("the manifest this repo actually ships", () => {
+  /**
+   * The one test that reads public/data instead of a fixture. Everything else
+   * in the tool layer agrees with a fixture the tool layer wrote; this is where
+   * the two halves of the contract are checked against each other, because
+   * nothing else fails when they drift apart. A category in the data but not in
+   * TIER2_CATEGORIES can never be asked for (no tool schema can name it, and
+   * parseManifest drops it silently); a category in TIER2_CATEGORIES but not in
+   * the data is a tool that offers something the page cannot deliver.
+   */
+  const root = process.cwd();
+  const raw = JSON.parse(
+    readFileSync(path.join(root, "public/data/tier2/index.json"), "utf8"),
+  ) as unknown;
+
+  it("offers exactly the categories the tool schemas can name", () => {
+    const listed = (raw as { categories: { category: string }[] }).categories.map(
+      (c) => c.category,
+    );
+    expect([...listed].sort()).toEqual([...TIER2_CATEGORIES].sort());
+  });
+
+  it("parses, and every entry points at a file that is there", () => {
+    const parsed = parseManifest(raw, TIER2_INDEX_URL);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    // Nothing dropped: parseManifest skipping an entry is exactly how a
+    // vocabulary mismatch would hide itself.
+    expect(parsed.manifest.categories).toHaveLength(TIER2_CATEGORIES.length);
+    for (const entry of parsed.manifest.categories) {
+      const file = path.join(root, "public", resolveTier2File(entry.file));
+      expect(existsSync(file), entry.category).toBe(true);
+      // A category listed with 0 features would be indistinguishable from a
+      // mirror that silently returned nothing (see public/data/README.md).
+      expect(entry.count, entry.category).toBeGreaterThan(0);
+    }
+  });
+
+  it("ships the property shape the loader reads, `nameEn` and all", () => {
+    // The loader takes `nameEn` and no other spelling. If the generator ever
+    // wrote `name_en`, every English name would silently disappear from every
+    // answer - a page that looks fine and quietly lost half its content.
+    const file = path.join(root, "public/data/tier2/hospital.geojson");
+    const parsed = parseCategoryFeatures(
+      JSON.parse(readFileSync(file, "utf8")),
+      "hospital",
+      file,
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.features.length).toBeGreaterThan(0);
+    expect(parsed.features.some((f) => f.properties.nameEn)).toBe(true);
+    expect(parsed.features.every((f) => f.properties.source === "osm")).toBe(true);
   });
 });

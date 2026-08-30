@@ -26,8 +26,8 @@
  *                         so the tool layer can read per-category counts
  *                         without loading every file.
  *
- * Categories (fixed, 18 total - do not rename, the tool layer is coded
- * against these exact strings):
+ * Categories (fixed, 18 total - do not rename, the tool layer will be
+ * coded against these exact strings):
  *   restaurant, cafe, fast_food, bakery, bar, convenience, pharmacy,
  *   clinic, hospital, place_of_worship, bank, hotel, parking,
  *   bicycle_rental, library, museum, post_office, police

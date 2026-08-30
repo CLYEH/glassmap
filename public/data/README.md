@@ -308,30 +308,37 @@ attribution requirement applies.
 
 | Category | Overpass tag | Count | Size |
 |---|---|---:|---:|
-| `restaurant` | `amenity=restaurant` | 13789 | 2452.8 KB |
-| `cafe` | `amenity=cafe` | 2297 | 448.1 KB |
-| `fast_food` | `amenity=fast_food` | 1288 | 278.5 KB |
-| `bakery` | `shop=bakery` | 497 | 85.4 KB |
-| `bar` | `amenity=bar` | 205 | 36.1 KB |
-| `convenience` | `shop=convenience` | 3231 | 649.7 KB |
-| `pharmacy` | `amenity=pharmacy` | 563 | 93.3 KB |
-| `clinic` | `amenity=clinic` | 864 | 143.2 KB |
-| `hospital` | `amenity=hospital` | 74 | 13.6 KB |
-| `place_of_worship` | `amenity=place_of_worship` | 1718 | 289.0 KB |
-| `bank` | `amenity=bank` | 1576 | 330.7 KB |
-| `hotel` | `tourism=hotel` | 576 | 100.7 KB |
-| `parking` | `amenity=parking` | 986 | 166.0 KB |
-| `bicycle_rental` | `amenity=bicycle_rental` | 2602 | 651.8 KB |
-| `library` | `amenity=library` | 209 | 39.5 KB |
-| `museum` | `tourism=museum` | 119 | 25.0 KB |
-| `post_office` | `amenity=post_office` | 254 | 61.0 KB |
-| `police` | `amenity=police` | 220 | 36.0 KB |
+| `restaurant` | `amenity=restaurant` | 13789 | 2591.6 KB |
+| `cafe` | `amenity=cafe` | 2297 | 466.0 KB |
+| `fast_food` | `amenity=fast_food` | 1288 | 293.6 KB |
+| `bakery` | `shop=bakery` | 497 | 90.1 KB |
+| `bar` | `amenity=bar` | 205 | 37.0 KB |
+| `convenience` | `shop=convenience` | 3231 | 681.5 KB |
+| `pharmacy` | `amenity=pharmacy` | 563 | 98.8 KB |
+| `clinic` | `amenity=clinic` | 864 | 153.5 KB |
+| `hospital` | `amenity=hospital` | 74 | 14.6 KB |
+| `place_of_worship` | `amenity=place_of_worship` | 1718 | 305.1 KB |
+| `bank` | `amenity=bank` | 1576 | 370.1 KB |
+| `hotel` | `tourism=hotel` | 576 | 106.4 KB |
+| `parking` | `amenity=parking` | 986 | 180.0 KB |
+| `bicycle_rental` | `amenity=bicycle_rental` | 2602 | 683.2 KB |
+| `library` | `amenity=library` | 209 | 42.3 KB |
+| `museum` | `tourism=museum` | 119 | 26.6 KB |
+| `post_office` | `amenity=post_office` | 254 | 63.8 KB |
+| `police` | `amenity=police` | 220 | 38.7 KB |
 
-Total: 31068 features, 6.11 MB raw / ~0.83 MB gzipped (static hosting
-serves these compressed; the `< 300 KB per file` target in the top-level
-data rules was written for tier-1's much sparser categories and does not
-hold for Taipei's real POI density in `restaurant`, `convenience`,
-`bicycle_rental` and `cafe` — flagged here rather than silently exceeded).
+Sizes above (and the total below) are generated from
+`public/data/tier2/index.json` — the manifest's `bytes`/`count` fields are
+this table's source of truth; a regression test in `data.test.ts` checks
+they still match the files on disk.
+
+Total: 31068 features, 6,392,787 bytes (6.10 MB raw) / ~0.84 MB gzipped
+(static hosting serves these compressed; the `< 300 KB per file` target in
+the top-level data rules was written for tier-1's much sparser categories
+and does not hold for Taipei's real POI density — six of the eighteen
+files exceed it: `restaurant`, `bicycle_rental`, `convenience`, `cafe`,
+`bank` and `place_of_worship` — flagged here rather than silently
+exceeded).
 
 Notes on specific counts:
 

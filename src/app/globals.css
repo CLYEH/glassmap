@@ -593,11 +593,14 @@ button {
      horizontally scrolled chip cuts it mid-number — at 390px "cafe 2,297"
      rendered as "cafe 2", which is not a smaller disclosure but a false one.
      Wrapped, the strip grows upward over the map (the bottom bar is
-     bottom-aligned) and stays whole at every width. */
+     bottom-aligned) and stays whole at every width. The cap is the viewport,
+     not the parent: below the legend's pill breakpoint the legend-zone parent
+     is pill-sized (~121px at 390px), and capping at 100% let long chips like
+     "place_of_worship 1,718" spill onto the basemap unread. */
   flex-wrap: wrap;
   gap: 1px 2px;
   width: fit-content;
-  max-width: 100%;
+  max-width: calc(100vw - 24px);
   margin-bottom: 6px;
   padding: 5px 10px;
   border-radius: var(--radius-s);

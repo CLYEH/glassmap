@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { DEFAULT_VIEW } from "@/lib/store/map-store";
+import { describeCall } from "@/lib/map-tools/activity";
 import {
   keysClash,
   originKey,
@@ -314,5 +315,124 @@ describe("the human trio", () => {
       keys: ["annotation:1"],
       geom: { kind: "vanish", positions: [[121.54, 25.03]], closed: false },
     });
+  });
+});
+
+/**
+ * The seam between the tool layer's geometry echo (T-70) and this registry.
+ *
+ * These do not restate what `describeCall` puts in `fx` — `activity.test.ts`
+ * owns that. They assert the consequence: that a row the real summariser
+ * produced actually lights the map up. Without them the two halves can drift
+ * apart in silence — the echo keeps being written, the effect quietly stops
+ * happening, and every other test in the repo still passes.
+ */
+describe("against the real tool-layer echo", () => {
+  // Everything but `seq` and the tool's name comes from the tool layer, `ok`
+  // included: these rows are the real thing, not a hand-written stand-in.
+  const entryFor = (tool: string, input: object, result: object): FxEntry => ({
+    seq: 1,
+    tool,
+    ...describeCall(tool, input, result),
+  });
+
+  it("drops set_map_view's reticle on the centre the tool answered with", () => {
+    const entry = entryFor(
+      "set_map_view",
+      { place: "Daan Forest Park" },
+      { center: { lng: 121.53609, lat: 25.03045 }, zoom: 15 },
+    );
+    expect(planForEntry(entry, source())?.geom).toEqual({
+      kind: "reticle",
+      at: [121.53609, 25.03045],
+    });
+  });
+
+  it("sweeps describe_surroundings' compass at the resolved origin and radius", () => {
+    const entry = entryFor(
+      "describe_surroundings",
+      { from: "Daan Forest Park", radius_m: 700 },
+      { origin: { lng: 121.53609, lat: 25.03045 }, name: "大安森林公園", total: 12 },
+    );
+    expect(planForEntry(entry, source())?.geom).toEqual({
+      kind: "compass",
+      at: [121.53609, 25.03045],
+      radius_m: 700,
+    });
+  });
+
+  it("rings both of compare_areas' places at the one radius they share", () => {
+    const entry = entryFor(
+      "compare_areas",
+      { a: "Daan Forest Park", b: "Daan Station" },
+      {
+        a: { name: "大安森林公園", origin: { lng: 121.53609, lat: 25.03045 } },
+        b: { name: "大安站", origin: { lng: 121.5436, lat: 25.0334 } },
+        radius_m: 500,
+      },
+    );
+    expect(planForEntry(entry, source())?.geom).toEqual({
+      kind: "twin",
+      a: [121.53609, 25.03045],
+      b: [121.5436, 25.0334],
+      radius_m: 500,
+    });
+  });
+
+  it("glints find_features' own returned page, nearest to the origin first", () => {
+    const entry = entryFor(
+      "find_features",
+      { categories: ["park"], near: "Daan Station", radius_m: 900 },
+      {
+        origin: { lng: 121.5436, lat: 25.0334 },
+        radius_m: 900,
+        total: 3,
+        returned: 3,
+        features: [{ id: "osm:node:1" }, { id: "osm:node:3" }, { id: "osm:node:2" }],
+      },
+    );
+    expect(planForEntry(entry, source())?.geom).toEqual({
+      kind: "find",
+      shape: { type: "circle", at: [121.5436, 25.0334], radius_m: 900 },
+      hits: [
+        [121.5436, 25.0334],
+        [121.55, 25.04],
+        [121.6, 25.05],
+      ],
+    });
+  });
+
+  it("rings nothing for a search the tool never bounded", () => {
+    // A query-only search measured distances from the view centre but looked
+    // everywhere. Drawing a radius there would claim a limit the call did not
+    // apply — the hits are the honest answer, and the hits alone is what shows.
+    const entry = entryFor(
+      "find_features",
+      { query: "park" },
+      {
+        origin: { lng: 121.5436, lat: 25.0334 },
+        total: 1,
+        returned: 1,
+        features: [{ id: "osm:node:1" }],
+      },
+    );
+    expect(planForEntry(entry, source())?.geom).toMatchObject({
+      kind: "find",
+      shape: null,
+      hits: [[121.6, 25.05]],
+    });
+  });
+
+  it("leaves the map calm for the tools whose answers state no point", () => {
+    // Their geometry comes from `refIds` or from nowhere; the echo is
+    // deliberately absent, and this layer must not fill the gap with the
+    // current camera.
+    for (const [tool, input, result] of [
+      ["get_map_state", {}, { features_loaded: 2063 }],
+      ["list_features_in_view", { categories: ["park"] }, { total: 17 }],
+      ["select_features", {}, { state: { selection: { count: 6 } } }],
+    ] as const) {
+      expect(entryFor(tool, input, result).fx, tool).toBeUndefined();
+    }
   });
 });

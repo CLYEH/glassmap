@@ -18,7 +18,14 @@
  *    about the same place are the same target and the later one replaces the
  *    earlier.
  */
-import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import {
+  ACTIVITY_FX_HIT_LIMIT,
+  type ActivityFx,
+  type Annotation,
+  type Drawing,
+  type LngLat,
+  type MapView,
+} from "@/lib/store/map-store";
 import type { Geometry } from "geojson";
 import { round5 } from "@/lib/map-tools/state";
 import { positionsOf } from "../drawing-style";
@@ -82,25 +89,21 @@ export interface FxPlan {
 }
 
 /**
- * The FX-only geometry echo the tool layer attaches to an activity entry
- * (`ActivityEntry.fx`, tool-dev's T-70). Declared structurally rather than
- * imported so this layer compiles — and degrades correctly — both before and
- * after that field lands in the store's type.
+ * The activity entry as this layer needs to read it: the four fields an effect
+ * is derived from, and nothing else. `ActivityEntry` satisfies it structurally,
+ * so the real feed flows straight in while a test can state one row in four
+ * lines instead of seven.
+ *
+ * `fx` is the tool layer's geometry echo (`ActivityEntry.fx`, T-70) — imported
+ * rather than restated, so a change on that side is a compile error here rather
+ * than a silently dead effect.
  */
-export interface FxEcho {
-  origin?: LngLat;
-  originB?: LngLat;
-  radius_m?: number;
-  hitIds?: string[];
-}
-
-/** The activity entry as this layer needs to read it. */
 export interface FxEntry {
   seq: number;
   tool: string;
   ok: boolean;
   refIds?: readonly string[];
-  fx?: FxEcho;
+  fx?: ActivityFx;
 }
 
 /** Everything the plan may read out of the store. Read-only by construction. */
@@ -116,8 +119,12 @@ export interface FxSource {
 /** Blooms are capped: past this many, the rest land as one group (spec v2). */
 export const SELECT_BLOOM_CAP = 30;
 
-/** `hitIds` is already capped at 30 by the contract; this is the FX-side guard. */
-export const FIND_GLINT_CAP = 30;
+/**
+ * One glint per hit, up to the cap the tool layer already truncates `hitIds` at.
+ * Taken from that constant rather than restated, so the two can never disagree
+ * about how much of a page the map is showing.
+ */
+export const FIND_GLINT_CAP = ACTIVITY_FX_HIT_LIMIT;
 
 /** Preemption key for a place. Rounded, so the same place is the same key across tools. */
 export const originKey = ([lng, lat]: LngLat): string =>
@@ -141,12 +148,12 @@ function pathOf(drawing: Drawing): { positions: LngLat[]; closed: boolean } | nu
 const isLngLat = (v: unknown): v is LngLat =>
   Array.isArray(v) && v.length === 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]);
 
-const echoOrigin = (fx: FxEcho | undefined, key: "origin" | "originB"): LngLat | null => {
+const echoOrigin = (fx: ActivityFx | undefined, key: "origin" | "originB"): LngLat | null => {
   const value = fx?.[key];
   return isLngLat(value) ? [value[0], value[1]] : null;
 };
 
-const radiusOf = (fx: FxEcho | undefined): number | null =>
+const radiusOf = (fx: ActivityFx | undefined): number | null =>
   typeof fx?.radius_m === "number" && Number.isFinite(fx.radius_m) && fx.radius_m > 0
     ? fx.radius_m
     : null;

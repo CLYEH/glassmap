@@ -7,6 +7,7 @@ import { ActivityPanel } from "./ActivityFeed";
 import { AddNoteForm } from "./AddNoteForm";
 import { selectActivity } from "./activity-model";
 import { categorySingular } from "./category-labels";
+import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
 import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
@@ -272,7 +273,18 @@ export function Inspector() {
                     data-testid="remove-drawing"
                     data-drawing-id={drawing.id}
                     aria-label={`Remove ${drawing.id}`}
-                    onClick={() => removeDrawing(drawing.id)}
+                    // The shape leaves the store first, so the dissolve is
+                    // played over a ghost of what was there — the artifact
+                    // itself is already gone, which is the honest order.
+                    onClick={() => {
+                      if (removeDrawing(drawing.id)) {
+                        emitHumanFx({
+                          type: "delete",
+                          geometry: drawing.geometry,
+                          id: drawing.id,
+                        });
+                      }
+                    }}
                   >
                     ✕
                   </button>
@@ -310,7 +322,15 @@ export function Inspector() {
                     data-testid="remove-annotation"
                     data-annotation-id={annotation.id}
                     aria-label={`Remove ${annotation.id}`}
-                    onClick={() => removeAnnotation(annotation.id)}
+                    onClick={() => {
+                      if (removeAnnotation(annotation.id)) {
+                        emitHumanFx({
+                          type: "delete",
+                          geometry: { type: "Point", coordinates: annotation.at },
+                          id: annotation.id,
+                        });
+                      }
+                    }}
                   >
                     ✕
                   </button>

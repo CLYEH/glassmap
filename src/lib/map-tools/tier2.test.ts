@@ -101,8 +101,13 @@ describe("a page that never mentions a POI category", () => {
       "drawings",
       "annotations",
     ],
-    list_features_in_view: ["total", "returned", "features"],
-    find_features: ["total", "returned", "features"],
+    // The deliberate decision this list exists to force: both search tools now
+    // echo the origin their distances were measured from, exactly as
+    // describe_surroundings always has. It is not a tier-2 field — it appears
+    // on a page that never touches a POI category, which is why it belongs in
+    // this list rather than in the disclosure ones below.
+    list_features_in_view: ["total", "returned", "features", "origin"],
+    find_features: ["total", "returned", "features", "origin"],
     describe_surroundings: ["origin", "district", "total", "returned", "groups"],
     compare_areas: ["a", "b", "radius_m", "summary"],
     select_features: ["selected", "unknown_ids", "unknown_count", "state"],
@@ -597,7 +602,10 @@ describe("a category that will not load", () => {
     const { byName } = tier2Ready({}, TIER2_FILES, null);
     const out = await call(byName.find_features, { query: "大安" });
     expect(out.error).toBeUndefined();
-    expect(Object.keys(out)).toEqual(["total", "returned", "features"]);
+    // Still the pre-tier-2 answer plus the origin echo every search now carries
+    // — and still nothing about categories, which is what this test is for: a
+    // missing index must not add a disclosure field to the result.
+    expect(Object.keys(out)).toEqual(["total", "returned", "features", "origin"]);
   });
 
   it("asks for a missing index once, however long the conversation is", async () => {

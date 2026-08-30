@@ -2,32 +2,75 @@
 
 import dynamic from "next/dynamic";
 import { ActivityFeed, ActivityTicker } from "@/components/ActivityFeed";
+import { AgentWhisper } from "@/components/AgentWhisper";
 import { Attribution } from "@/components/Attribution";
 import { BrandBar } from "@/components/BrandBar";
-import { DrawToolbar } from "@/components/DrawToolbar";
 import { Inspector } from "@/components/Inspector";
 import { Legend } from "@/components/Legend";
+import { MarkerStatus } from "@/components/MarkerStatus";
+import { OnTheMapCard } from "@/components/OnTheMapCard";
+import { PlacesDock } from "@/components/PlacesTray";
 import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
+import { Tools } from "@/components/Tools";
 import { WebMcpBadge } from "@/components/WebMcpBadge";
+import { AwakenStage } from "@/components/awaken/AwakenStage";
+import { useAwakenController } from "@/components/awaken/controller";
 import { FxLayer } from "@/components/fx/FxLayer";
+import { RestoredChip } from "@/components/RestoredChip";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
+import { useAwakenMode } from "@/components/useAwakenMode";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
 const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false });
 
 /**
- * The map is the page. Everything else is dark glass floating on it: the brand
- * and camera top left, the agent's activity down the west edge, what is on the
- * map in the east lane, and one flex row along the bottom carrying the legend
- * at one end and the attribution and WebMCP badge at the other — which is why
- * they cannot collide however narrow the window gets.
+ * The map is the page, and the page has two states.
  *
- * Below 921px the inspector becomes a bottom sheet and the map is shortened to
- * sit above it (globals.css); the feed moves into the sheet's Activity tab and
- * the last call rides a ticker over the map.
+ * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the three
+ * things they can do (Draw, Note, Share), the Places tray to browse the city
+ * with, the legend's scale, the attribution, and one whisper in the corner
+ * saying the map is also readable by agents. No feed, no tool roster, no
+ * "WebMCP live" badge, no inspector lane — a person who came to look at Taipei
+ * is not shown a dashboard about a protocol they did not ask about (BRIEF
+ * item 3).
+ *
+ * **Agent (`html[data-chrome="awake"]`).** The moment an agent acts — the first
+ * `activity` row, or a restored link that carries agent work — the agent chrome
+ * arrives: the activity feed down the west edge, the inspector lane in the
+ * east, the camera chip, and the badge that says who is here. The mode is
+ * `src/lib/awaken/`'s own `bootMode`, read through `useAwakenMode`, so the
+ * chrome and the awakening cannot disagree about what state the page is in.
+ *
+ * **The crossing itself (`html[data-chrome="waking"]`).** It is not a flip: for
+ * 1800 ms the agent chrome *arrives* — the feed condenses out of light, the
+ * lane slides in from the east displacing the tools and the corner in exact
+ * sync, the spark hands over to the badge, the first call writes itself, and a
+ * toast says out loud what happened (`components/awaken/`). The panels mount
+ * for `waking` because the story needs something to move; the human surfaces
+ * stay until `awake` because the story is made of them leaving.
+ *
+ * `useAwakenController` mounts the one controller this document may have, and
+ * it is mounted *here*, in the page, rather than inside `AwakenStage`: React
+ * runs child effects before parent ones, so a controller in a child would boot
+ * before `ShareStatus` had applied the URL fragment and would write the human
+ * chrome over the boot script's answer for a frame.
+ *
+ * The attribute lives on the root element, written by the controller and,
+ * before hydration, by the inline script in `layout.tsx` — a restored agent
+ * link has to be dressed correctly at the first paint, and a URL fragment never
+ * reaches the server, so nothing React renders can know it in time. The
+ * lifecycle attribute `body[data-awaken]` carries the same three values for
+ * e2e, which waits on "awake" rather than on a frame. The panels themselves
+ * still arrive with hydration — this JSX is what mounts them — so what the
+ * script buys is that nothing which is only true of the human chrome is ever
+ * painted on an agent's link.
+ *
+ * Below 921px the inspector is a bottom sheet and the map is shortened to sit
+ * above it (globals.css) — in human chrome there is no sheet, so the map keeps
+ * the whole screen.
  *
  * `ShareStatus` runs the URL-hash mirror, and a shared link has to reach the
  * store before the map reads its opening camera out of it (otherwise the map
@@ -38,6 +81,13 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 export default function Home() {
   useFeatureData();
   useDevStoreHandle();
+  useAwakenController();
+  const mode = useAwakenMode();
+  /** Is the agent chrome on screen at all — arriving counts. */
+  const agent = mode !== "idle";
+  /** Are the human-only surfaces still there — they leave *during* the story. */
+  const human = mode !== "awake";
+
   return (
     <main data-testid="map-page" className="app">
       {/* Every floating chip lives inside the map, not beside it: below 921px
@@ -53,13 +103,22 @@ export default function Home() {
             the viewport layer above them and below the glass chrome. */}
         <FxLayer />
 
+        {/* The one-time transformation: the light it is made of, and the toast
+            it ends on. Beside `FxLayer` because it is the same kind of thing —
+            imperative, per-frame, pointer-transparent — and because the two
+            must never both be driving the same node. */}
+        <AwakenStage />
+
         <div className="scrim-top" aria-hidden />
         <div className="scrim-bottom" aria-hidden />
 
         <BrandBar />
-        <ActivityFeed />
-        <ActivityTicker />
-        <DrawToolbar />
+        <RestoredChip />
+        {agent ? <ActivityFeed /> : null}
+        {agent ? <ActivityTicker /> : null}
+        <Tools />
+        <OnTheMapCard />
+        <PlacesDock />
 
         <div className="bottom-bar">
           <Legend />
@@ -70,14 +129,24 @@ export default function Home() {
                 could not get. */}
             <ShareRestoreNotice />
             <ShareStatus />
+            {/* The whisper and the badge are the same corner slot in the two
+                chromes: "an agent could read this" until one does, then "an
+                agent is reading this". During the transition both are mounted
+                — the handover from the spark to the badge is a beat of the
+                story, not a swap between two renders. */}
+            {human ? <AgentWhisper /> : null}
             <Attribution />
             <WebMcpBadge />
           </div>
         </div>
       </div>
 
-      <Inspector />
+      {agent ? <Inspector /> : null}
       <StateOverlay />
+      {/* Off screen: what the bead layers have been asked to draw, in words —
+          the map's marks are pixels on a canvas, and a headless run has no
+          canvas to read. See `MarkerStatus`. */}
+      <MarkerStatus />
     </main>
   );
 }

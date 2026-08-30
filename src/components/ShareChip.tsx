@@ -52,7 +52,7 @@ export function ShareChip() {
   return (
     <button
       type="button"
-      className="share-chip"
+      className="tool-chip lg lens"
       data-testid="share-chip"
       data-state={state}
       title="Copy a link that reproduces this exact map"
@@ -79,7 +79,7 @@ export function ShareChip() {
           />
         </svg>
       )}
-      <span>{LABEL[state]}</span>
+      <span className="lbl">{LABEL[state]}</span>
     </button>
   );
 }

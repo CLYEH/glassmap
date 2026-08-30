@@ -68,7 +68,13 @@ import {
   validateLimit,
   validateRadius,
 } from "./query";
-import { decodeShareState, encodeShareState, MAX_SHARE_URL_BYTES, utf8Bytes } from "./share";
+import {
+  decodeShareState,
+  encodeShareState,
+  MAX_SHARE_URL_BYTES,
+  userSelectedIds,
+  utf8Bytes,
+} from "./share";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -444,7 +450,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). features_loaded counts everything searchable, including any point-of-interest category fetched this session, which tier2.loaded names once there is one. Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). features_loaded counts everything searchable, including any point-of-interest category fetched this session, which tier2.loaded names once there is one. Use this instead of a screenshot to know what the map shows. The page keeps its agent chrome hidden until an agent acts, so the first call of a session can report a slightly wider corridor than the human then sees - the inspector lane arrives with that call and narrows the same rectangle list_features_in_view tests against - and every call after it reports the narrowed one.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     // State echoes labels and notes a human may have typed on the page.
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -785,7 +791,19 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         : store.getSelection().filter((id) => byId.has(id) || restoring);
       for (const id of requestedIds) if (!nextIds.includes(id)) nextIds.push(id);
       for (const f of matched) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
-      store.setSelection(nextIds);
+      // Who chose these, recorded at the write — and the two modes are
+      // genuinely different questions. `replace: true` is a selection built
+      // from nothing: the agent named every id in it, so every id is the
+      // agent's, including one the human had clicked before this call threw
+      // that selection away. Keeping the old "user" tag there would credit a
+      // person for a choice the agent made, which is the direction the whole
+      // provenance record exists to prevent. `replace: false` only adds: the
+      // ids it keeps stay whoever the store already says they are, so a
+      // human's own click survives the agent selecting around it.
+      store.setSelection(
+        nextIds,
+        replace ? Object.fromEntries(nextIds.map((id) => [id, "agent" as const])) : "agent",
+      );
 
       // Split before capping, never after. During a restore the retained ids of
       // the link come first and cannot be described yet; one shared cap would
@@ -1235,6 +1253,12 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const hash = encodeShareState({
         view: store.getView(),
         selection,
+        // Which of those ids the human picked themselves, as recorded. It costs
+        // nothing when there are none, and when there are some it is the only
+        // way the recipient's map can tell "the agent chose these" from "the
+        // person did" — otherwise every shared selection looks like the
+        // agent's work on the other side.
+        userSelected: userSelectedIds(selection, store.getSelectionSources()),
         drawings,
         annotations,
         categories,

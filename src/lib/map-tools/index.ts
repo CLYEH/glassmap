@@ -16,7 +16,7 @@ import {
   unsearchedForLookup,
   type Tier2Disclosure,
 } from "./tier2-query";
-import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
+import { describeState, round5, roundPoint, SELECTION_ID_LIMIT } from "./state";
 import { withActivity } from "./activity";
 import {
   boundsIntersect,
@@ -366,14 +366,16 @@ async function resolveQueryInput(
   if ("error" in plan) return { error: plan.error };
 
   const viewCenter = store.getView().center;
-  let origin = viewCenter;
+  // Rounded here, where the distances are measured from, and not on the way
+  // out: the origin the answer prints is then the origin it used, to the metre.
+  let origin = roundPoint(viewCenter);
   let radius_m = rad.radius_m;
   if (input.near !== undefined) {
     const near = resolveNear(input.near, store.getFeatures(), viewCenter);
     if (near.kind === "invalid") return { error: near.error };
     if (near.kind === "none") return { error: "unknown place", ...(await unsearchedForLookup(store)) };
     if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
-    origin = near.center;
+    origin = roundPoint(near.center);
     radius_m = radius_m ?? DEFAULT_RADIUS_M;
   }
 
@@ -570,7 +572,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
       properties: { categories: categoriesProperty, limit: limitProperty },
@@ -590,7 +592,9 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const plan = await planCategories(store, cats.categories);
       if ("error" in plan) return plan;
 
-      const origin = store.getView().center;
+      // Same rounding as find_features, at the same place: what the answer
+      // echoes below is the point these distances were measured from.
+      const origin = roundPoint(store.getView().center);
       const visible = store.getFeatures().filter((f) => {
         const b = featureBounds(f);
         return b ? boundsIntersect(b, bounds) : false;
@@ -598,6 +602,10 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const matched = queryFeatures(visible, { origin, categories: plan.categories });
       return {
         ...listOutput(matched, origin, lim.limit),
+        // Every distance_m and direction below is measured from here, so the
+        // answer says where "here" is instead of leaving the agent to infer it
+        // from a separate get_map_state — and the page can draw the same point.
+        origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
         // A per-category tally of what is on screen, so "what am I looking at?"
         // is one call rather than one call per category. Only worth its tokens
         // once there are POI categories to choose between.
@@ -610,7 +618,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
     inputSchema: {
       type: "object",
       properties: {
@@ -634,6 +642,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ("error" in resolved) return resolved;
       return {
         ...listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit),
+        // What the search was measured from, echoed even when nothing matched:
+        // an empty page still has an origin, and a caller that passed `near`
+        // as a name or an id gets to see the coordinate it resolved to.
+        origin: { lng: round5(resolved.origin[0]), lat: round5(resolved.origin[1]) },
+        // Only when the query was actually constrained by one - a search with
+        // no near/radius_m searched everything, and echoing a radius there
+        // would claim a bound that was never applied.
+        ...(resolved.radius_m !== undefined ? { radius_m: resolved.radius_m } : {}),
         ...resolved.disclosure,
       };
     },
@@ -972,7 +988,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
     name: "describe_surroundings",
     description:
-      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. total is how many features are inside radius_m, returned is how many are described (at most 30, the nearest ones): when total is larger, narrow radius_m or use find_features with a category filter - widening the radius will not reveal the ones that were left out.",
+      "Describe what is around a point the way a person would say it out loud: the district it is in, and the nearby features grouped by compass direction, nearest first, each with its feature id, name and distance in metres. Pass an id straight to select_features or set_map_view to act on something you just described. Use this to answer \"what is around me?\" or \"what is near this listing?\" without a screenshot. When from named an id or a place, name is the place it resolved to, so you can check it is the one you meant. total is how many features are inside radius_m, returned is how many are described (at most 30, the nearest ones): when total is larger, narrow radius_m or use find_features with a category filter - widening the radius will not reveal the ones that were left out.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1003,11 +1019,18 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const plan = await planCategories(store, cats.categories, NEIGHBOUR_CATEGORIES);
       if ("error" in plan) return plan;
 
-      let origin = store.getView().center;
+      // Rounded like resolvePoint's own answer, so whichever branch sets the
+      // origin, it is the point the distances below are measured from.
+      let origin = roundPoint(store.getView().center);
+      // What `from` turned out to name, echoed below. An id or a romanisation
+      // is not something a human recognises, and only this call knows which
+      // place it resolved to — the same echo compare_areas makes for a and b.
+      let name: string | undefined;
       if (inp.from !== undefined) {
         const resolved = resolvePoint(store, inp.from, "from");
         if ("error" in resolved) return resolved;
         origin = resolved.point;
+        name = resolved.name;
       }
 
       const features = store.getFeatures();
@@ -1020,6 +1043,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
 
       return {
         origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
+        ...(name ? { name } : {}),
         district: findDistrict(features, origin),
         // Truncating in silence would teach the agent that a wider radius adds
         // nothing, and it would deny matches it was never shown.

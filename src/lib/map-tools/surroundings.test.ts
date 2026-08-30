@@ -44,6 +44,7 @@ interface Surroundings {
   error?: string;
   candidates?: { id: string }[];
   origin?: { lng: number; lat: number };
+  name?: string;
   district?: string | null;
   total?: number;
   returned?: number;
@@ -241,9 +242,29 @@ describe("describe_surroundings origin", () => {
     const byCoord = await describeAround(byName.describe_surroundings, {
       from: { lng: 121.5436, lat: 25.0334 },
     });
-    expect(byName_).toEqual(byId);
-    expect(byId).toEqual(byCoord);
+    // One point, so one description of it, however the caller said where.
+    // (The name echo is the one field that differs, and its own test below.)
+    const described = (out: Surroundings) => ({ ...out, name: undefined });
+    expect(described(byName_)).toEqual(described(byId));
+    expect(described(byId)).toEqual(described(byCoord));
     expect(byId.origin).toEqual({ lng: 121.5436, lat: 25.0334 });
+  });
+
+  it("echoes the place an id or a name resolved to, and none for a coordinate", async () => {
+    // An agent that passed "osm:node:2" or a romanisation cannot tell which
+    // place it got; the echo is the only thing that lets it check, and it is
+    // what the activity row shows the human instead of an id. A coordinate
+    // named nothing, so the answer claims no name rather than borrowing the
+    // nearest one.
+    const { byName } = toolsFor();
+    const byId = await describeAround(byName.describe_surroundings, { from: "osm:node:2" });
+    const byName_ = await describeAround(byName.describe_surroundings, { from: "Daan Station" });
+    const byCoord = await describeAround(byName.describe_surroundings, {
+      from: { lng: 121.5436, lat: 25.0334 },
+    });
+    expect([byId.name, byName_.name, byCoord.name]).toEqual(["大安", "大安", undefined]);
+    // The view centre named nowhere either — district still answers "where".
+    expect(await describeAround(byName.describe_surroundings)).not.toHaveProperty("name");
   });
 
   it("asks instead of describing the surroundings of the wrong branch", async () => {

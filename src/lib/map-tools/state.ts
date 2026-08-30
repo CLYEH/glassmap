@@ -1,8 +1,17 @@
-import type { Annotation, Bounds, Drawing, MapToolStore, MapView } from "@/lib/store/map-store";
+import type { Annotation, Bounds, Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
 import { measureGeometry, truncate } from "./shapes";
 
 /** Round to 5 decimals (~1 m) to keep tool output small. */
 export const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
+
+/**
+ * A point rounded before it is measured from, not only before it is printed.
+ * Every tool that echoes its origin then echoes the point its own distances
+ * really came from: an agent can recompute any distance_m in the answer and
+ * get the same metre back, and two calls that named the same place cannot
+ * differ by the ~1 m that five decimals hides.
+ */
+export const roundPoint = (p: LngLat): LngLat => [round5(p[0]), round5(p[1])];
 
 /** How many selected ids describeState lists; the count is always exact. */
 export const SELECTION_ID_LIMIT = 20;

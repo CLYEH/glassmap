@@ -176,9 +176,37 @@ export class HttpStatusError extends Error {
   }
 }
 
-/** True for 4xx: the file is not coming, however many times we ask. */
+/**
+ * The 4xx statuses that mean "ask again later", not "stop asking": 408 Request
+ * Timeout (RFC 9110 §15.5.9 — the client MAY repeat the request), 425 Too Early
+ * (RFC 8470 §5.2 — retry once the request is no longer early data) and 429 Too
+ * Many Requests (RFC 6585 §4 — retry after backing off).
+ *
+ * "Retryable" here means the next tool call that needs the category may ask
+ * again; there is no backoff and no retry loop, because there is nothing to
+ * back off from — one probe per call, against a static file on a CDN, and the
+ * agent is not calling faster than a human can read the answers.
+ */
+const RETRYABLE_4XX = new Set([408, 425, 429]);
+
+/**
+ * True when asking again could not possibly help. That is most of 4xx — a 404
+ * means this deployment ships no such file, and re-requesting it once per
+ * question for the life of the tab buys the human nothing but latency.
+ *
+ * It is not *all* of 4xx, and the difference is not academic: a CDN answering
+ * 429 to the 2.5 MB restaurant file is rate limiting, not deleting. Counting
+ * that as permanent would drop the category from every share link this page
+ * goes on to hand out — one busy second turning into a smaller map for every
+ * reader downstream. 5xx and a dropped connection are moments, never facts.
+ */
 export function isPermanentFetchError(e: unknown): boolean {
-  return e instanceof HttpStatusError && e.status >= 400 && e.status < 500;
+  return (
+    e instanceof HttpStatusError &&
+    e.status >= 400 &&
+    e.status < 500 &&
+    !RETRYABLE_4XX.has(e.status)
+  );
 }
 
 /** The fetch a store gets when the app has no tier-2 files (or a test wants none). */

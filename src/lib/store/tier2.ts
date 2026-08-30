@@ -129,6 +129,25 @@ export type Tier2LoadResult =
   | { ok: true; category: Tier2Category; fetched: boolean }
   | { ok: false; category: Tier2Category; error: string };
 
+/** One category a share link declared that this page could not load. */
+export interface Tier2RestoreFailure {
+  category: Tier2Category;
+  /** The loader's own sentence, for the agent to repeat and the page to show. */
+  error: string;
+}
+
+/**
+ * What restoring the categories of a share link ended up doing. `ok` is false
+ * as soon as one category failed: a link is a promise to reproduce the sender's
+ * map, and a map missing one of its categories is not that map.
+ */
+export interface Tier2RestoreResult {
+  ok: boolean;
+  /** Every declared category now in memory, sorted — including ones already loaded. */
+  loaded: Tier2Category[];
+  failed: Tier2RestoreFailure[];
+}
+
 /** JSON fetch used by the registry; rejects with a message a tool can print. */
 export type FetchJson = (url: string) => Promise<unknown>;
 
@@ -289,9 +308,28 @@ export function sortedCategories(categories: readonly Tier2Category[]): Tier2Cat
 }
 
 /**
+ * What a share link should declare: every category in memory *plus* every
+ * category an incoming link is still loading.
+ *
+ * The pending half is the whole point. A recipient's address bar is rewritten a
+ * few hundred milliseconds after the link is applied — long before a 500 KB
+ * category file has arrived — and a mirror that wrote only what had finished
+ * loading would hand the recipient a link to a map without the categories the
+ * sender shared, and without the selection that depends on them. One function
+ * so the tool that hands out a link and the mirror that rewrites the bar cannot
+ * disagree about what the map is.
+ */
+export function shareCategories(
+  loaded: readonly Tier2Category[],
+  pending: readonly Tier2Category[],
+): Tier2Category[] {
+  return sortedCategories([...loaded, ...pending]);
+}
+
+/**
  * What the registry needs from whichever store it is driving. Keeping this to
- * four methods is what lets the Zustand store and the in-memory test store
- * share one implementation — and therefore one behaviour.
+ * one small interface is what lets the Zustand store and the in-memory test
+ * store share one implementation — and therefore one behaviour.
  */
 export interface Tier2Backing {
   fetchJson: FetchJson;
@@ -300,11 +338,20 @@ export interface Tier2Backing {
   getLoadedCategories(): readonly Tier2Category[];
   /** Appends the features (minus ids already present) and marks the category loaded. */
   addLoadedCategory(category: Tier2Category, features: MapFeature[]): void;
+  /** Declared by a share link, not settled yet. Replaced whole, never appended to. */
+  setPendingCategories(categories: Tier2Category[]): void;
+  /** Everything a restore has failed to load so far, replaced whole. */
+  setRestoreFailures(failures: Tier2RestoreFailure[]): void;
 }
 
 export interface Tier2Registry {
   loadManifest(): Promise<Tier2ManifestResult>;
   loadCategory(category: Tier2Category): Promise<Tier2LoadResult>;
+  /**
+   * Load every category a share link declared. See `restoreCategories` below
+   * for the two timing rules the rest of the app depends on.
+   */
+  restoreCategories(categories: readonly Tier2Category[]): Promise<Tier2RestoreResult>;
 }
 
 /**
@@ -389,7 +436,56 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
     return started;
   }
 
-  return { loadManifest, loadCategory };
+  /**
+   * The categories of an incoming share link, loaded before the map is asked
+   * about the features they contain.
+   *
+   * Two timing rules, and both are load-bearing:
+   *
+   *  - **Pending is set synchronously**, before the first await, so anything
+   *    that runs between opening a link and the first file arriving already
+   *    knows those categories are coming. That window is where the damage used
+   *    to happen: the selection a link carries names features nobody has
+   *    fetched yet, and both the address-bar mirror and `select_features` would
+   *    otherwise treat those ids as dead and drop them — the recipient's URL
+   *    losing the sender's selection while the sender watches.
+   *  - **A failure is recorded before its category leaves pending**, so there
+   *    is no instant in which a category is neither still coming nor known to
+   *    have failed. Pruning is allowed exactly in the second state, and a tool
+   *    call landing in a gap between the two would delete the ids the link is
+   *    about while the page could still have said why.
+   *
+   * Sequential and sorted, like `planCategories`: the store then holds the same
+   * features in the same order as the map that produced the link, which is what
+   * "the link reproduces the sender's map" has to mean for a query whose
+   * results tie.
+   */
+  async function restoreCategories(
+    requested: readonly Tier2Category[],
+  ): Promise<Tier2RestoreResult> {
+    const wanted = sortedCategories(requested.filter(isTier2Category));
+    const alreadyLoaded = backing.getLoadedCategories();
+    const loaded = wanted.filter((c) => alreadyLoaded.includes(c));
+    let pending = wanted.filter((c) => !alreadyLoaded.includes(c));
+    backing.setPendingCategories(pending);
+    backing.setRestoreFailures([]);
+    if (!pending.length) return { ok: true, loaded, failed: [] };
+
+    const failed: Tier2RestoreFailure[] = [];
+    for (const category of [...pending]) {
+      const result = await loadCategory(category);
+      if (result.ok) loaded.push(category);
+      else {
+        failed.push({ category, error: result.error });
+        backing.setRestoreFailures([...failed]);
+      }
+      pending = pending.filter((c) => c !== category);
+      backing.setPendingCategories(pending);
+    }
+    return { ok: failed.length === 0, loaded: sortedCategories(loaded), failed };
+  }
+
+  return { loadManifest, loadCategory, restoreCategories };
 }
 
 function message(e: unknown): string {

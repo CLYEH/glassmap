@@ -9,7 +9,7 @@
  *
  * Wire format
  * -----------
- *   hash := "v1." base64url(utf8(JSON payload))
+ *   hash := ("v1." | "v2.") base64url(utf8(JSON payload))
  *
  * The version prefix sits outside the base64 so a build can reject a link it
  * does not understand by reading three characters instead of parsing it.
@@ -21,6 +21,7 @@
  *   b  bearing (omitted when 0)     p  pitch (omitted when 0)
  *   s  [feature id, …]              (omitted when empty)
  *   d  [drawing, …]                 a  [annotation, …]
+ *   t  [tier-2 category name, …]    (v2; omitted when none is loaded)
  *
  *   drawing:     k kind, o source, l label?, and either
  *                c [lng, lat] + r radius_m — a circle, whose 65-point polygon is
@@ -33,16 +34,35 @@
  * that opens the link, and the store hands out ids itself. Decoding therefore
  * yields exactly what `addDrawing` / `addAnnotation` take as an argument.
  *
+ * Versioning
+ * ----------
+ * `t` names the point-of-interest categories the sender had loaded (names, not
+ * features: the recipient fetches the same files). It is the first field whose
+ * absence a reader cannot shrug off — a build that ignored it would restore the
+ * camera and the shapes, silently drop every selected POI because nothing had
+ * fetched it, and then rewrite the recipient's own address bar without them.
+ * So a link that carries `t` is `v2` and a build that only knows `v1` refuses
+ * it out loud, while a link with no tier-2 is still written as `v1`, byte for
+ * byte what this codec has always produced. Versioning by *content* rather than
+ * by build date is what keeps every existing link, and every link a map with no
+ * POIs produces tomorrow, readable by both sides.
+ *
  * Decoding is tolerant on purpose — links get pasted, truncated and hand-edited.
- * A payload that is not v1, not base64url, not JSON, or has no camera comes back
- * as `{ error }`. Everything past that is best effort: an item that cannot be
- * rebuilt (impossible coordinates, more points than `draw_shape` would accept)
+ * A payload whose version is unknown, not base64url, not JSON, or has no camera
+ * comes back as `{ error }`. Everything past that is best effort: an item that
+ * cannot be rebuilt (impossible coordinates, more points than `draw_shape` would accept)
  * is dropped rather than costing the whole map, over-long text is clipped to the
  * same limits the tools enforce, and unknown keys are ignored so that a newer
  * build can add fields without breaking this one.
  */
 import type { Position } from "geojson";
 import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import {
+  isTier2Category,
+  sortedCategories,
+  TIER2_CATEGORIES,
+  type Tier2Category,
+} from "@/lib/store/tier2";
 import { round5 } from "./state";
 import {
   circleGeometry,
@@ -54,8 +74,19 @@ import {
   SHAPE_KINDS,
 } from "./shapes";
 
-export const SHARE_VERSION = "v1";
-const PREFIX = `${SHARE_VERSION}.`;
+/**
+ * The version a link gets when it carries no tier-2 categories: unchanged since
+ * the codec shipped, and still what every such map encodes to, byte for byte.
+ */
+export const SHARE_VERSION_BASE = "v1";
+
+/** The version a link gets once it declares loaded categories (`t`). */
+export const SHARE_VERSION_TIER2 = "v2";
+
+/** Every version this build can read, in the order the error message lists them. */
+export const SHARE_VERSIONS = [SHARE_VERSION_BASE, SHARE_VERSION_TIER2] as const;
+
+const PREFIXES = SHARE_VERSIONS.map((v) => `${v}.`);
 
 /**
  * How long a share link may get, in bytes. 8 KB is the ceiling servers, proxies
@@ -74,6 +105,14 @@ export const MAX_SHARE_HASH_CHARS = 16_384;
 /** A feature id is an id, not a payload; anything longer is not one of ours. */
 const MAX_ID_CHARS = 128;
 
+/**
+ * A link can declare at most the whole vocabulary — there is nothing else to
+ * load. Measured: all of them cost 267 bytes of a 8192-byte URL (see
+ * `share.test.ts`, "the whole vocabulary"), so the ceiling is about bounding
+ * what a hostile link can make a recipient fetch, not about the budget.
+ */
+const MAX_SHARE_CATEGORIES = TIER2_CATEGORIES.length;
+
 /** Drawings and annotations travel without their store-assigned ids. */
 export type ShareDrawing = Omit<Drawing, "id">;
 export type ShareAnnotation = Omit<Annotation, "id">;
@@ -84,6 +123,12 @@ export interface ShareState {
   selection: readonly string[];
   drawings: readonly ShareDrawing[];
   annotations: readonly ShareAnnotation[];
+  /**
+   * Point-of-interest categories the sender had loaded. Optional because a map
+   * that never touched tier-2 has nothing to say here and must encode to
+   * exactly the bytes it always did; see `shareCategories` for what to pass.
+   */
+  categories?: readonly Tier2Category[];
 }
 
 export interface DecodedShareState {
@@ -91,6 +136,8 @@ export interface DecodedShareState {
   selection: string[];
   drawings: ShareDrawing[];
   annotations: ShareAnnotation[];
+  /** Empty for a v1 link, and for a v2 link that declared nothing this build knows. */
+  categories: Tier2Category[];
 }
 
 // --------------------------------------------------------------------- wire
@@ -119,6 +166,7 @@ interface WirePayload {
   s?: string[];
   d?: WireDrawing[];
   a?: WireAnnotation[];
+  t?: string[];
 }
 
 // ----------------------------------------------------------------- helpers
@@ -292,7 +340,20 @@ export function encodeShareState(input: ShareState): string {
     .filter((a): a is WireAnnotation => a !== null);
   if (annotations.length) payload.a = annotations;
 
-  return PREFIX + toBase64Url(JSON.stringify(payload));
+  // Sorted and deduped, like everywhere else tier-2 categories are listed: two
+  // maps holding the same categories must produce the same link, or the hash
+  // mirror would rewrite the address bar over a difference nobody can see.
+  const categories = sortedCategories((input.categories ?? []).filter(isTier2Category)).slice(
+    0,
+    MAX_SHARE_CATEGORIES,
+  );
+  if (categories.length) payload.t = categories;
+
+  // Content decides the version: a map with no tier-2 still encodes to the
+  // exact v1 bytes it always did, so nothing that reads today's links breaks
+  // and the field costs nothing until it is used.
+  const version = categories.length ? SHARE_VERSION_TIER2 : SHARE_VERSION_BASE;
+  return `${version}.${toBase64Url(JSON.stringify(payload))}`;
 }
 
 // ------------------------------------------------------------------- decode
@@ -367,16 +428,17 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
   if (text.length > MAX_SHARE_HASH_CHARS) {
     return { error: `share link is too long: ${text.length} characters` };
   }
-  if (!text.startsWith(PREFIX)) {
+  const prefix = PREFIXES.find((p) => text.startsWith(p));
+  if (!prefix) {
     const version = /^(v\d+)\./.exec(text);
     return {
       error: version
-        ? `unsupported share link version "${version[1]}": this build reads ${SHARE_VERSION}`
-        : `not a GlassMap share link: expected it to start with "${PREFIX}"`,
+        ? `unsupported share link version "${version[1]}": this build reads ${SHARE_VERSIONS.join(", ")}`
+        : `not a GlassMap share link: expected it to start with "${PREFIXES.join('" or "')}"`,
     };
   }
 
-  const json = fromBase64Url(text.slice(PREFIX.length));
+  const json = fromBase64Url(text.slice(prefix.length));
   if (json === null) return { error: "share link payload is not valid base64url" };
 
   let parsed: unknown;
@@ -414,7 +476,17 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
     .map(decodeAnnotation)
     .filter((a): a is ShareAnnotation => a !== null);
 
-  return { view, selection, drawings, annotations };
+  // A name this build has no file for is dropped rather than failing the link:
+  // it can only come from a newer build, and there is nothing to fetch for it
+  // here. The features it would have brought are simply missing, which is what
+  // the restore path reports as unresolved ids.
+  const rawCategories = Array.isArray(payload.t) ? payload.t : [];
+  const categories = sortedCategories(rawCategories.filter(isTier2Category)).slice(
+    0,
+    MAX_SHARE_CATEGORIES,
+  );
+
+  return { view, selection, drawings, annotations, categories };
 }
 
 /** Byte length of a string as it travels in a URL; the number get_share_link reports. */

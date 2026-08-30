@@ -5,6 +5,7 @@ import { FEATURE_CATEGORIES } from "@/lib/data/schema";
 import {
   featureCategories,
   isTier2Category,
+  shareCategories,
   TIER2_CATEGORIES,
   type MapCategory,
   type MapFeature,
@@ -641,7 +642,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
     name: "select_features",
     description:
-      `Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at the limit: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them. A filter that matches more than ${SELECT_MATCH_LIMIT} point-of-interest features is refused rather than highlighting half a city: the answer gives the true count, and near + radius_m, within or query narrows it.`,
+      `Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at the limit: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them. A filter that matches more than ${SELECT_MATCH_LIMIT} point-of-interest features is refused rather than highlighting half a city: the answer gives the true count, and near + radius_m, within or query narrows it. On a page opened from a share link whose point-of-interest categories are still loading, the ids that belong to them stay selected and come back in pending_ids instead of selected: they are not lost, and state.tier2.loading names what is still arriving.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -743,15 +744,35 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       targets.push(...matched);
 
       // Keeping only ids we can still resolve drops leftovers from a previous
-      // dataset instead of carrying dead ids into the UI.
-      const nextIds = replace ? [] : store.getSelection().filter((id) => byId.has(id));
+      // dataset instead of carrying dead ids into the UI — except while a
+      // share link's categories are still arriving. Those ids are not dead,
+      // they are early: this page was opened with a link that named both the
+      // features and the files they live in, and pruning them here is exactly
+      // how a recipient's map used to lose the selection it was sent (the
+      // address bar is rewritten from the store, so the loss propagates into
+      // the recipient's own link). A category settles either way — loaded, or
+      // failed and reported in state.tier2.failed — so the exemption cannot
+      // outlive the answer. Which ids belong to which category cannot be known
+      // before the file arrives (a POI id is "osm:node:<n>", it names no
+      // category), so the exemption is by time, not by id.
+      const restoring = store.getPendingCategories().length > 0;
+      const nextIds = replace
+        ? []
+        : store.getSelection().filter((id) => byId.has(id) || restoring);
       for (const f of targets) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
       store.setSelection(nextIds);
 
+      const kept = nextIds.slice(0, SELECTION_ID_LIMIT);
+      // An id kept for a category still in flight has nothing to describe yet;
+      // pending_ids is where it is accounted for, so `selected` never claims a
+      // feature this page cannot name.
+      const pending_ids = kept.filter((id) => !byId.has(id));
+
       return {
-        selected: nextIds
-          .slice(0, SELECTION_ID_LIMIT)
+        selected: kept
+          .filter((id) => byId.has(id))
           .map((id) => describeFeature(byId.get(id)!, origin)),
+        ...(pending_ids.length ? { pending_ids } : {}),
         ...disclosure,
         // Echoing hundreds of bad ids helps nobody; the count still does.
         unknown_ids: unknown_ids.slice(0, SELECTION_ID_LIMIT),
@@ -1140,7 +1161,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const getShareLink: GlassMapTool = {
     name: "get_share_link",
     description:
-      "Build a link that reproduces this map for whoever opens it: the camera, the selection, every shape and every note, all encoded in the URL itself. Nothing is uploaded and no account is needed - the state travels inside the link, so the person who opens it sees the map you are looking at now, with the human's own drawings still marked as theirs. Give the URL to the human as a URL, so they can send it on. Returns the url and its size in bytes. A map carrying very large hand-drawn shapes can exceed the byte limit a URL has to stay under; then there is no url, only an error saying what to remove. If \"omitted\" comes back, that many shapes or notes could not be encoded and are not in the link - say so rather than promising a complete map.",
+      "Build a link that reproduces this map for whoever opens it: the camera, the selection, every shape and every note, plus the names of any point-of-interest categories loaded this session so the other side loads the same data and the selected places resolve there too, all encoded in the URL itself. Nothing is uploaded and no account is needed - the state travels inside the link, so the person who opens it sees the map you are looking at now, with the human's own drawings still marked as theirs. Give the URL to the human as a URL, so they can send it on. Returns the url and its size in bytes. A map carrying very large hand-drawn shapes can exceed the byte limit a URL has to stay under; then there is no url, only an error saying what to remove. If \"omitted\" comes back, that many shapes or notes could not be encoded and are not in the link - say so rather than promising a complete map.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     // The only tool that echoes nothing back: the URL is base64 this layer
     // built, not OSM or human text, so there is no untrusted content in it.
@@ -1163,7 +1184,21 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const drawings = store.getDrawings();
       const annotations = store.getAnnotations();
       const selection = store.getSelection();
-      const hash = encodeShareState({ view: store.getView(), selection, drawings, annotations });
+      // Names of the loaded categories, not their features: the recipient
+      // fetches the same files. Without them a link whose selection is made of
+      // points of interest arrives at a page that has never heard of them, and
+      // the map the sender is looking at cannot be reproduced at all.
+      const categories = shareCategories(
+        store.getLoadedCategories(),
+        store.getPendingCategories(),
+      );
+      const hash = encodeShareState({
+        view: store.getView(),
+        selection,
+        drawings,
+        annotations,
+        categories,
+      });
       // Any hash already on the base URL is this map's previous state; keeping
       // it would produce a link with two of them, and browsers read the first.
       const url = `${base.trim().split("#")[0]}#${hash}`;
@@ -1172,7 +1207,11 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if (bytes > MAX_SHARE_URL_BYTES) {
         // Naming the wrong culprit is worse than naming none: an agent told to
         // "remove drawings" when the selection is what overflowed will delete
-        // the human's shapes and still not get a link.
+        // the human's shapes and still not get a link. The loaded categories
+        // are deliberately not among the suspects: the whole vocabulary costs
+        // 267 of 8192 bytes (measured in share.test.ts, "the whole
+        // vocabulary") - about nine selected features - so an answer blaming
+        // them would send the agent to unload data that cannot be the reason.
         const advice = drawings.length
           ? `Shapes cost by far the most, and a hand-drawn outline far more than a circle: remove one of the ${drawings.length} drawings and ask again`
           : selection.length > 20

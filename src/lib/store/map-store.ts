@@ -80,7 +80,11 @@ export interface MapToolStore {
    * id it cannot resolve as a leftover to prune.
    */
   getPendingCategories(): readonly Tier2Category[];
-  /** Categories from the incoming link that failed, with the loader's reason. */
+  /**
+   * Categories from the incoming link that failed, with the loader's reason and
+   * whether asking again could ever help. An entry disappears the moment its
+   * category loads by any route, so this never contradicts `getFeatures()`.
+   */
   getRestoreFailures(): readonly Tier2RestoreFailure[];
   /**
    * Load the categories a share link declared. Marks them pending
@@ -221,7 +225,10 @@ interface MapStore {
    * alive until the answer is known.
    */
   tier2Pending: Tier2Category[];
-  /** Non-empty means a shared link's map cannot be reproduced here, and why. */
+  /**
+   * Non-empty means a shared link's map cannot be reproduced here, and why.
+   * A category that loads later leaves this list in the same write.
+   */
   tier2RestoreFailures: Tier2RestoreFailure[];
   /** See `MapToolStore.restoreCategories`; this is the same call, for the page. */
   restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
@@ -310,6 +317,10 @@ const zustandTier2 = createTier2Registry({
     useMapStore.setState((s) => ({
       tier2Features: appendTier2Features(s.features, s.tier2Features, features),
       tier2Loaded: sortedCategories([...s.tier2Loaded, category]),
+      // Same write as the features, so nothing that reads this store can catch
+      // it saying "cafe is loaded" and "cafe could not load" at once — which is
+      // what the restore notice was still showing over a map full of cafes.
+      tier2RestoreFailures: s.tier2RestoreFailures.filter((f) => f.category !== category),
     })),
   getPendingCategories: () => useMapStore.getState().tier2Pending,
   setPendingCategories: (tier2Pending) => useMapStore.setState({ tier2Pending }),
@@ -389,6 +400,7 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     addLoadedCategory: (category, loaded) => {
       tier2Features = appendTier2Features(features, tier2Features, loaded);
       tier2Loaded = sortedCategories([...tier2Loaded, category]);
+      tier2RestoreFailures = tier2RestoreFailures.filter((f) => f.category !== category);
     },
     getPendingCategories: () => tier2Pending,
     setPendingCategories: (categories) => {

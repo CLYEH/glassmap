@@ -21,6 +21,7 @@ import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
 import { SELECT_MATCH_LIMIT, type UnsearchedCategory } from "./tier2-query";
 import {
+  createFlakyTier2Fetch,
   createTier2Fetch,
   FIXTURE_FEATURES,
   TIER2_CONVENIENCE_COUNT,
@@ -46,6 +47,7 @@ interface ToolResult {
   searched_categories?: string[];
   unsearched_categories?: UnsearchedCategory[];
   state?: MapStateOutput;
+  tier2?: MapStateOutput["tier2"];
 }
 
 const call = async (tool: GlassMapTool, input: Record<string, unknown> = {}): Promise<ToolResult> =>
@@ -623,6 +625,26 @@ describe("map state after a load", () => {
     const after = await call(byName.get_map_state);
 
     expect(after.features_loaded).toBe(FIXTURE_FEATURES.length + 3);
+    expect(after.tier2).toEqual({ loaded: ["cafe"], available: 4 });
+  });
+
+  it("stops reporting a category as failed once a query has loaded it", async () => {
+    // Reproduced on the live page: a link's cafe file caught a 503, the human
+    // then asked for cafes and got every one of them, and the state each tool
+    // returns went on carrying "could not load cafe" beside a tier2.loaded that
+    // said cafe. An agent reading that object has to choose which half of it to
+    // believe, and it is the wrong half it reads out to the human - over a map
+    // that is showing the cafes it is apologising for.
+    const { byName, store } = tier2Ready({
+      tier2FetchJson: createFlakyTier2Fetch("cafe", 1).fetchJson,
+    });
+    expect((await store.restoreCategories(["cafe"])).ok, "the 503 restore").toBe(false);
+    const failed = await call(byName.get_map_state);
+    expect(failed.tier2?.failed?.map((f) => f.category)).toEqual(["cafe"]);
+
+    expect((await call(byName.find_features, { categories: ["cafe"] })).error).toBeUndefined();
+
+    const after = await call(byName.get_map_state);
     expect(after.tier2).toEqual({ loaded: ["cafe"], available: 4 });
   });
 

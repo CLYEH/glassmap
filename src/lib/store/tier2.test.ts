@@ -21,6 +21,7 @@ import {
   parseCategoryFeatures,
   parseManifest,
   resolveTier2File,
+  shareCategories,
   TIER2_CATEGORIES,
   TIER2_FETCH_TIMEOUT_MS,
   TIER2_INDEX_URL,
@@ -32,6 +33,7 @@ import {
   type Tier2RestoreFailure,
 } from "./tier2";
 import {
+  createFlakyTier2Fetch,
   createGatedTier2Fetch,
   createTier2Fetch,
   TIER2_CAFE_COLLECTION,
@@ -75,6 +77,11 @@ function backingFor(fetchJson: FetchJson) {
     addLoadedCategory: (category, incoming) => {
       loaded = [...loaded, category].sort();
       features = [...features, ...incoming];
+      // Both shipped backings clear the failure in this same write; a model
+      // that did not would let these tests pass over an app that still calls a
+      // loaded category unloadable.
+      failures = failures.filter((f) => f.category !== category);
+      snapshot();
     },
     getPendingCategories: () => pending,
     setPendingCategories: (categories) => {
@@ -453,6 +460,47 @@ describe("restoring the categories a share link declared", () => {
     expect(failures().map((f) => f.category)).toEqual(["bakery"]);
   });
 
+  it("records whether asking again could help, per category", async () => {
+    // Three failures that read alike in `error` and are not the same event: the
+    // bakery is listed with no file behind it (404), the cafe is one second of
+    // a server having a bad time (503), the pharmacy is not in this build's
+    // index at all. `shareCategories` turns this single boolean into whether
+    // the link this page hands on still declares the category, so guessing it
+    // here would make one bad second shrink the map for every reader
+    // downstream - or make a link promise a file nobody serves.
+    const { registry, failures } = backingFor(createFlakyTier2Fetch("cafe").fetchJson);
+
+    const result = await registry.restoreCategories(["cafe", "bakery", "pharmacy"]);
+
+    expect(result.failed.map((f) => [f.category, f.permanent])).toEqual([
+      ["bakery", true],
+      ["cafe", false],
+      ["pharmacy", true],
+    ]);
+    expect(failures()).toEqual(result.failed);
+  });
+
+  it("calls every category permanent when the index itself is a 404", async () => {
+    // A page whose data never shipped: there is no file for any of these, and
+    // no later request can produce one. Treating that as a moment would have
+    // every link this page touches keep declaring categories it cannot serve,
+    // and each reader would wait for the same 404 the page already knows about.
+    const { registry } = backingFor(createTier2Fetch({}, null).fetchJson);
+    const result = await registry.restoreCategories(["cafe"]);
+    expect(result.failed.map((f) => f.permanent)).toEqual([true]);
+  });
+
+  it("keeps a 5xx on the index retryable, because the file may well be there", async () => {
+    // The mirror image, and the reason the flag is not simply "did the index
+    // load": a bad gateway now says nothing about what this deployment ships.
+    const failing: FetchJson = async (url) => {
+      throw new HttpStatusError(503, `${url}: 503 Service Unavailable`);
+    };
+    const { registry } = backingFor(failing);
+    const result = await registry.restoreCategories(["cafe"]);
+    expect(result.failed.map((f) => f.permanent)).toEqual([false]);
+  });
+
   it("asks for one file at a time, so the recipient's store is built in link order", async () => {
     // The sorted order is only reproducible if the fetches are sequential:
     // started together, the files land in whatever order the network returns
@@ -472,6 +520,56 @@ describe("restoring the categories a share link declared", () => {
       "/data/tier2/cafe.geojson",
       "/data/tier2/restaurant.geojson",
     ]);
+  });
+});
+
+/**
+ * What a link declares.
+ *
+ * One function behind both `get_share_link` and the address bar, so the link an
+ * agent hands out and the link a human copies out of the URL cannot describe
+ * two different maps.
+ */
+describe("the categories a share link declares", () => {
+  const failure = (category: Tier2Category, permanent: boolean): Tier2RestoreFailure => ({
+    category,
+    error: `could not load "${category}"`,
+    permanent,
+  });
+
+  it("still declares a category whose file failed for a moment", () => {
+    // The recipient whose cafe file caught a 503 re-shares the link they were
+    // sent - the address bar does it for them, 300 ms in. Dropping cafe here
+    // would hand the third reader the sender's cafe ids with no category
+    // declaring them: a selection that page will never resolve, from a link
+    // that looks perfectly well formed. One bad second on one machine would
+    // permanently shrink the map for everyone downstream of it. Keeping the
+    // category simply means the next page asks the server again.
+    expect(shareCategories(["restaurant"], [], [failure("cafe", false)])).toEqual([
+      "cafe",
+      "restaurant",
+    ]);
+  });
+
+  it("stops declaring a category this deployment does not ship", () => {
+    // A 404 is not a moment: no reader of this link will ever get that file, so
+    // declaring it only makes each of them wait for the same missing request.
+    // This page has already pruned the ids that depended on it for that reason.
+    expect(shareCategories(["restaurant"], [], [failure("cafe", true)])).toEqual(["restaurant"]);
+  });
+
+  it("merges loaded, still-arriving and retryable categories into one sorted list", () => {
+    // All three states exist at once in the second after a link is applied, and
+    // a category can be in two of them - loaded now, failed a minute ago. The
+    // result is deduped and sorted so two pages holding the same map produce
+    // the same link, byte for byte.
+    expect(
+      shareCategories(
+        ["restaurant", "cafe"],
+        ["convenience", "cafe"],
+        [failure("bakery", false), failure("cafe", false), failure("pharmacy", true)],
+      ),
+    ).toEqual(["bakery", "cafe", "convenience", "restaurant"]);
   });
 });
 
@@ -591,17 +689,23 @@ describe("the store the app ships", () => {
     vi.restoreAllMocks();
   });
 
-  /** Serves the fixture over `fetch`, so httpFetchJson is exercised too. */
-  function serveFixture() {
-    const { fetchJson } = createTier2Fetch();
+  /** Serves a tier-2 server over `fetch`, so httpFetchJson is exercised too. */
+  function serveWith(fetchJson: FetchJson) {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       try {
         return new Response(JSON.stringify(await fetchJson(url)), { status: 200 });
-      } catch {
-        return new Response("not found", { status: 404, statusText: "Not Found" });
+      } catch (e) {
+        // The status has to survive the round trip: it is what the registry
+        // reads back out of httpFetchJson to tell a moment from a fact.
+        const status = e instanceof HttpStatusError ? e.status : 404;
+        return new Response("no", { status, statusText: status === 404 ? "Not Found" : "Busy" });
       }
     }) as typeof fetch;
+  }
+
+  function serveFixture() {
+    serveWith(createTier2Fetch().fetchJson);
   }
 
   it("loads a category through fetch and shows it to the tool layer", async () => {
@@ -670,6 +774,32 @@ describe("the store the app ships", () => {
     expect(result.ok).toBe(false);
     expect(useMapStore.getState().tier2RestoreFailures).toEqual(result.failed);
     expect(zustandToolStore.getRestoreFailures()[0].error).toMatch(/bakery/);
+  });
+
+  it("stops calling a category unloadable the moment its features are in memory", async () => {
+    // Reproduced on the live page: a link's cafe file failed, the agent then
+    // asked for cafes by name and got all of them, and the page went on saying
+    // "couldn't load cafe" over a map, a legend and a state object that all
+    // said cafe. The notice is rendered from this list, so the list is where
+    // the contradiction has to be impossible - not in each surface that reads
+    // it. Pinned on both backings because every tool test asserts against the
+    // in-memory one: a rule only the shipped store followed would be a rule no
+    // test in this repo could see broken.
+    serveWith(createFlakyTier2Fetch("cafe", 1).fetchJson);
+    const memory = createMemoryToolStore({
+      tier2FetchJson: createFlakyTier2Fetch("cafe", 1).fetchJson,
+    });
+
+    for (const store of [zustandToolStore, memory]) {
+      expect((await store.restoreCategories(["cafe"])).ok, "the 503 restore").toBe(false);
+      expect(store.getRestoreFailures().map((f) => f.category)).toEqual(["cafe"]);
+      expect(store.getLoadedCategories()).toEqual([]);
+
+      expect(await store.loadCategory("cafe")).toMatchObject({ ok: true, fetched: true });
+
+      expect(store.getLoadedCategories()).toEqual(["cafe"]);
+      expect(store.getRestoreFailures()).toEqual([]);
+    }
   });
 
   it("never fetches a category nobody asked for", async () => {

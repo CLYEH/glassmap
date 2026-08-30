@@ -403,6 +403,37 @@ export function createTier2Fetch(
 }
 
 /**
+ * A tier-2 server whose file for one category answers 503 — the bad second, as
+ * opposed to the 404 `createTier2Fetch` already serves for a file that was
+ * never shipped.
+ *
+ * The two are not interchangeable anywhere the failure outlives the request: a
+ * 404 says this deployment has no such file and a link may stop declaring the
+ * category, while a 503 says only that this second went badly, and every reader
+ * downstream of this page must still be told the category is part of the map.
+ * `times` is how many requests fail before the file starts serving, so one call
+ * can be a blip a retry gets past (`times: 1`) or an outage that outlives the
+ * page (the default).
+ */
+export function createFlakyTier2Fetch(
+  category: string,
+  times = Number.POSITIVE_INFINITY,
+): { fetchJson: FetchJson; requests: string[] } {
+  const server = createTier2Fetch();
+  const file = `/data/tier2/${category}.geojson`;
+  let failed = 0;
+  const fetchJson: FetchJson = async (url) => {
+    if (url === file && failed < times) {
+      failed += 1;
+      server.requests.push(url);
+      throw new HttpStatusError(503, `${url}: 503 Service Unavailable`);
+    }
+    return server.fetchJson(url);
+  };
+  return { fetchJson, requests: server.requests };
+}
+
+/**
  * The same server with its category files held open until `release()`.
  *
  * Everything share links promise about tier-2 is about the window between a

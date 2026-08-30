@@ -127,13 +127,21 @@ export type Tier2ManifestResult =
 export type Tier2LoadResult =
   /** `fetched` is false when the category was already in memory. */
   | { ok: true; category: Tier2Category; fetched: boolean }
-  | { ok: false; category: Tier2Category; error: string };
+  | { ok: false; category: Tier2Category; error: string; permanent: boolean };
 
 /** One category a share link declared that this page could not load. */
 export interface Tier2RestoreFailure {
   category: Tier2Category;
   /** The loader's own sentence, for the agent to repeat and the page to show. */
   error: string;
+  /**
+   * True when this deployment does not offer the file at all — a 4xx, or a
+   * category the index it did serve does not list. False for a moment: a 5xx, a
+   * dropped connection, a timeout, a file that arrived unreadable. The
+   * difference is not cosmetic; it decides whether a link this page hands on
+   * still declares the category (see `shareCategories`).
+   */
+  permanent: boolean;
 }
 
 /**
@@ -318,12 +326,32 @@ export function sortedCategories(categories: readonly Tier2Category[]): Tier2Cat
  * sender shared, and without the selection that depends on them. One function
  * so the tool that hands out a link and the mirror that rewrites the bar cannot
  * disagree about what the map is.
+ *
+ * The third argument is the same argument one step later. A failure that was a
+ * moment — a 5xx, a dropped connection — must not permanently downgrade every
+ * link downstream of it: the recipient whose cafe file caught a bad second
+ * would otherwise hand on a link whose cafe ids are declared by no category,
+ * and the third reader gets a selection nothing will ever resolve. So a
+ * non-permanent failure keeps its category declared: the next page to open the
+ * link asks for the file again, which is exactly what "transient" means.
+ * Permanent failures (4xx, or a category this build's index does not list) are
+ * dropped, because there is no page for which that file exists, and a link
+ * declaring it would only make the next reader wait for the same 404.
+ *
+ * Callers pass all three lists rather than a store, so the tool that hands out
+ * a link and the mirror that rewrites the address bar cannot pick different
+ * halves of the same state.
  */
 export function shareCategories(
   loaded: readonly Tier2Category[],
   pending: readonly Tier2Category[],
+  failures: readonly Tier2RestoreFailure[],
 ): Tier2Category[] {
-  return sortedCategories([...loaded, ...pending]);
+  return sortedCategories([
+    ...loaded,
+    ...pending,
+    ...failures.filter((f) => !f.permanent).map((f) => f.category),
+  ]);
 }
 
 /**
@@ -336,7 +364,14 @@ export interface Tier2Backing {
   getManifest(): Tier2Manifest | null;
   setManifest(manifest: Tier2Manifest): void;
   getLoadedCategories(): readonly Tier2Category[];
-  /** Appends the features (minus ids already present) and marks the category loaded. */
+  /**
+   * Appends the features (minus ids already present), marks the category
+   * loaded, and clears any restore failure recorded against it. The last part
+   * is not bookkeeping: a category whose features are in memory cannot at the
+   * same time be one this page "could not load", and a notice that says
+   * otherwise is a lie told over a map that visibly contradicts it. One write,
+   * so no subscriber can observe the two halves disagreeing.
+   */
   addLoadedCategory(category: Tier2Category, features: MapFeature[]): void;
   /**
    * Categories declared by a share link that have not settled yet. Read as well
@@ -410,6 +445,9 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
         ok: false,
         category,
         error: `could not load "${category}": the category index did not load (${manifest.error})`,
+        // `manifestAbsent` is set by a 4xx and nothing else, so it is the same
+        // question one level up: is there tier-2 data on this deployment at all?
+        permanent: manifestAbsent !== null,
       };
     }
     const entry = manifest.manifest.categories.find((c) => c.category === category);
@@ -418,16 +456,27 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
         ok: false,
         category,
         error: `no data file for category "${category}": it is not listed in ${TIER2_INDEX_URL}`,
+        // An index this page did read, that does not name the category: as
+        // final an answer as a 404, and it will not change while the tab lives.
+        permanent: true,
       };
     }
     const url = resolveTier2File(entry.file);
     try {
       const parsed = parseCategoryFeatures(await backing.fetchJson(url), category, url);
-      if (!parsed.ok) return { ok: false, category, error: parsed.error };
+      // The file was served and could not be read. Not permanent: the deployment
+      // does offer this category, and calling it absent would quietly delete it
+      // from every link that passes through this page.
+      if (!parsed.ok) return { ok: false, category, error: parsed.error, permanent: false };
       backing.addLoadedCategory(category, parsed.features);
       return { ok: true, category, fetched: true };
     } catch (e) {
-      return { ok: false, category, error: `could not load "${category}": ${message(e)}` };
+      return {
+        ok: false,
+        category,
+        error: `could not load "${category}": ${message(e)}`,
+        permanent: isPermanentFetchError(e),
+      };
     }
   }
 
@@ -499,7 +548,7 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
       const result = await loadCategory(category);
       if (result.ok) loaded.push(category);
       else {
-        const failure = { category, error: result.error };
+        const failure = { category, error: result.error, permanent: result.permanent };
         failed.push(failure);
         backing.setRestoreFailures([
           ...backing.getRestoreFailures().filter((f) => f.category !== category),

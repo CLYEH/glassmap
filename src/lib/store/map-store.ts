@@ -1,6 +1,19 @@
 import { create } from "zustand";
 import type { Geometry } from "geojson";
 import type { GlassMapFeature } from "@/lib/data/schema";
+import {
+  appendTier2Features,
+  createTier2Registry,
+  httpFetchJson,
+  notFoundFetchJson,
+  sortedCategories,
+  type FetchJson,
+  type MapFeature,
+  type Tier2Category,
+  type Tier2LoadResult,
+  type Tier2Manifest,
+  type Tier2ManifestResult,
+} from "./tier2";
 
 /** [lng, lat] */
 export type LngLat = [number, number];
@@ -30,7 +43,8 @@ export const DEFAULT_VIEW: MapView = {
  * Ownership of each field:
  *  - view: written by tools (set_map_view) and by the map (user pans/zooms)
  *  - bounds: written by the map only, after every move; null until the map has rendered
- *  - features: written by the data loader once; read by tools and the map
+ *  - features: the six bundled datasets, written by the data loader once, plus
+ *    every tier-2 category a tool has loaded since (see `loadCategory`)
  *  - selection: written by tools (select_features) and by the UI (click)
  *  - activity: written by the tool layer only; read by the page
  */
@@ -38,7 +52,25 @@ export interface MapToolStore {
   getView(): MapView;
   setView(patch: Partial<MapView>): void;
   getBounds(): Bounds | null;
-  getFeatures(): readonly GlassMapFeature[];
+  /** Bundled datasets plus every loaded tier-2 category, in load order. */
+  getFeatures(): readonly MapFeature[];
+  /**
+   * The tier-2 index as currently known, or null when nothing has read it yet.
+   * Synchronous on purpose: `describeState` must never make a network request.
+   */
+  getTier2Manifest(): Tier2Manifest | null;
+  /** Fetches `/data/tier2/index.json` once per page. Never throws. */
+  loadTier2Manifest(): Promise<Tier2ManifestResult>;
+  /** Sorted and deduped, so it never reveals the order categories were asked for. */
+  getLoadedCategories(): readonly Tier2Category[];
+  /**
+   * Fetches one whole-city category into `getFeatures()`. Idempotent, safe to
+   * call concurrently for the same category, and never throws: a failure comes
+   * back as `{ ok: false, error }` for the tool to hand to the agent verbatim.
+   * Loaded features stay until the page unloads — there is no eviction, by
+   * design (see `tier2.ts`).
+   */
+  loadCategory(category: Tier2Category): Promise<Tier2LoadResult>;
   getSelection(): readonly string[];
   setSelection(ids: string[]): void;
   getDrawings(): readonly Drawing[];
@@ -130,13 +162,43 @@ export interface WebMcpInfo {
   toolCount: number;
 }
 
+/**
+ * The tool-facing feature list: the bundled datasets first, then whatever
+ * tier-2 categories have been loaded. Rebuilt only when one of the two slices
+ * changes, and — when no category is loaded — literally the bundled array, so a
+ * page that never touches tier-2 behaves exactly as it did before it existed.
+ */
+function makeFeatureView() {
+  let lastBundled: readonly GlassMapFeature[] | null = null;
+  let lastTier2: readonly MapFeature[] | null = null;
+  let combined: readonly MapFeature[] = [];
+  return (bundled: readonly GlassMapFeature[], tier2: readonly MapFeature[]) => {
+    if (bundled !== lastBundled || tier2 !== lastTier2) {
+      lastBundled = bundled;
+      lastTier2 = tier2;
+      combined = tier2.length === 0 ? bundled : [...bundled, ...tier2];
+    }
+    return combined;
+  };
+}
+
 interface MapStore {
   view: MapView;
   setView: (patch: Partial<MapView>) => void;
   bounds: Bounds | null;
   setBounds: (bounds: Bounds | null) => void;
+  /** The six bundled datasets. What the map renders today; the UI owns this. */
   features: GlassMapFeature[];
   setFeatures: (features: GlassMapFeature[]) => void;
+  /**
+   * Point-of-interest features from the categories a tool has loaded. Kept
+   * apart from `features` so the rendering the UI already does is untouched
+   * until it opts in.
+   */
+  tier2Features: MapFeature[];
+  /** Sorted; a category appears here only once its features are in the store. */
+  tier2Loaded: Tier2Category[];
+  tier2Manifest: Tier2Manifest | null;
   selection: string[];
   setSelection: (ids: string[]) => void;
   drawings: Drawing[];
@@ -161,6 +223,9 @@ export const useMapStore = create<MapStore>((set, get) => ({
   setBounds: (bounds) => set({ bounds }),
   features: [],
   setFeatures: (features) => set({ features }),
+  tier2Features: [],
+  tier2Loaded: [],
+  tier2Manifest: null,
   selection: [],
   setSelection: (selection) => set({ selection }),
   drawings: [],
@@ -198,12 +263,38 @@ export const useMapStore = create<MapStore>((set, get) => ({
   setWebMcp: (webmcp) => set({ webmcp }),
 }));
 
+const zustandFeatureView = makeFeatureView();
+
+/**
+ * The one tier-2 loader the app uses. Module-level because its in-flight map is
+ * what keeps two concurrent tool calls from fetching the same file twice, and
+ * there is exactly one Zustand store per page.
+ */
+const zustandTier2 = createTier2Registry({
+  fetchJson: (url) => httpFetchJson(url),
+  getManifest: () => useMapStore.getState().tier2Manifest,
+  setManifest: (tier2Manifest) => useMapStore.setState({ tier2Manifest }),
+  getLoadedCategories: () => useMapStore.getState().tier2Loaded,
+  addLoadedCategory: (category, features) =>
+    useMapStore.setState((s) => ({
+      tier2Features: appendTier2Features(s.features, s.tier2Features, features),
+      tier2Loaded: sortedCategories([...s.tier2Loaded, category]),
+    })),
+});
+
 /** Adapter over the Zustand store for the tool layer. */
 export const zustandToolStore: MapToolStore = {
   getView: () => useMapStore.getState().view,
   setView: (patch) => useMapStore.getState().setView(patch),
   getBounds: () => useMapStore.getState().bounds,
-  getFeatures: () => useMapStore.getState().features,
+  getFeatures: () => {
+    const { features, tier2Features } = useMapStore.getState();
+    return zustandFeatureView(features, tier2Features);
+  },
+  getTier2Manifest: () => useMapStore.getState().tier2Manifest,
+  loadTier2Manifest: () => zustandTier2.loadManifest(),
+  getLoadedCategories: () => useMapStore.getState().tier2Loaded,
+  loadCategory: (category) => zustandTier2.loadCategory(category),
   getSelection: () => useMapStore.getState().selection,
   setSelection: (ids) => useMapStore.getState().setSelection(ids),
   getDrawings: () => useMapStore.getState().drawings,
@@ -222,6 +313,12 @@ export interface MemoryToolStoreInit {
   selection?: string[];
   drawings?: Drawing[];
   annotations?: Annotation[];
+  /**
+   * Serves `/data/tier2/index.json` and the category files. Defaults to a 404
+   * for everything, which is a page with no tier-2 data at all — the state the
+   * whole suite runs in unless a test opts in.
+   */
+  tier2FetchJson?: FetchJson;
 }
 
 /**
@@ -238,6 +335,22 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
   let view = { ...(init.view ?? DEFAULT_VIEW) };
   const bounds = init.bounds ?? null;
   const features = init.features ?? [];
+  let tier2Features: MapFeature[] = [];
+  let tier2Loaded: Tier2Category[] = [];
+  let tier2Manifest: Tier2Manifest | null = null;
+  const featureView = makeFeatureView();
+  const tier2 = createTier2Registry({
+    fetchJson: init.tier2FetchJson ?? notFoundFetchJson,
+    getManifest: () => tier2Manifest,
+    setManifest: (manifest) => {
+      tier2Manifest = manifest;
+    },
+    getLoadedCategories: () => tier2Loaded,
+    addLoadedCategory: (category, loaded) => {
+      tier2Features = appendTier2Features(features, tier2Features, loaded);
+      tier2Loaded = sortedCategories([...tier2Loaded, category]);
+    },
+  });
   let selection = [...(init.selection ?? [])];
   let drawings = [...(init.drawings ?? [])];
   let drawingSeq = drawings.length + 1;
@@ -251,7 +364,11 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
       view = { ...view, ...patch };
     },
     getBounds: () => bounds,
-    getFeatures: () => features,
+    getFeatures: () => featureView(features, tier2Features),
+    getTier2Manifest: () => tier2Manifest,
+    loadTier2Manifest: () => tier2.loadManifest(),
+    getLoadedCategories: () => tier2Loaded,
+    loadCategory: (category) => tier2.loadCategory(category),
     getSelection: () => selection,
     setSelection: (ids) => {
       selection = [...ids];

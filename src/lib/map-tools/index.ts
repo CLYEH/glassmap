@@ -1,7 +1,20 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
-import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import { FEATURE_CATEGORIES } from "@/lib/data/schema";
+import {
+  featureCategories,
+  isTier2Category,
+  TIER2_CATEGORIES,
+  type MapCategory,
+  type MapFeature,
+} from "@/lib/store/tier2";
+import {
+  planCategories,
+  SELECT_MATCH_LIMIT,
+  unsearchedForLookup,
+  type Tier2Disclosure,
+} from "./tier2-query";
 import { describeState, round5, SELECTION_ID_LIMIT } from "./state";
 import { withActivity } from "./activity";
 import {
@@ -97,6 +110,7 @@ export interface AnnotateInput {
 export interface DescribeSurroundingsInput {
   from?: unknown;
   radius_m?: unknown;
+  categories?: unknown;
 }
 
 export interface CompareAreasInput {
@@ -155,11 +169,34 @@ export function validateSetMapView(input: SetMapViewInput): { patch: Partial<Map
 
 // ---------------------------------------------------------------- schema bits
 
+/**
+ * The category vocabulary and how loading works: the half of the copy that is
+ * the same for every tool.
+ *
+ * It says nothing about omitting the parameter on purpose. Each tool has its
+ * own default set — find_features filters nothing, describe_surroundings and
+ * compare_areas leave `district` out — so the "omit this" sentence belongs to
+ * the tool, and a schema must never carry two of them saying different things.
+ */
+const CATEGORIES_LOADING =
+  `Always in memory: ${FEATURE_CATEGORIES.join(", ")}. ` +
+  `Points of interest, fetched for the whole city the first time you name one and kept for the rest of the session: ${TIER2_CATEGORIES.join(", ")}. ` +
+  "Naming a category is how you search it - there is no way to search all of them at once.";
+
+/**
+ * The wording of the omit sentence matters: the old copy said "omit to search
+ * every category", which after tier-2 would be a lie — omitting searches what
+ * is in memory, and the answer says what it skipped.
+ */
+const CATEGORIES_DESCRIPTION =
+  `Which categories to search. ${CATEGORIES_LOADING} ` +
+  "Omit this and the search covers the always-in-memory categories plus the points of interest fetched earlier in this session; the answer then lists what it did not search under unsearched_categories, with how many exist city-wide.";
+
 const categoriesProperty = {
   type: "array",
   minItems: 1,
-  items: { type: "string", enum: [...FEATURE_CATEGORIES] },
-  description: `Keep only features in these categories. Omit to search every category. Values: ${FEATURE_CATEGORIES.join(", ")}.`,
+  items: { type: "string", enum: [...FEATURE_CATEGORIES, ...TIER2_CATEGORIES] },
+  description: CATEGORIES_DESCRIPTION,
 };
 
 const limitProperty = {
@@ -212,10 +249,12 @@ const radiusProperty = {
 interface ResolvedQuery {
   origin: LngLat;
   radius_m?: number;
-  categories?: FeatureCategory[];
+  categories?: MapCategory[];
   query?: string;
   within?: Polygon | MultiPolygon;
   limit: number;
+  /** What the answer must admit it did not search; empty for a category query. */
+  disclosure: Tier2Disclosure;
 }
 
 type QueryError = {
@@ -223,7 +262,7 @@ type QueryError = {
   candidates?: unknown;
   known_ids?: string[];
   known_count?: number;
-};
+} & Tier2Disclosure;
 
 /**
  * One location out of the three forms every location parameter accepts.
@@ -295,10 +334,10 @@ function resolveWithin(
  * found" and "the parks you selected" can never be different sets. Returns
  * either the resolved query or the exact object the tool should hand back.
  */
-function resolveQueryInput(
+async function resolveQueryInput(
   store: MapToolStore,
   input: FindFeaturesInput,
-): ResolvedQuery | QueryError {
+): Promise<ResolvedQuery | QueryError> {
   const cats = validateCategories(input.categories);
   if ("error" in cats) return { error: cats.error };
   const lim = validateLimit(input.limit);
@@ -319,19 +358,33 @@ function resolveQueryInput(
     within = area.area;
   }
 
+  // Everything above is free; the fetch happens only once the call is known to
+  // be well formed. It happens *before* `near` is resolved so that a query like
+  // {near: "Fika Fika Cafe", categories: ["cafe"]} can find its own origin.
+  const plan = await planCategories(store, cats.categories);
+  if ("error" in plan) return { error: plan.error };
+
   const viewCenter = store.getView().center;
   let origin = viewCenter;
   let radius_m = rad.radius_m;
   if (input.near !== undefined) {
     const near = resolveNear(input.near, store.getFeatures(), viewCenter);
     if (near.kind === "invalid") return { error: near.error };
-    if (near.kind === "none") return { error: "unknown place" };
+    if (near.kind === "none") return { error: "unknown place", ...(await unsearchedForLookup(store)) };
     if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
     origin = near.center;
     radius_m = radius_m ?? DEFAULT_RADIUS_M;
   }
 
-  return { origin, radius_m, categories: cats.categories, query, within, limit: lim.limit };
+  return {
+    origin,
+    radius_m,
+    categories: plan.categories,
+    query,
+    within,
+    limit: lim.limit,
+    disclosure: plan.disclosure,
+  };
 }
 
 interface FeatureListOutput {
@@ -340,7 +393,20 @@ interface FeatureListOutput {
   features: FeatureOutput[];
 }
 
-function listOutput(matched: GlassMapFeature[], origin: LngLat, limit: number): FeatureListOutput {
+/**
+ * Counts per category, in the order the categories first appear. A POI tagged
+ * in two categories is counted in both — the same rule the query engine uses —
+ * so these can add up to slightly more than `total`.
+ */
+function countByCategory(features: readonly MapFeature[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const f of features) {
+    for (const c of featureCategories(f)) counts[c] = (counts[c] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function listOutput(matched: MapFeature[], origin: LngLat, limit: number): FeatureListOutput {
   const page = matched.slice(0, limit);
   return {
     total: matched.length,
@@ -375,7 +441,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). Use this instead of a screenshot to know what the map shows.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). features_loaded counts everything searchable, including any point-of-interest category fetched this session, which tier2.loaded names once there is one. Use this instead of a screenshot to know what the map shows.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     // State echoes labels and notes a human may have typed on the page.
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -430,7 +496,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
     // Candidates for an ambiguous place echo OSM names, which are third-party text.
     annotations: { untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
       const state = () => describeState(store);
       const hasPlace = inp.place !== undefined;
@@ -480,7 +546,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           return { error: "place must be a non-empty string", state: state() };
         }
         const resolved = resolvePlaceOne(inp.place, store.getFeatures(), store.getView().center);
-        if (resolved.kind === "none") return { error: "unknown place", state: state() };
+        if (resolved.kind === "none") {
+          // Names are resolved against what is in memory: this tool cannot
+          // fetch 18 category files to check one word. Saying which categories
+          // were never in the index is the difference between "no such place"
+          // and "no such place among the ones I have".
+          return { error: "unknown place", ...(await unsearchedForLookup(store)), state: state() };
+        }
         if (resolved.kind === "ambiguous") {
           // Never guess: an agent cannot see that the map went to the wrong place.
           return { error: "ambiguous place", candidates: resolved.candidates, state: state() };
@@ -497,14 +569,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
       properties: { categories: categoriesProperty, limit: limitProperty },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
       const cats = validateCategories(inp.categories);
       if ("error" in cats) return { error: cats.error };
@@ -514,19 +586,30 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const bounds = store.getBounds();
       if (!bounds) return { error: "map not ready" };
 
+      const plan = await planCategories(store, cats.categories);
+      if ("error" in plan) return plan;
+
       const origin = store.getView().center;
       const visible = store.getFeatures().filter((f) => {
         const b = featureBounds(f);
         return b ? boundsIntersect(b, bounds) : false;
       });
-      return listOutput(queryFeatures(visible, { origin, categories: cats.categories }), origin, lim.limit);
+      const matched = queryFeatures(visible, { origin, categories: plan.categories });
+      return {
+        ...listOutput(matched, origin, lim.limit),
+        // A per-category tally of what is on screen, so "what am I looking at?"
+        // is one call rather than one call per category. Only worth its tokens
+        // once there are POI categories to choose between.
+        ...(plan.tier2Available > 0 ? { category_counts: countByCategory(matched) } : {}),
+        ...plan.disclosure,
+      };
     },
   };
 
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
     inputSchema: {
       type: "object",
       properties: {
@@ -544,18 +627,21 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
-      const resolved = resolveQueryInput(store, inp);
+      const resolved = await resolveQueryInput(store, inp);
       if ("error" in resolved) return resolved;
-      return listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit);
+      return {
+        ...listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit),
+        ...resolved.disclosure,
+      };
     },
   };
 
   const selectFeatures: GlassMapTool<SelectFeaturesInput> = {
     name: "select_features",
     description:
-      "Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at `limit`: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them.",
+      `Highlight features on the map and in the sidebar so a sighted person can see what you are talking about. Pass explicit ids (from find_features, list_features_in_view or describe_surroundings), or the same query/near/radius_m (at most 10000 m)/categories/within filter as find_features — the filter resolves to the same set of features, but unlike find_features it does not stop at the limit: every match is selected, and state.selection.count reports the true number. Pass an empty ids array to clear the selection. Returns the resulting selection and the new map state; selected lists at most 20 of them. A filter that matches more than ${SELECT_MATCH_LIMIT} point-of-interest features is refused rather than highlighting half a city: the answer gives the true count, and near + radius_m, within or query narrows it.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -583,7 +669,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
     // Returns OSM names.
     annotations: { untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
       const state = () => describeState(store);
       if (inp.replace !== undefined && typeof inp.replace !== "boolean") {
@@ -604,34 +690,57 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           state: state(),
         };
       }
+      if (hasIds && (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string"))) {
+        return { error: "ids must be an array of feature id strings", state: state() };
+      }
+      if (hasIds && (inp.ids as string[]).length > MAX_IDS) {
+        return { error: `ids must have at most ${MAX_IDS} entries`, state: state() };
+      }
 
-      const all = store.getFeatures();
-      const byId = new Map<string, GlassMapFeature>();
-      for (const f of all) if (f?.properties?.id) byId.set(f.properties.id, f);
+      let origin: LngLat | null = null;
+      let matched: MapFeature[] = [];
+      let disclosure: Tier2Disclosure = {};
+      if (hasFilter) {
+        // Resolved first: it is what may fetch a category, and the id lookup
+        // below has to see the features it brought in.
+        const resolved = await resolveQueryInput(store, inp);
+        if ("error" in resolved) return { ...resolved, state: state() };
+        origin = resolved.origin;
+        disclosure = resolved.disclosure;
+        matched = queryFeatures(store.getFeatures(), resolved);
+        // Only the point-of-interest side is counted against the cap. The cap
+        // exists because a citywide category runs to thousands; the six bundled
+        // datasets are small, bounded, and "select every match" has been their
+        // contract since the tool shipped. Counting the whole match set would
+        // let 600 parks refuse a filter that adds three cafes to them, with a
+        // message about POIs that the agent cannot act on.
+        const poiMatches = matched.filter((f) => isTier2Category(f.properties.category)).length;
+        if (poiMatches > SELECT_MATCH_LIMIT) {
+          // Selecting a whole citywide category highlights so much that the map
+          // says nothing, so the tool refuses instead of doing it: the agent is
+          // told the true count and how to ask a smaller question.
+          return {
+            error: `${poiMatches} of the ${matched.length} matching features are points of interest, more than the ${SELECT_MATCH_LIMIT} select_features will highlight at once. Narrow it with near plus radius_m, within a drawing, or query, then select again.`,
+            matched: matched.length,
+            ...disclosure,
+            state: state(),
+          };
+        }
+      }
+
+      const byId = new Map<string, MapFeature>();
+      for (const f of store.getFeatures()) if (f?.properties?.id) byId.set(f.properties.id, f);
 
       const unknown_ids: string[] = [];
-      const targets: GlassMapFeature[] = [];
+      const targets: MapFeature[] = [];
       if (hasIds) {
-        if (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string")) {
-          return { error: "ids must be an array of feature id strings", state: state() };
-        }
-        if (inp.ids.length > MAX_IDS) {
-          return { error: `ids must have at most ${MAX_IDS} entries`, state: state() };
-        }
         for (const raw of inp.ids as string[]) {
           const feature = byId.get(raw.trim());
           if (feature) targets.push(feature);
           else unknown_ids.push(raw);
         }
       }
-
-      let origin: LngLat | null = null;
-      if (hasFilter) {
-        const resolved = resolveQueryInput(store, inp);
-        if ("error" in resolved) return { ...resolved, state: state() };
-        origin = resolved.origin;
-        targets.push(...queryFeatures(all, resolved));
-      }
+      targets.push(...matched);
 
       // Keeping only ids we can still resolve drops leftovers from a previous
       // dataset instead of carrying dead ids into the UI.
@@ -643,6 +752,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         selected: nextIds
           .slice(0, SELECTION_ID_LIMIT)
           .map((id) => describeFeature(byId.get(id)!, origin)),
+        ...disclosure,
         // Echoing hundreds of bad ids helps nobody; the count still does.
         unknown_ids: unknown_ids.slice(0, SELECTION_ID_LIMIT),
         unknown_count: unknown_ids.length,
@@ -841,14 +951,23 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           maximum: MAX_RADIUS_M,
           description: `How far to look, in metres (default ${DEFAULT_SURROUNDINGS_RADIUS_M}, roughly a five-minute walk; at most ${MAX_RADIUS_M}).`,
         },
+        categories: {
+          ...categoriesProperty,
+          description: `Which categories to describe. ${CATEGORIES_LOADING} Omit this and the answer describes ${NEIGHBOUR_CATEGORIES.join(", ")} plus the points of interest fetched earlier in this session, and lists what it did not describe under unsearched_categories with how many exist city-wide; district is never described, because the district you are standing in is its own field.`,
+        },
       },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
       const radius = validateRadiusM(inp.radius_m, DEFAULT_SURROUNDINGS_RADIUS_M);
       if ("error" in radius) return { error: radius.error };
+      const cats = validateCategories(inp.categories);
+      if ("error" in cats) return { error: cats.error };
+
+      const plan = await planCategories(store, cats.categories, NEIGHBOUR_CATEGORIES);
+      if ("error" in plan) return plan;
 
       let origin = store.getView().center;
       if (inp.from !== undefined) {
@@ -861,7 +980,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const near = queryFeatures(features, {
         origin,
         radius_m: radius.radius_m,
-        categories: NEIGHBOUR_CATEGORIES,
+        categories: plan.categories,
       });
       const groups = groupByDirection(near.slice(0, SURROUNDINGS_ITEM_LIMIT), origin);
 
@@ -873,6 +992,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         total: near.length,
         returned: groups.reduce((n, g) => n + g.items.length, 0),
         groups,
+        ...plan.disclosure,
       };
     },
   };
@@ -880,7 +1000,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const compareAreas: GlassMapTool<CompareAreasInput> = {
     name: "compare_areas",
     description:
-      'Compare two places in one call: how many features of each category are within radius_m of a, how many are within radius_m of b, and the nearest one of each category on each side. Both places are given the same way as anywhere else - a feature id, a place name such as "Zhongshan Station", or a coordinate - and both are counted with exactly the filter find_features uses, so the numbers match what a per-category search would return. Read "summary" out; use by_category to reason and its feature ids to act (select_features, set_map_view). This replaces one find_features call per category per place.',
+      'Compare two places in one call: how many features of each category are within radius_m of a, how many are within radius_m of b, and the nearest one of each category on each side. Both places are given the same way as anywhere else - a feature id, a place name such as "Zhongshan Station", or a coordinate - and both are counted with exactly the filter find_features uses, so the numbers match what a per-category search would return. Read "summary" out; use by_category to reason and its feature ids to act (select_features, set_map_view). A point of interest tagged as two categories - a bakery that also serves fast food - is counted under each of them, exactly as both of their find_features queries return it, so by_category can add up to slightly more than total, which counts places. This replaces one find_features call per category per place.',
     inputSchema: {
       type: "object",
       properties: {
@@ -896,7 +1016,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         },
         categories: {
           ...categoriesProperty,
-          description: `Which categories to count. Omit to count ${COMPARE_CATEGORIES.join(", ")} - every category except district, which is a property of a place rather than something near it. Values: ${FEATURE_CATEGORIES.join(", ")}.`,
+          description: `Which categories to count. ${CATEGORIES_LOADING} Omit this and the answer counts ${COMPARE_CATEGORIES.join(", ")} plus the points of interest fetched earlier in this session, and lists what it did not count under unsearched_categories with how many exist city-wide; district is never counted, because it is a property of a place rather than something near it.`,
         },
       },
       required: ["a", "b"],
@@ -904,19 +1024,22 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
     // Echoes OSM names: the resolved place names and the nearest feature of each category.
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: (input) => {
+    execute: async (input) => {
       const inp = input ?? {};
       const cats = validateCategories(inp.categories);
       if ("error" in cats) return { error: cats.error };
-      // Same order as asked for, without repeats: a duplicated category would
-      // otherwise produce two identical summary lines and look like two results.
-      const categories = [...new Set(cats.categories ?? COMPARE_CATEGORIES)];
       const radius = validateRadiusM(inp.radius_m, DEFAULT_RADIUS_M);
       if ("error" in radius) return { error: radius.error };
 
       if (inp.a === undefined || inp.b === undefined) {
         return { error: "compare_areas needs both a and b: two places to compare" };
       }
+
+      const plan = await planCategories(store, cats.categories, COMPARE_CATEGORIES);
+      if ("error" in plan) return plan;
+      // Same order as asked for, without repeats: a duplicated category would
+      // otherwise produce two identical summary lines and look like two results.
+      const categories = [...new Set(plan.categories ?? COMPARE_CATEGORIES)];
       // Which side failed matters: the agent has to know which of the two names
       // to ask the human about, and both errors otherwise read the same.
       const a = resolvePoint(store, inp.a, "a");
@@ -932,6 +1055,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         b: right,
         radius_m: radius.radius_m,
         summary: compareSummary(left, right, categories),
+        ...plan.disclosure,
       };
     },
   };

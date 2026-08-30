@@ -17,7 +17,7 @@ import {
   length as turfLength,
 } from "@turf/turf";
 import type { Feature, Geometry, MultiPolygon, Polygon, Position } from "geojson";
-import type { GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import type { Drawing, LngLat } from "@/lib/store/map-store";
 
 export type ShapeKind = Drawing["kind"];
@@ -160,7 +160,7 @@ export function measureExtent(geometry: Geometry): ExtentMeasure {
  * only has to overlap, for the same reason list_features_in_view keeps a park
  * that is bigger than the screen — "what is in this circle" must still name it.
  */
-export function featureWithin(area: Polygon | MultiPolygon, feature: GlassMapFeature): boolean {
+export function featureWithin(area: Polygon | MultiPolygon, feature: MapFeature): boolean {
   try {
     const g = feature?.geometry;
     if (!g) return false;

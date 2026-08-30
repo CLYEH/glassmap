@@ -90,11 +90,15 @@ const metresPerDegreeLng = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 
  * corridor and the camera's padding can never describe different rectangles.
  *
  * One clause of that rule is deliberately missing here: `inspectorLane()` also
- * answers 0 in human chrome, where no lane is mounted (T-82). Every effect
- * that consumes this — the viewfinder, the scan band, the pack-to-chip rect —
- * is a *tool* effect, and a tool call is exactly the write that puts the page
- * into agent chrome, so this is never read in a state where the two answers
- * differ. Human-gesture effects are drawn in map space and never ask.
+ * answers 0 in human chrome, where no lane is mounted (T-82). What that costs
+ * is bounded rather than nil. Every effect that consumes this — the viewfinder,
+ * the scan band, the pack-to-chip rect — is a *tool* effect, and the tool call
+ * that schedules it is the same write that puts the page into agent chrome, so
+ * by the time one is planned the lane is on its way in. The window where the
+ * two answers differ is the frames between that write and the lane being laid
+ * out: an effect planned inside it measures a corridor a few hundred pixels too
+ * narrow, which moves a rectangle, not a mode. Human-gesture effects are drawn
+ * in map space and never ask.
  */
 function laneWidth(): number {
   if (window.matchMedia("(max-width: 920px)").matches) return 0;

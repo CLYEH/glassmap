@@ -69,7 +69,9 @@ export function Tools() {
         design's own staging — minus `inert`, which is owner-gated: whether it
         also hides a declarative tool from the client is an open verification
         item (design2-v5 §8.4 item 4), and the failure it would cause is worse
-        than the one it prevents.
+        than the one it prevents. What a closed popover *does* give up is the
+        tab order: `focusable` takes its two controls out of it, so Tab from
+        the Note chip goes to Share rather than into an invisible text field.
       */}
       <div
         ref={inputRef}
@@ -77,7 +79,7 @@ export function Tools() {
         data-testid="note-popover"
         data-open={noteOpen}
       >
-        <AddNoteForm />
+        <AddNoteForm focusable={noteOpen} />
       </div>
     </>
   );

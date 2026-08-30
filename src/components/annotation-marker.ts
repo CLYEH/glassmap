@@ -12,10 +12,21 @@ import type { Annotation } from "@/lib/store/map-store";
  * that wrote it.
  *
  * The card is visible by default because a note nobody can read is not a note;
- * clicking the pin folds it away when several sit on top of each other.
- * `data-testid="annotation-popup"` is on the card, `annotation-pin` on the pin.
+ * clicking the card itself folds it away when several sit on top of each other.
+ * Clicking anywhere else on the pin — the stem, the anchor, or the pin by
+ * keyboard — asks the same question a tap on any other mark asks, and gets the
+ * same answer: `onTap` opens the "On the map" card, which is where a note is
+ * removed by hand. The two live on one element because they are two halves of
+ * one gesture ("let me see past this" and "what is this?"), and splitting them
+ * across two controls would put a second tab stop on every note on the map.
+ *
+ * `data-testid="annotation-popup"` is on the card, `annotation-pin` on the pin
+ * (the FX layer projects effects onto it by id — see `fx/surfaces.ts`).
  */
-export function createAnnotationElement(annotation: Annotation): HTMLElement {
+export function createAnnotationElement(
+  annotation: Annotation,
+  onTap: (id: string) => void,
+): HTMLElement {
   const root = document.createElement("button");
   root.type = "button";
   root.className = "note-pin";
@@ -51,7 +62,12 @@ export function createAnnotationElement(annotation: Annotation): HTMLElement {
     // Without this the click also reaches the map, which in draw mode would
     // drop a polygon vertex under the pin.
     event.stopPropagation();
-    card.classList.toggle("hidden");
+    const target = event.target;
+    if (target instanceof Element && target.closest(".pin-card")) {
+      card.classList.toggle("hidden");
+      return;
+    }
+    onTap(annotation.id);
   });
 
   return root;

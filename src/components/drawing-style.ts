@@ -10,6 +10,22 @@ export const DRAWING_LABEL_SOURCE = "gm-src-drawing-labels";
 export const DRAFT_SOURCE = "gm-src-draft";
 
 /**
+ * The drawing layers a tap can land on: the fill and both outlines, never the
+ * label (a symbol's hit box is the glyphs, so half of a tap on a named circle
+ * would answer and half would not) and never the draft (an unfinished shape is
+ * not a mark yet).
+ *
+ * Kept beside the specs that create them so a renamed layer cannot silently
+ * stop answering taps; `map-style.ts` keeps `INTERACTIVE_LAYER_IDS` for the
+ * same reason.
+ */
+export const DRAWING_LAYER_IDS = [
+  "gm-drawing-fill",
+  "gm-drawing-line-agent",
+  "gm-drawing-line-user",
+] as const;
+
+/**
  * Who drew it. The two sources differ in colour *and* in dash pattern
  * (agent = dashed, user = solid) so the distinction survives a greyscale
  * screenshot, which is how a lot of demo material gets viewed.

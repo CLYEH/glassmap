@@ -17,7 +17,7 @@ import { Tools } from "@/components/Tools";
 import { WebMcpBadge } from "@/components/WebMcpBadge";
 import { FxLayer } from "@/components/fx/FxLayer";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
-import { useAwakenMode } from "@/components/useAwakenMode";
+import { useAwakenMode, useChromeAttribute } from "@/components/useAwakenMode";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
@@ -26,7 +26,7 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 /**
  * The map is the page, and the page has two states.
  *
- * **Human (`data-chrome="idle"`).** What a visitor gets: the brand, the three
+ * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the three
  * things they can do (Draw, Note, Share), the Places tray to browse the city
  * with, the legend's scale, the attribution, and one whisper in the corner
  * saying the map is also readable by agents. No feed, no tool roster, no
@@ -34,7 +34,7 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * is not shown a dashboard about a protocol they did not ask about (BRIEF
  * item 3).
  *
- * **Agent (`data-chrome="awake"`).** The moment an agent acts — the first
+ * **Agent (`html[data-chrome="awake"]`).** The moment an agent acts — the first
  * `activity` row, or a restored link that carries agent work — the agent chrome
  * arrives: the activity feed down the west edge, the inspector lane in the
  * east, the camera chip, and the badge that says who is here. The mode is
@@ -45,10 +45,15 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * *legible* — the 1800 ms transition, `body[data-awaken]`, the toast — is
  * T-83's, and it replaces the flip without moving anything below.
  *
- * The attribute lives on `main` rather than on `body` for one practical reason:
- * `body` belongs to the awakening controller (`body[data-awaken]`, the e2e
- * lifecycle contract), and two writers on one attribute is how a page ends up
- * half dressed.
+ * The attribute lives on the root element, written by `useChromeAttribute` and,
+ * before hydration, by the inline script in `layout.tsx` — a restored agent
+ * link has to be dressed correctly at the first paint, and a URL fragment never
+ * reaches the server, so nothing React renders can know it in time. Not on
+ * `body`, which belongs to the awakening controller (`body[data-awaken]`, the
+ * e2e lifecycle contract): two writers on one attribute is how a page ends up
+ * half dressed. The panels themselves still arrive with hydration — this JSX is
+ * what mounts them — so what the script buys is that nothing which is only true
+ * of the human chrome is ever painted on an agent's link.
  *
  * Below 921px the inspector is a bottom sheet and the map is shortened to sit
  * above it (globals.css) — in human chrome there is no sheet, so the map keeps
@@ -63,11 +68,12 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 export default function Home() {
   useFeatureData();
   useDevStoreHandle();
+  useChromeAttribute();
   const mode = useAwakenMode();
   const awake = mode !== "idle";
 
   return (
-    <main data-testid="map-page" className="app" data-chrome={mode}>
+    <main data-testid="map-page" className="app">
       {/* Every floating chip lives inside the map, not beside it: below 921px
           the map is shortened to sit above the sheet, and the chrome has to
           come with it — the attribution most of all, since it is a licence

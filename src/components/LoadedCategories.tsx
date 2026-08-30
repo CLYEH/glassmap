@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useMapStore } from "@/lib/store/map-store";
 import { useBrowseStore } from "./browse-store";
+import { TIER2_PLURAL } from "./category-labels";
 import { loadedCategoryRows } from "./tier2-disclosure";
 
 const number = (n: number) => n.toLocaleString("en-US");
@@ -22,11 +23,14 @@ const number = (n: number) => n.toLocaleString("en-US");
  * Renders nothing at all until a category loads, so the landing state is
  * byte-identical to before it existed.
  *
- * The category names are the agent's own vocabulary, verbatim and in the data
- * face: `cafe`, not "Cafes". They are the enum values the tools take, so a
- * person reading this row can say one back to the agent and be understood —
- * the handoff's machine-voice-in-mono rule, in the one place on screen where
- * the reader might want to speak the machine's words.
+ * The names are the words a person reads (`TIER2_PLURAL`), not the OSM tags
+ * underneath them: this row sits above the legend, in the human chrome, and
+ * "place_of_worship" is a tag rather than a kind of place. The agent's own
+ * vocabulary — the enum value it must be handed back — is what the Places tray
+ * and the tools carry; a disclosure aimed at the person watching the screen is
+ * not the place to make them read snake_case. `data-category` still carries
+ * the tag verbatim, so a test (and anything reading the DOM) keeps the exact
+ * name the tools take.
  */
 export function LoadedCategories() {
   const loaded = useMapStore((s) => s.tier2Loaded);
@@ -53,7 +57,7 @@ export function LoadedCategories() {
           data-testid="poi-loaded-item"
           data-category={row.category}
         >
-          <span className="poi-cat">{row.category}</span>
+          <span className="poi-cat">{TIER2_PLURAL[row.category]}</span>
           <span className="poi-n">{number(row.count)}</span>
         </span>
       ))}

@@ -18,7 +18,8 @@ const zoomLabel = (zoom: number) => `z${Math.round(zoom * 10) / 10}`;
  * circle-dot the inspector's "Selected" header uses — two concepts, two marks.
  *
  * It is agent chrome, so it is hidden in the human landing (globals.css keys
- * off `.app[data-chrome]`) rather than unmounted: nobody browsing a city needs
+ * off `html[data-chrome]`, which is set before the first paint) rather than
+ * unmounted: nobody browsing a city needs
  * five decimal places of their own camera, but the readout is the machine
  * mirror of a value tools write, and taking it out of the DOM would take it out
  * of reach of a headless run.

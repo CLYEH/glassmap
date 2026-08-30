@@ -217,12 +217,20 @@ export function applyShareHash(hash: string, store: ShareRestoreTarget): ShareAp
   const decoded = decodeShareState(hash);
   if ("error" in decoded) return { ok: false, error: decoded.error };
   // Flag first, content second, and the order is load-bearing twice over
-  // (`src/lib/awaken/index.ts` argues it in full). A restored map must never be
-  // shown in human chrome: written last, the camera and the shapes would land
-  // while the page still reported "idle" and the agent chrome would snap in
-  // behind them. And no restore write may ever look like an agent *arriving* —
-  // the only write in this sequence that can flip the mode is this one, and it
-  // carries the bit that says "this is history, not news".
+  // (`src/lib/awaken/index.ts` argues it in full). No subscriber may ever see
+  // a restored camera, selection or shape while the store still reports
+  // "idle": written last, the flag would arrive after the content and every
+  // chrome-dependent reader — the map's own padding and `bounds`, the lane, the
+  // feed — would recompute twice, the first time for a map that is not the one
+  // being restored. And no restore write may ever look like an agent
+  // *arriving* — the only write in this sequence that can flip the mode is this
+  // one, and it carries the bit that says "this is history, not news".
+  //
+  // What this ordering does NOT buy is the first *paint*. This runs in an
+  // effect, which React reaches after the server-rendered human chrome is
+  // already on screen; dressing that paint correctly is the inline script's
+  // job, from the fragment itself (`app/boot-chrome.ts`). Store ordering and
+  // paint ordering are separate problems and only one of them is solved here.
   store.setRestoredAgentState(restoredAgentStateOf(decoded));
   // Its sibling: decode-time evidence for what the restored chrome may *say*.
   // The surfaces that ask (the card's provenance line, the lane's SELECTED tag)

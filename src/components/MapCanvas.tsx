@@ -46,6 +46,7 @@ import { setFxMap } from "./fx/map-handle";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
+  DRAWING_LAYER_IDS,
   DRAWING_SOURCE,
   buildDrawingLayerSpecs,
   draftToGeoJson,
@@ -162,6 +163,7 @@ function syncAnnotationMarkers(
   map: MapLibreMap,
   markers: Map<string, Marker>,
   annotations: readonly Annotation[],
+  onTap: (id: string) => void,
 ) {
   const live = new Set(annotations.map((a) => a.id));
   for (const [id, marker] of markers) {
@@ -171,7 +173,10 @@ function syncAnnotationMarkers(
   }
   for (const annotation of annotations) {
     if (markers.has(annotation.id)) continue;
-    const marker = new Marker({ element: createAnnotationElement(annotation), anchor: "bottom" })
+    const marker = new Marker({
+      element: createAnnotationElement(annotation, onTap),
+      anchor: "bottom",
+    })
       .setLngLat(annotation.at)
       .addTo(map);
     markers.set(annotation.id, marker);
@@ -293,6 +298,23 @@ export default function MapCanvas() {
 
     /** One MapLibre marker per annotation id, kept in step with the store. */
     const markers = new Map<string, Marker>();
+
+    /**
+     * A person's tap on a note: the third mark that answers the card, and the
+     * one a human alone on this page is most likely to have made by hand.
+     *
+     * Anchored to the note's own coordinate rather than to the click, because
+     * that is what the card is about — and because the pin is a tall element
+     * whose top is nowhere near the place it points at. In draw mode a tap is
+     * a vertex like any other, so the card stays out of the way.
+     */
+    const tapAnnotation = (id: string) => {
+      if (draw.getState().mode !== "none") return;
+      const annotation = store.getState().annotations.find((a) => a.id === id);
+      if (!annotation) return;
+      const at = map.project(annotation.at);
+      card.getState().open({ kind: "annotation", id, x: at.x, y: at.y });
+    };
 
     let ready = false;
     /**
@@ -597,7 +619,7 @@ export default function MapCanvas() {
       const tapFeature = (id: string, at: { x: number; y: number }) => {
         const current = store.getState().selection;
         if (!current.includes(id)) store.getState().setSelection([...current, id], "user");
-        card.getState().open({ id, x: at.x, y: at.y });
+        card.getState().open({ kind: "feature", id, x: at.x, y: at.y });
       };
       map.on("click", INTERACTIVE_LAYER_IDS, (event) => {
         // While drawing, a click is a vertex, not a selection.
@@ -637,7 +659,30 @@ export default function MapCanvas() {
         if (typeof id === "string") tapFeature(id, event.point);
       });
 
-      const pointerLayers = [...INTERACTIVE_LAYER_IDS, ...beadLayers];
+      /**
+       * A person's tap on a shape, and the other half of the same door: a
+       * drawing is a mark somebody made, so it answers "what is this, and
+       * whose?" and offers to take itself off the map. `Remove` is
+       * `removeDrawing` — the writer `undo` and the tools use.
+       *
+       * A place under the shape answers first. The fill is 18 % opaque, so a
+       * bead inside a drawn circle is plainly visible through it, and a tap
+       * that landed on the dot a person can see must not be answered by the
+       * wash around it. MapLibre delivers both layer handlers for one click,
+       * so the drawing's defers by asking what else is under the point.
+       */
+      const drawingLayers = [...DRAWING_LAYER_IDS];
+      const overDrawing = [...INTERACTIVE_LAYER_IDS, ...beadLayers];
+      map.on("click", drawingLayers, (event) => {
+        if (draw.getState().mode !== "none") return;
+        if (map.queryRenderedFeatures(event.point, { layers: overDrawing }).length > 0) return;
+        const id = event.features
+          ?.map((f) => f.properties?.id)
+          .find((value): value is string => typeof value === "string");
+        if (id) card.getState().open({ kind: "drawing", id, x: event.point.x, y: event.point.y });
+      });
+
+      const pointerLayers = [...INTERACTIVE_LAYER_IDS, ...beadLayers, ...drawingLayers];
       map.on("mouseenter", pointerLayers, () => {
         if (draw.getState().mode !== "none") return;
         canvas.style.cursor = "pointer";
@@ -701,9 +746,18 @@ export default function MapCanvas() {
         applyPadding();
         pushBoundsFromMap();
       }
+      // Whatever took a place off the map — an agent's `select_features`, a
+      // restored link replacing the selection, the card's own Remove — the
+      // card about it goes with it. Left open it would offer "Remove" for a
+      // place that is no longer there, and press it against a selection that
+      // no longer holds the id. `closeFor` is a no-op for every other card.
+      if (state.selection !== previous.selection) {
+        const live = new Set(state.selection);
+        for (const id of previous.selection) if (!live.has(id)) card.getState().closeFor(id);
+      }
       // Markers do not need the style, so they are kept in sync from the start.
       if (state.annotations !== previous.annotations) {
-        syncAnnotationMarkers(map, markers, state.annotations);
+        syncAnnotationMarkers(map, markers, state.annotations, tapAnnotation);
       }
       if (!ready) return;
       // Feature data carries the selection with it: `applyFeatureData` re-states
@@ -746,7 +800,7 @@ export default function MapCanvas() {
     // is stable, and it also covers the pass right after new browse data.
     map.on("idle", applyInkBudget);
 
-    syncAnnotationMarkers(map, markers, store.getState().annotations);
+    syncAnnotationMarkers(map, markers, store.getState().annotations, tapAnnotation);
     applyDrawCursor(draw.getState().mode);
 
     return () => {

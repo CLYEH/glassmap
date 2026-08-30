@@ -10,8 +10,12 @@ import { TIER2_PLURAL } from "./category-labels";
  * holding; here it is a sense of scale, and eighteen five-digit numerals in a
  * grid read as noise rather than as scale.
  *
- * It never rounds up across the boundary (999 stays 999, not "1k"), so a
- * category can never be advertised as having more than it has.
+ * Below 1000 the figure is exact, so nothing in the first, most crowded decade
+ * of counts is ever advertised as more than it is — 999 stays 999 rather than
+ * becoming "1k". Above it the tenth is rounded, not floored, so 2,297 reads as
+ * "2.3k": the tray is a sense of scale and half a percent in either direction
+ * is not a claim anyone acts on. The exact figure is one click away, beside the
+ * category once it is loaded.
  */
 export function trayCount(n: number): string {
   if (n < 1000) return String(n);

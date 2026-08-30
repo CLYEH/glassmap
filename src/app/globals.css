@@ -216,7 +216,7 @@ button {
 }
 /* agent chrome only: the teal the map's own provenance grammar uses, at the
    lowest alpha that still reads as "this pane belongs to the agent". */
-.app[data-chrome="awake"] .lg.wake {
+html[data-chrome="awake"] .app .lg.wake {
   box-shadow:
     0 18px 44px rgba(3, 7, 13, 0.46),
     0 1px 2px rgba(3, 7, 13, 0.32),
@@ -394,7 +394,7 @@ body[data-fx="off"] .caustic {
   display: flex;
   gap: 8px;
 }
-.app[data-chrome="awake"] .tools {
+html[data-chrome="awake"] .app .tools {
   right: calc(var(--lane) + 22px);
 }
 .tool-chip {
@@ -701,8 +701,8 @@ body[data-fx="off"] .caustic {
   right: 14px;
   z-index: 21;
 }
-.app[data-chrome="awake"] .draw-hint,
-.app[data-chrome="awake"] .note-pop {
+html[data-chrome="awake"] .app .draw-hint,
+html[data-chrome="awake"] .app .note-pop {
   right: calc(var(--lane) + 22px);
 }
 .draw-hint {
@@ -776,19 +776,20 @@ body[data-fx="off"] .caustic {
    fit-content so it stacks over the legend without stretching it, and the
    bottom bar's flex-end alignment makes it grow upward — the legend does not
    move when it appears. Quieter than the legend by design: text-low, no
-   swatches, the data face for both the category and its count, since these are
-   the agent's own enum values and not names this map has coloured. */
+   swatches. The count keeps the data face; the category is a word a person
+   reads ("Cafés", TIER2_PLURAL) rather than the OSM tag it stands for, so it
+   is set in the UI face like every other name on screen. */
 .poi-strip {
   display: flex;
   align-items: center;
   /* Wraps rather than scrolls. A count is the whole content of this row, and a
-     horizontally scrolled chip cuts it mid-number — at 390px "cafe 2,297"
-     rendered as "cafe 2", which is not a smaller disclosure but a false one.
+     horizontally scrolled chip cuts it mid-number — at 390px "Cafés 2,297"
+     rendered as "Cafés 2", which is not a smaller disclosure but a false one.
      Wrapped, the strip grows upward over the map (the bottom bar is
      bottom-aligned) and stays whole at every width. The cap is the viewport,
      not the parent: below the legend's pill breakpoint the legend-zone parent
      is pill-sized (~121px at 390px), and capping at 100% let long chips like
-     "place_of_worship 1,718" spill onto the basemap unread. */
+     "Worship 1,718" spill onto the basemap unread. */
   flex-wrap: wrap;
   gap: 1px 2px;
   width: fit-content;
@@ -814,7 +815,6 @@ body[data-fx="off"] .caustic {
   white-space: nowrap;
 }
 .poi-cat {
-  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-mid);
 }
@@ -1409,7 +1409,7 @@ body[data-fx="off"] .caustic {
   align-items: center;
   gap: 8px;
 }
-.app[data-chrome="awake"] .dock {
+html[data-chrome="awake"] .app .dock {
   left: calc((100% - var(--lane) - 10px) / 2);
 }
 .dock-pill {
@@ -1582,6 +1582,15 @@ body[data-fx="off"] .caustic {
   top: var(--otm-y);
   transform: translate(-50%, calc(-100% - 16px));
 }
+/* In agent chrome the visible map ends at the inspector's lane, not at the
+   viewport: a card about a place near the east edge would otherwise be clamped
+   to a position that is entirely behind the glass. The same corridor the camera
+   is padded into and `bounds` reports (MapCanvas's `inspectorLane`). Below
+   921px the inspector is a bottom sheet and there is no lane, so the clamp goes
+   back to the viewport — see the tier below. */
+html[data-chrome="awake"] .app .otm-card {
+  left: clamp(131px, var(--otm-x), calc(100vw - var(--lane) - 131px));
+}
 .otm-card[data-place="below"] {
   transform: translate(-50%, 16px);
 }
@@ -1742,14 +1751,35 @@ body[data-fx="off"] .caustic {
    agent chrome is not rendered at all in human chrome (`page.tsx`); these
    are the pieces that stay in the DOM either way — because a headless run
    reads them, or because the map underneath has to know how much of the
-   screen it still has. */
-.app[data-chrome="idle"] .cam-chip {
+   screen it still has.
+
+   The attribute is on the root element, written before the first paint by
+   `app/boot-chrome.ts` and from hydration onwards by `useChromeAttribute`.
+   Agent chrome is the exception and human chrome the absence of it
+   (`:not([data-chrome="awake"])`, never `[data-chrome="idle"]`): a document
+   whose script never ran — disabled JavaScript, a refused inline script, a
+   throw — then lands on the human chrome, which is the one a page with no
+   agent is supposed to wear.
+
+   During the first paint of a restored agent link these rules are ahead of
+   the DOM: the lane, the feed and the badge are React's and arrive with
+   hydration, so the map is already dressed for them a moment before they
+   exist. That is the trade — the chrome that would be *wrong* is never
+   painted, and the chrome that is merely *missing* fades in. */
+
+/* The corner whisper is the one human-only surface the server renders, so it
+   is the one that has to be told. Unmounted a moment later (`page.tsx`); this
+   only covers the frames before hydration. */
+html[data-chrome="awake"] .app .spark-wrap {
+  display: none;
+}
+html:not([data-chrome="awake"]) .app .cam-chip {
   display: none;
 }
 /* No lane to leave room for: the bottom bar spans the whole map, and the
    corridor `bounds` describes is the whole canvas (MapCanvas's
    `inspectorLane`, which reads the same store the chrome does). */
-.app[data-chrome="idle"] .bottom-bar {
+html:not([data-chrome="awake"]) .app .bottom-bar {
   right: 14px;
 }
 
@@ -1795,14 +1825,19 @@ body[data-fx="off"] .caustic {
     bottom: 46vh;
   }
   /* Human chrome has no sheet, so the map keeps the whole screen. */
-  .app[data-chrome="idle"] .map-wrap {
+  html:not([data-chrome="awake"]) .app .map-wrap {
     bottom: 0;
   }
-  .app[data-chrome="idle"] .bottom-bar {
+  html:not([data-chrome="awake"]) .app .bottom-bar {
     right: 12px;
   }
   .dock {
     bottom: 12px;
+  }
+  /* No lane down here: the inspector is a sheet under the map, not a pane over
+     its east edge, so the whole width is visible again. */
+  html[data-chrome="awake"] .app .otm-card {
+    left: clamp(131px, var(--otm-x), calc(100vw - 131px));
   }
   .tray {
     width: calc(100vw - 24px);
@@ -1854,11 +1889,11 @@ body[data-fx="off"] .caustic {
     font-size: 13.5px;
   }
   .tools,
-  .app[data-chrome="awake"] .tools,
+  html[data-chrome="awake"] .app .tools,
   .draw-hint,
-  .app[data-chrome="awake"] .draw-hint,
+  html[data-chrome="awake"] .app .draw-hint,
   .note-pop,
-  .app[data-chrome="awake"] .note-pop {
+  html[data-chrome="awake"] .app .note-pop {
     right: 12px;
   }
   .brand-cluster {
@@ -2002,7 +2037,7 @@ body[data-fx="off"] .caustic {
      on top of the attribution, which is a licence condition and may never be
      covered. */
   .dock,
-  .app[data-chrome="awake"] .dock {
+  html[data-chrome="awake"] .app .dock {
     left: 12px;
     right: 12px;
     bottom: 12px;

@@ -461,23 +461,47 @@ describe("restoring the categories a share link declared", () => {
   });
 
   it("records whether asking again could help, per category", async () => {
-    // Three failures that read alike in `error` and are not the same event: the
+    // Four failures that read alike in `error` and are not the same event: the
     // bakery is listed with no file behind it (404), the cafe is one second of
     // a server having a bad time (503), the pharmacy is not in this build's
-    // index at all. `shareCategories` turns this single boolean into whether
-    // the link this page hands on still declares the category, so guessing it
-    // here would make one bad second shrink the map for every reader
-    // downstream - or make a link promise a file nobody serves.
-    const { registry, failures } = backingFor(createFlakyTier2Fetch("cafe").fetchJson);
+    // index at all, and the restaurant file was served - with a 200 - as
+    // something that is not GeoJSON. `shareCategories` turns this single
+    // boolean into whether the link this page hands on still declares the
+    // category, so guessing it here would make one bad second shrink the map
+    // for every reader downstream - or make a link promise a file nobody serves.
+    //
+    // The unreadable file is the asymmetric one, and it is pinned here rather
+    // than left to the reader of the loader: the deployment does list and does
+    // serve the category, so calling it permanent would quietly delete a
+    // category that exists from every link passing through this page. Being
+    // wrong the other way only costs one more request.
+    const flaky = createFlakyTier2Fetch("cafe");
+    const fetchJson: FetchJson = async (url) =>
+      url === "/data/tier2/restaurant.geojson"
+        ? { error: "under maintenance" } // a 200 with an error page in it
+        : flaky.fetchJson(url);
+    const { registry, failures } = backingFor(fetchJson);
 
-    const result = await registry.restoreCategories(["cafe", "bakery", "pharmacy"]);
+    const result = await registry.restoreCategories([
+      "cafe",
+      "bakery",
+      "pharmacy",
+      "restaurant",
+    ]);
 
     expect(result.failed.map((f) => [f.category, f.permanent])).toEqual([
       ["bakery", true],
       ["cafe", false],
       ["pharmacy", true],
+      ["restaurant", false],
     ]);
     expect(failures()).toEqual(result.failed);
+    // The restaurant failure is about the payload, not the request: it must not
+    // read as a missing file to whoever relays it, and it is the parse branch
+    // that is being pinned here rather than a 404 in disguise.
+    expect(result.failed.find((f) => f.category === "restaurant")?.error).toBe(
+      '/data/tier2/restaurant.geojson: not a FeatureCollection (no "features" array)',
+    );
   });
 
   it("calls every category permanent when the index itself is a 404", async () => {
@@ -821,6 +845,59 @@ describe("the store the app ships", () => {
     ]);
     await zustandToolStore.loadTier2Manifest();
     expect(spy.mock.calls.filter((c) => String(c[0]) === TIER2_INDEX_URL)).toHaveLength(1);
+  });
+});
+
+describe("isPermanentFetchError", () => {
+  it("keeps the three retry-inviting 4xx retryable, and the rest of 4xx final", async () => {
+    // This flag outlives the request twice over: it decides whether the page
+    // ever asks for the file again, and whether a link it hands on still
+    // declares the category. "4xx means stop" is right for a 404 or a 410 -
+    // there is no file - and wrong for the three statuses that exist to say
+    // "later": a CDN rate-limiting the 2.5 MB restaurant file with a 429 would
+    // otherwise delete restaurants from every link this page produces, from
+    // one busy second.
+    for (const [status, permanent] of [
+      [400, true],
+      [403, true],
+      [404, true],
+      [410, true],
+      [451, true],
+      [408, false],
+      [425, false],
+      [429, false],
+      [500, false],
+      [503, false],
+    ] as const) {
+      const error = new HttpStatusError(status, `/data/tier2/restaurant.geojson: ${status}`);
+      expect(isPermanentFetchError(error), String(status)).toBe(permanent);
+    }
+    // Anything without a status - a dropped connection, a timeout, a body that
+    // would not parse - is a moment as well: only a server saying so makes a
+    // failure final.
+    expect(isPermanentFetchError(new Error("network error"))).toBe(false);
+    expect(isPermanentFetchError(undefined)).toBe(false);
+  });
+
+  it("retries a rate-limited category instead of dropping it from the map", async () => {
+    // The end-to-end consequence of the line above, and the reason it is not a
+    // style question: a 429 must leave the category loadable, and must leave
+    // the link this page hands on still declaring it.
+    let asked = 0;
+    const limited: FetchJson = async (url) => {
+      if (url === "/data/tier2/cafe.geojson" && asked++ === 0) {
+        throw new HttpStatusError(429, `${url}: 429 Too Many Requests`);
+      }
+      return createTier2Fetch().fetchJson(url);
+    };
+    const { registry, loaded } = backingFor(limited);
+
+    const first = await registry.restoreCategories(["cafe"]);
+    expect(first.failed.map((f) => [f.category, f.permanent])).toEqual([["cafe", false]]);
+
+    const second = await registry.loadCategory("cafe");
+    expect(second).toMatchObject({ ok: true, category: "cafe", fetched: true });
+    expect(loaded()).toEqual(["cafe"]);
   });
 });
 

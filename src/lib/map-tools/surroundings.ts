@@ -12,7 +12,8 @@ import {
   polygonToLine,
 } from "@turf/turf";
 import type { Feature, LineString, MultiLineString, MultiPolygon, Polygon } from "geojson";
-import { FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import { FEATURE_CATEGORIES, type FeatureCategory } from "@/lib/data/schema";
+import type { MapCategory, MapFeature } from "@/lib/store/tier2";
 import type { LngLat } from "@/lib/store/map-store";
 import { COMPASS, compassFromBearing, distanceMeters, featureCenter, type Compass } from "./output";
 
@@ -40,7 +41,7 @@ export interface SurroundingsItem {
   id: string;
   name: string;
   name_en?: string;
-  category: FeatureCategory;
+  category: MapCategory;
   distance_m: number;
   /** Present and true only for fabricated demo data. */
   sample?: boolean;
@@ -52,7 +53,7 @@ export interface SurroundingsGroup {
 }
 
 /** Metres from a point to the outline of a district, or Infinity if unusable. */
-function boundaryDistanceM(feature: GlassMapFeature, point: LngLat): number {
+function boundaryDistanceM(feature: MapFeature, point: LngLat): number {
   try {
     const line = polygonToLine(feature as Feature<Polygon | MultiPolygon>);
     const lines = line.type === "FeatureCollection" ? line.features : [line];
@@ -80,7 +81,7 @@ function boundaryDistanceM(feature: GlassMapFeature, point: LngLat): number {
  * defect from the other side: the first match wins, which at least is stable.
  */
 export function findDistrict(
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   point: LngLat,
 ): string | null {
   let nearestName: string | null = null;
@@ -113,7 +114,7 @@ export function findDistrict(
  * has no meaningful bearing; it is reported as north rather than dropped.
  */
 export function groupByDirection(
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   origin: LngLat,
 ): SurroundingsGroup[] {
   const byDirection = new Map<Compass, SurroundingsItem[]>();

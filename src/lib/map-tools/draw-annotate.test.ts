@@ -574,7 +574,15 @@ describe("find_features / select_features within", () => {
       radius_m: 100,
     });
     const out = await call(byName.find_features, { within: drawn.drawing_id as string });
-    expect(out).toEqual({ total: 0, returned: 0, features: [] });
+    // Kept exhaustive: an empty answer must not quietly grow fields either.
+    // The origin rides along even here — distances would have been measured
+    // from the view centre, and the shape being empty does not change that.
+    expect(out).toEqual({
+      total: 0,
+      returned: 0,
+      features: [],
+      origin: { lng: VIEW.center[0], lat: VIEW.center[1] },
+    });
   });
 
   it("survives a feature whose geometry cannot be tested", async () => {

@@ -4,7 +4,7 @@
  * and "the 3 parks you selected" must be the same three.
  */
 import type { MultiPolygon, Polygon } from "geojson";
-import { isFeatureCategory, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import { isMapCategory, type MapCategory, type MapFeature } from "@/lib/store/tier2";
 import type { LngLat } from "@/lib/store/map-store";
 import { normaliseName, resolvePlaceOne, type PlaceCandidate } from "./gazetteer";
 import { distanceMeters, featureCenter } from "./output";
@@ -39,16 +39,22 @@ export function validateLimit(value: unknown): { limit: number } | { error: stri
   return { limit: value };
 }
 
+/**
+ * Accepts the six bundled categories and the 18 tier-2 ones alike. Whether a
+ * category still has to be fetched is not this function's business: it only
+ * says the name exists, so "unknown categories: cafeteria" can never be
+ * confused with "the cafe file failed to load".
+ */
 export function validateCategories(
   value: unknown,
-): { categories?: FeatureCategory[] } | { error: string } {
+): { categories?: MapCategory[] } | { error: string } {
   if (value === undefined) return {};
   if (!Array.isArray(value) || value.length === 0) {
     return { error: "categories must be a non-empty array of category names" };
   }
-  const bad = value.filter((c) => !isFeatureCategory(c));
+  const bad = value.filter((c) => !isMapCategory(c));
   if (bad.length > 0) return { error: `unknown categories: ${bad.join(", ")}` };
-  return { categories: value as FeatureCategory[] };
+  return { categories: value as MapCategory[] };
 }
 
 export function validateRadius(value: unknown): { radius_m?: number } | { error: string } {
@@ -71,7 +77,7 @@ export function validateRadius(value: unknown): { radius_m?: number } | { error:
  */
 export function resolveNear(
   near: unknown,
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   viewCenter?: LngLat | null,
   field = "near",
 ): NearResolution {
@@ -104,7 +110,7 @@ export function resolveNear(
 export interface QuerySpec {
   /** Case-insensitive substring of name or nameEn. */
   query?: string;
-  categories?: FeatureCategory[];
+  categories?: MapCategory[];
   /** Distances are measured from here and the result is sorted by them. */
   origin: LngLat;
   /** Drops anything further than this from the origin. */
@@ -121,25 +127,36 @@ export interface QuerySpec {
  * and set_map_view({place:"Daan Forest Park"}) cannot disagree about whether
  * OSM's "Da-an Forest Park" is a match.
  */
-function matchesQuery(feature: GlassMapFeature, needle: string): boolean {
+function matchesQuery(feature: MapFeature, needle: string): boolean {
   const p = feature.properties;
   return (
     normaliseName(p.name ?? "").includes(needle) || normaliseName(p.nameEn ?? "").includes(needle)
   );
 }
 
+/**
+ * A feature belongs to every category it is tagged with, which for the handful
+ * of double-tagged POIs is two. One rule everywhere: if you asked for fast_food
+ * you get the bakery that also sells fast food, whichever file it came in.
+ */
+export function inCategories(feature: MapFeature, wanted: ReadonlySet<string>): boolean {
+  if (wanted.has(feature.properties.category)) return true;
+  const extra = feature.properties.categories;
+  return extra !== undefined && extra.some((c) => wanted.has(c));
+}
+
 /** Filtered features, nearest to the origin first. Unlocatable features sort last. */
 export function queryFeatures(
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   spec: QuerySpec,
-): GlassMapFeature[] {
+): MapFeature[] {
   const needle = spec.query ? normaliseName(spec.query) || undefined : undefined;
   const categories = spec.categories ? new Set<string>(spec.categories) : null;
 
-  const scored: { feature: GlassMapFeature; distance: number }[] = [];
+  const scored: { feature: MapFeature; distance: number }[] = [];
   for (const feature of features) {
     if (!feature?.properties?.id) continue;
-    if (categories && !categories.has(feature.properties.category)) continue;
+    if (categories && !inCategories(feature, categories)) continue;
     if (needle && !matchesQuery(feature, needle)) continue;
     if (spec.within && !featureWithin(spec.within, feature)) continue;
     const center = featureCenter(feature);

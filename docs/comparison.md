@@ -29,7 +29,7 @@ Honesty notes, all biased **against** the WebMCP claim:
 
 | | Screenshot agent | WebMCP |
 |---|---|---|
-| Cost | 3 screenshots (full + 2 region crops) | **1 tool call, 1,197 B returned** |
+| Cost | 3 screenshots (full + 2 region crops) | **1 tool call, 1,197 B returned**\* |
 | Result | **1 of 11** parks nameable — and only by inference from an MRT station label; the other 10 render as unlabeled green polygons at this zoom | all **11** parks with name, distance and compass direction |
 | Path to parity | zoom-and-pan grid over the viewport hoping the basemap labels appear (dozens of screenshots, not guaranteed — smaller parks are never labelled) | — |
 
@@ -47,12 +47,14 @@ Honesty notes, all biased **against** the WebMCP claim:
 |---|---|---|---|---|
 | A | `set_map_view` {place, zoom} | 39 | 216 | 7 ms |
 | A | `draw_shape` circle 800 m | 83 | 360 | 6 ms |
-| B | `list_features_in_view` {parks} | 23 | 1,197 | ~5 ms |
+| B | `list_features_in_view` {parks} | 23 | 1,197\* | ~5 ms |
 | C | `describe_surroundings` {from, 800} | 43 | 2,771 | 9 ms |
 
 Four calls, ~4.5 KB of structured output, zero screenshots, for all three tasks together. The control arm consumed 11 screenshots/crops (each one costing a multimodal model far more tokens than the entire WebMCP ledger) and still failed task B and approximated tasks A and C.
 
+\* **Footnote added 2026-08-30, measurement unchanged.** `list_features_in_view` and `find_features` did not echo their query `origin` back to the caller on 2026-08-28, when 1,197 B was measured. T-70 (PR #52, merged 2026-08-30) added that echo — an `{ origin: { lng, lat } }` field on every answer, plus `radius_m` on `find_features` when the search was bounded — so both tools' responses are larger today than on the measurement date. For a call shaped like task B's, the added `origin` field alone costs ~43 B (`,"origin":{"lng":121.53528,"lat":25.03356}` is 42 B for that specific coordinate pair; exact cost varies by a byte or two with the digit count of the coordinates). Today's actual response for the same call is therefore closer to **1,240 B**, not 1,197 B. The 2026-08-28 number above is left as measured — re-running the live comparison is out of this task's scope — and the WebMCP arm's real margin over the screenshot arm is if anything larger now than what this table shows, never smaller.
+
 ## Measurement caveats found along the way
 
-- Tool calls issued in the same instant as `set_map_view` can observe the pre-flight `bounds` (the camera animates; the store records settled state at `moveend`). Agents chaining calls should let the flight settle — as a human watching the map naturally would. Flagged to tool-dev for a description note.
+- Tool calls issued in the same instant as `set_map_view` can observe the pre-flight `bounds` (the camera animates and the store records settled state at `moveend` — except when the basemap style never loaded, where it jumps and settles synchronously instead, fixed in PR #39). Agents chaining calls should let the flight settle — as a human watching the map naturally would. Flagged to tool-dev for a description note.
 - Two early runs hit a transient `map not ready` within milliseconds of page load; waiting for the map's `ready` status (as any agent naturally does) avoids it.

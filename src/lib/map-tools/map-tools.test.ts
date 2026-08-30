@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMapTools, PLACE_ZOOM, validateSetMapView } from "./index";
 import { createMemoryToolStore, DEFAULT_VIEW, type MemoryToolStore } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { FeatureOutput } from "./output";
+import { distanceMeters, featureCenter, type FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
 import { DEFAULT_LIMIT, DEFAULT_RADIUS_M, MAX_QUERY_RADIUS_M } from "./query";
 import {
@@ -423,6 +423,20 @@ describe("list_features_in_view", () => {
     expect(out.returned).toBe(IN_VIEW_IDS_BY_DISTANCE.length);
   });
 
+  it("echoes the view centre its distances were measured from", async () => {
+    // The same reason find_features echoes its origin: "220 m NE" is unusable
+    // without the point it is from, and the view can move between two calls.
+    // It also keeps this tool's answer shape equal to find_features's, which
+    // is what lets an agent treat the two results as one kind of thing.
+    const { byName, store } = mapReady();
+    expect((await call(byName.list_features_in_view)).origin).toEqual({
+      lng: VIEW.center[0],
+      lat: VIEW.center[1],
+    });
+    store.setView({ center: [121.51, 25.05] });
+    expect((await call(byName.list_features_in_view)).origin).toEqual({ lng: 121.51, lat: 25.05 });
+  });
+
   it("includes an area that only partly overlaps the viewport", async () => {
     // A district is larger than the screen; excluding it would hide the answer
     // to "which district am I looking at?".
@@ -437,8 +451,13 @@ describe("list_features_in_view", () => {
   });
 
   it("rejects a category that is not in the schema, listing what was wrong", async () => {
+    // "cafeteria" is the test's whole point: it is not one of the six bundled
+    // categories *and* not one of the 18 point-of-interest ones, so the
+    // rejection is about the name, not about a file that failed to load.
     const { byName } = mapReady();
-    expect((await call(byName.list_features_in_view, { categories: ["cafe"] })).error).toMatch(/cafe/);
+    expect(
+      (await call(byName.list_features_in_view, { categories: ["cafeteria"] })).error,
+    ).toMatch(/cafeteria/);
   });
 
   it("honours limit while still reporting the true total", async () => {
@@ -546,9 +565,87 @@ describe("find_features", () => {
   });
 
   it("returns an empty result rather than an error when nothing matches", async () => {
+    // Still exhaustive on purpose: this assertion is the tool layer's guard
+    // against result-shape drift. The origin is part of the empty answer by
+    // design — "nothing within reach of here" is a different fact from
+    // "nothing anywhere", and only the echo says which one this is. No
+    // radius_m: this query bounded nothing, so claiming one would be a lie.
     const { byName } = mapReady();
     const out = await call(byName.find_features, { query: "Shibuya" });
-    expect(out).toEqual({ total: 0, returned: 0, features: [] });
+    expect(out).toEqual({
+      total: 0,
+      returned: 0,
+      features: [],
+      origin: { lng: VIEW.center[0], lat: VIEW.center[1] },
+    });
+  });
+
+  it("echoes the origin it measured from, so a name or an id resolves visibly", async () => {
+    // Every distance_m and direction in the answer is measured from a point
+    // the caller may never have stated: "near Daan Station" is a name, not a
+    // coordinate. Without the echo the result cannot be checked, replayed or
+    // drawn — the page would have to guess which point the agent searched
+    // around, and guessing is the one thing this tool layer does not do.
+    const { byName } = mapReady();
+    const named = await call(byName.find_features, {
+      near: "Daan Station",
+      categories: ["supermarket"],
+    });
+    expect(named.origin).toEqual({ lng: 121.5436, lat: 25.0334 });
+    // The by-id and by-coordinate forms of the same origin stay identical
+    // answers: the echo is the resolved point, never the input's spelling.
+    const byId = await call(byName.find_features, { near: "osm:node:2", categories: ["supermarket"] });
+    expect(byId).toEqual(named);
+  });
+
+  it("echoes radius_m only when the search really was bounded by one", async () => {
+    // A radius on an unbounded search would claim a limit that was never
+    // applied — the agent would report "nothing within 800 m" about a query
+    // that searched the whole city, and the page would draw a ring around a
+    // sweep that had none.
+    const { byName } = mapReady();
+    const bounded = await call(byName.find_features, { near: "Daan Station" });
+    expect(bounded.radius_m).toBe(DEFAULT_RADIUS_M);
+    expect((await call(byName.find_features, { radius_m: 250 })).radius_m).toBe(250);
+    const unbounded = await call(byName.find_features, { query: "Pxmart" });
+    expect(unbounded).not.toHaveProperty("radius_m");
+    expect(unbounded.origin).toEqual({ lng: VIEW.center[0], lat: VIEW.center[1] });
+  });
+
+  it("rounds the echoed origin like every other coordinate it prints", async () => {
+    // Output discipline is a contract, not a preference: five decimals is
+    // about a metre, and a raw double here would be the one place in the tool
+    // layer where an agent pays for eleven.
+    const { byName } = mapReady();
+    const out = await call(byName.find_features, { near: { lng: 121.123456789, lat: 25.987654321 } });
+    expect(out.origin).toEqual({ lng: 121.12346, lat: 25.98765 });
+  });
+
+  it("measures from the origin it prints, so every distance can be recomputed", async () => {
+    // Rounding on the way out alone would print a point up to a metre from the
+    // one the distances were taken from, and both search tools would look
+    // right while disagreeing: an agent replaying "220 m NE" from the origin it
+    // was handed would get a different number, with nothing in the answer to
+    // say which of the two was the map's. Rounding before measuring makes the
+    // echo checkable, which is the only reason it is worth its tokens.
+    const { byName, store } = mapReady();
+    const centre = { lng: 121.5375024, lat: 25.0325044 };
+    store.setView({ center: [centre.lng, centre.lat] });
+    const unreplayable = (out: ToolResult) => {
+      const { lng, lat } = out.origin as { lng: number; lat: number };
+      return (out.features ?? [])
+        .filter((f) => {
+          const feature = FIXTURE_FEATURES.find((x) => x.properties.id === f.id)!;
+          return distanceMeters([lng, lat], featureCenter(feature)!) !== f.distance_m;
+        })
+        .map((f) => f.id);
+    };
+    const listed = await call(byName.list_features_in_view);
+    expect(listed.features?.length).toBe(IN_VIEW_IDS_BY_DISTANCE.length);
+    expect(unreplayable(listed)).toEqual([]);
+    const found = await call(byName.find_features, { near: centre });
+    expect(found.features?.length).toBeGreaterThan(0);
+    expect(unreplayable(found)).toEqual([]);
   });
 
   it("refuses an unknown shape id instead of ignoring the filter", async () => {
@@ -561,10 +658,15 @@ describe("find_features", () => {
   });
 
   it("has the same result shape as list_features_in_view", async () => {
+    // Parity is a promise to the agent: whatever it learned to read from one
+    // search tool it can read from the other. That is why the origin echo was
+    // added to both at once — a field on find alone would have made "the same
+    // kind of answer" false, and this test is what says so.
     const { byName } = mapReady();
     const a = await call(byName.find_features, { limit: 3 });
     const b = await call(byName.list_features_in_view, { limit: 3 });
     expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort());
+    expect(Object.keys(a)).toContain("origin");
   });
 });
 

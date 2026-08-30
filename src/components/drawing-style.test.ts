@@ -3,6 +3,7 @@ import type { Drawing, LngLat } from "@/lib/store/map-store";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
+  DRAWING_LAYER_IDS,
   DRAWING_SOURCE,
   buildDrawingLayerSpecs,
   drawingsToGeoJson,
@@ -76,6 +77,17 @@ describe("buildDrawingLayerSpecs", () => {
   it("reads from the drawing sources only", () => {
     const sources = new Set(specs.map((l) => (l as { source?: string }).source));
     expect(sources).toEqual(new Set([DRAWING_SOURCE, DRAWING_LABEL_SOURCE, DRAFT_SOURCE]));
+  });
+
+  it("can be tapped on every layer a finished shape paints, and on no other", () => {
+    // The taps are what make a hand-drawn shape removable without an agent
+    // (`OnTheMapCard`), so a renamed layer must fail here rather than silently
+    // stop answering. The label is left out on purpose — a symbol's hit box is
+    // its glyphs — and so is the draft, which is not a mark yet.
+    const painted = specs
+      .filter((l) => (l as { source?: string }).source === DRAWING_SOURCE)
+      .map((l) => l.id);
+    expect([...DRAWING_LAYER_IDS]).toEqual(painted.filter((id) => id !== "gm-drawing-label"));
   });
 
   it("labels from the point source, not from the shapes", () => {

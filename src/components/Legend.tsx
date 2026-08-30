@@ -3,11 +3,7 @@
 import { useMemo, useState } from "react";
 import type { FeatureCategory } from "@/lib/data/schema";
 import { useMapStore } from "@/lib/store/map-store";
-import {
-  CATEGORY_PLURAL,
-  CATEGORY_PLURAL_SHORT,
-  LEGEND_ORDER,
-} from "./category-labels";
+import { CATEGORY_PLURAL, LEGEND_ORDER } from "./category-labels";
 import { LoadedCategories } from "./LoadedCategories";
 import { CATEGORY_COLOR } from "./map-style";
 
@@ -22,31 +18,11 @@ function Swatch({ category }: { category: FeatureCategory }) {
   );
 }
 
-function Chip({
-  category,
-  count,
-  short,
-  testid,
-}: {
-  category: FeatureCategory;
-  count: number;
-  short: boolean;
-  testid: string;
-}) {
-  const abbreviation = CATEGORY_PLURAL_SHORT[category];
+function Chip({ category, count }: { category: FeatureCategory; count: number }) {
   return (
-    <span className="lg-chip" data-testid={testid} data-category={category}>
+    <span className="lg-chip" data-testid="legend-popover-item" data-category={category}>
       <Swatch category={category} />
-      <span className="lg-name">
-        {short && abbreviation ? (
-          <>
-            <span className="lg-name-full">{CATEGORY_PLURAL[category]}</span>
-            <span className="lg-name-short">{abbreviation}</span>
-          </>
-        ) : (
-          CATEGORY_PLURAL[category]
-        )}
-      </span>
+      <span className="lg-name">{CATEGORY_PLURAL[category]}</span>
       <span className="lg-n">{number(count)}</span>
     </span>
   );
@@ -66,9 +42,11 @@ function Chip({
  * `LoadedCategories`; the exact machine total, matching `get_map_state`'s
  * `features_loaded`, is in the state overlay.
  *
- * Below 1241px there is no room for six labelled chips beside the badge, so it
- * collapses to the total plus a popover with the same rows (which is also the
- * only way the numbers stay readable on a phone).
+ * One pill at every width, with the six rows in a popover behind it. The
+ * always-open strip that used to run along the bottom at ≥1241px is gone with
+ * the rest of the dashboard: a landing map states its scale ("2,063 places")
+ * and unfolds the key when asked, rather than spending the bottom of the
+ * screen on a table nobody opened.
  */
 export function Legend() {
   const features = useMapStore((s) => s.features);
@@ -92,41 +70,27 @@ export function Legend() {
           moves. */}
       <LoadedCategories />
 
-      <div className="legend-full glass">
-        <span className="legend-total" data-testid="legend-total">
-          {number(total)} places
-        </span>
-        {LEGEND_ORDER.map((category) => (
-          <Chip
-            key={category}
-            category={category}
-            count={counts.get(category) ?? 0}
-            short
-            testid="legend-item"
-          />
-        ))}
-      </div>
-
       <div className={`legend-pillbox${open ? " open" : ""}`}>
-        <div className="legend-pop glass" data-testid="legend-popover">
+        <div className="legend-pop lg deep" data-testid="legend-popover">
           {LEGEND_ORDER.map((category) => (
-            <Chip
-              key={category}
-              category={category}
-              count={counts.get(category) ?? 0}
-              short={false}
-              testid="legend-popover-item"
-            />
+            <Chip key={category} category={category} count={counts.get(category) ?? 0} />
           ))}
         </div>
         <button
           type="button"
-          className="legend-pill glass"
+          className="legend-pill lg lens"
           data-testid="legend-toggle"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          {number(total)} places
+          <span className="legend-total" data-testid="legend-total">
+            {number(total)} places
+          </span>
+          <span aria-hidden className="legend-dots">
+            {LEGEND_ORDER.filter((c) => c !== "district").map((category) => (
+              <i key={category} style={{ backgroundColor: CATEGORY_COLOR[category] }} />
+            ))}
+          </span>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
             <path
               d="M3 4.8 6 7.8 9 4.8"

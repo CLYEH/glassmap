@@ -24,7 +24,7 @@ export function ShareRestoreNotice() {
   if (failures.length === 0) return null;
 
   return (
-    <div className="share-restore glass" data-testid="share-restore">
+    <div className="share-restore lg" data-testid="share-restore">
       {failures.map((failure) => (
         <span
           key={failure.category}

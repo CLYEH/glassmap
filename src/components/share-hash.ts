@@ -2,12 +2,22 @@ import {
   MAX_SHARE_URL_BYTES,
   decodeShareState,
   encodeShareState,
+  restoredAgentStateOf,
+  restoredSelectionSources,
+  selectionAttributionExplicit,
+  userSelectedIds,
   utf8Bytes,
   type ShareAnnotation,
   type ShareDrawing,
   type ShareState,
 } from "@/lib/map-tools/share";
-import type { Annotation, Drawing, MapView } from "@/lib/store/map-store";
+import type {
+  Annotation,
+  Drawing,
+  MapView,
+  SelectionAttribution,
+  SelectionSource,
+} from "@/lib/store/map-store";
 import {
   shareCategories,
   type Tier2Category,
@@ -87,6 +97,17 @@ export function planHashUpdate(
 export interface ShareStoreSlice {
   view: MapView;
   selection: readonly string[];
+  /**
+   * Who selected each id, as the store recorded it. In the mirror for one
+   * reason: `get_share_link` writes the `su` key from this record, and until
+   * the bar wrote it too, a map whose owner proved they selected everything on
+   * it lost that proof the moment the bar was rewritten — the recipient's page
+   * re-encoded without `su`, and a `su`-less selection reads as the agent's
+   * (`restoredAgentStateOf`). A proven-human map flipped to presumed-agent on
+   * reload. See `userSelectedIds` in `map-tools/share.ts` for the three-part
+   * contract this is part one of.
+   */
+  selectionSources: Readonly<Record<string, SelectionSource>>;
   drawings: readonly Drawing[];
   annotations: readonly Annotation[];
   tier2Loaded: readonly Tier2Category[];
@@ -120,6 +141,12 @@ export function shareStateOf(state: ShareStoreSlice): ShareState {
   return {
     view: state.view,
     selection: state.selection,
+    // Part two of the same contract: the bar carries the human's own ids, so a
+    // link copied out of the address bar says exactly what `get_share_link`
+    // would have said. `encodeShareState` intersects it with the selection and
+    // omits it when empty, so an agent-only map still encodes to the bytes it
+    // always did.
+    userSelected: userSelectedIds(state.selection, state.selectionSources),
     drawings: state.drawings,
     annotations: state.annotations,
     categories: shareCategories(state.tier2Loaded, state.tier2Pending, state.tier2RestoreFailures),
@@ -148,6 +175,11 @@ export function shareStateChanged(state: ShareStoreSlice, previous: ShareStoreSl
   return (
     state.view !== previous.view ||
     state.selection !== previous.selection ||
+    // Written in the same store call as `selection` today, so it buys no
+    // wake-up of its own — and listed for the same reason the failures are: it
+    // is an input of `shareStateOf`, and a guard that watches only some of what
+    // the link encodes is one refactor away from a bar that stops following.
+    state.selectionSources !== previous.selectionSources ||
     state.drawings !== previous.drawings ||
     state.annotations !== previous.annotations ||
     state.tier2Loaded !== previous.tier2Loaded ||
@@ -159,11 +191,15 @@ export function shareStateChanged(state: ShareStoreSlice, previous: ShareStoreSl
 /** What a link is restored into: the store's own writers, narrowed to these. */
 export interface ShareRestoreTarget {
   setView(view: MapView): void;
-  setSelection(ids: string[]): void;
+  setSelection(ids: string[], attribution?: SelectionAttribution): void;
   addDrawing(drawing: ShareDrawing): void;
   addAnnotation(annotation: ShareAnnotation): void;
   /** `MapStore.restoreTier2Categories`; the result is deliberately not awaited. */
   restoreTier2Categories(categories: readonly Tier2Category[]): Promise<unknown>;
+  /** Whether the link carried agent work; decides which chrome the page wears. */
+  setRestoredAgentState(restoredAgentState: boolean): void;
+  /** Whether the link *stated* who selected its ids; decides what that chrome may say. */
+  setSelectionAttributionExplicit(selectionAttributionExplicit: boolean): void;
 }
 
 /** Applied, or refused with the codec's own sentence for the caller to log. */
@@ -180,8 +216,32 @@ export type ShareApplyResult = { ok: true } | { ok: false; error: string };
 export function applyShareHash(hash: string, store: ShareRestoreTarget): ShareApplyResult {
   const decoded = decodeShareState(hash);
   if ("error" in decoded) return { ok: false, error: decoded.error };
+  // Flag first, content second, and the order is load-bearing twice over
+  // (`src/lib/awaken/index.ts` argues it in full). No subscriber may ever see
+  // a restored camera, selection or shape while the store still reports
+  // "idle": written last, the flag would arrive after the content and every
+  // chrome-dependent reader — the map's own padding and `bounds`, the lane, the
+  // feed — would recompute twice, the first time for a map that is not the one
+  // being restored. And no restore write may ever look like an agent
+  // *arriving* — the only write in this sequence that can flip the mode is this
+  // one, and it carries the bit that says "this is history, not news".
+  //
+  // What this ordering does NOT buy is the first *paint*. This runs in an
+  // effect, which React reaches after the server-rendered human chrome is
+  // already on screen; dressing that paint correctly is the inline script's
+  // job, from the fragment itself (`app/boot-chrome.ts`). Store ordering and
+  // paint ordering are separate problems and only one of them is solved here.
+  store.setRestoredAgentState(restoredAgentStateOf(decoded));
+  // Its sibling: decode-time evidence for what the restored chrome may *say*.
+  // The surfaces that ask (the card's provenance line, the lane's SELECTED tag)
+  // render long after the link is gone and cannot re-read it.
+  store.setSelectionAttributionExplicit(selectionAttributionExplicit(decoded));
   store.setView(decoded.view);
-  store.setSelection(decoded.selection);
+  // Part three: the link's `su` ids go in as the human's, so this page holds
+  // the provenance its own mirror will re-encode. Stated per id and wholesale —
+  // a restore replaces the map, so what the link says about these ids replaces
+  // whatever this page thought about the ones it used to hold.
+  store.setSelection(decoded.selection, restoredSelectionSources(decoded));
   // Started, never awaited, and started here - before the drawings, before this
   // function returns, before anything else on the page can read the store.
   // `restoreCategories` marks the categories pending synchronously (see its doc

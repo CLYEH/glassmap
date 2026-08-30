@@ -7,6 +7,7 @@ import { BrandBar } from "@/components/BrandBar";
 import { DrawToolbar } from "@/components/DrawToolbar";
 import { Inspector } from "@/components/Inspector";
 import { Legend } from "@/components/Legend";
+import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
 import { WebMcpBadge } from "@/components/WebMcpBadge";
@@ -56,6 +57,11 @@ export default function Home() {
         <div className="bottom-bar">
           <Legend />
           <div className="corner">
+            {/* Both are about the link rather than about the map, so they share
+                the corner above the attribution: one says the map has outgrown
+                a URL, the other that a link this page opened asked for data it
+                could not get. */}
+            <ShareRestoreNotice />
             <ShareStatus />
             <Attribution />
             <WebMcpBadge />

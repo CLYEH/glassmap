@@ -68,6 +68,20 @@ Design handoff: `docs/design/ui-redesign-handoff.md` (tokens, component inventor
 | T-53 | Activity feed UI wired to the T-50 slice | map-ui-dev | done | PR #36; declarative add_note records agent-invoked submissions too |
 | T-54 | e2e: suite green on the new chrome; share-link restore shows provenance labels on the receiving window (experience-case gate) | qa | done | PR #38 — provenance gate PASS; found the frozen-bounds defect, fixed as PR #39 (jump, don't fly, without a style) |
 
+## Tier-2 OSM breadth — approved 2026-08-30 · gate: category-addressed city-wide breadth, deterministic and shareable
+
+Outcome of the basemap-interop adversarial study (5 rounds; tile-reading refuted on licence/completeness/latency/actionability; the pipeline widened instead). Laws: **category filtering is the query model — no list-all tools**; category-lazy whole-city loading, NEVER bbox-lazy (store contents are a function of the requested-category set, not of camera history); tier-2 ships unpainted until a design pass; basemap stays pure display; interop = the shared `osm:<type>:<id>` namespace.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-60 | Tier-2 pipeline: 18 OSM categories via Overpass → `public/data/tier2/<cat>.geojson` (sorted, schema-compatible) + `tier2/index.json` manifest (category/count/bytes) | data-engineer | doing(data-engineer) | sanctioned channel; fair-use pacing; ODbL attribution |
+| T-61 | Selection painting via feature-state (promoteId), retiring the `["in", …literal]` filter | map-ui-dev | doing(map-ui-dev) | measured: 13.8k-id literal = 1.4s/pass; visuals must stay identical |
+| T-62 | Category-lazy core: `loadCategory` in store; find/list/select category-required for tier-2 + disclosure of unsearched categories + counts-per-category from the manifest; select cap (refuse >500 with advice); gazetteer grows on load | tool-dev | doing(tool-dev) | fixture-driven — no dependency on T-60 output; pages that load no tier-2 behave byte-identically (existing suite stays green) |
+| T-63 | Share manifest: hash wire v2 carries loaded-category list; recipient loads before resolving; prune-exemption for pending ids; loud failure | tool-dev | todo | after T-62 merges |
+| T-64 | UI: legend/inspector disclosure of loaded categories; tier-2 unpainted (design-gated) | map-ui-dev | todo | after T-61/T-62 merge |
+| T-65 | e2e: determinism (load-order invariance), lazy round-trip, share-manifest restore, select cap, perf budget | qa | todo | after wave 2 |
+| T-66 | README: tier-2 section + roadmap (Overpass runtime long-tail — CORS verified open; live plane = backend-when-live-data) | docs-writer | todo | |
+
 ## Handoff log
 
 Append-only. `date · from → to · what`.
@@ -85,3 +99,4 @@ Append-only. `date · from → to · what`.
 - 2026-08-29 · reviewer → qa · e2e/set-map-view.spec.ts:11-24 comment is stale after PR #39: under network isolation the re-entrant moveend now comes from jumpTo, not flyTo's stop(); the mid-flight-clobber race is only exercised with E2E_LIVE_BASEMAP=1 — update the comment, consider a live-basemap variant.
 - 2026-08-29 · reviewer → docs-writer (T-41) · docs/comparison.md:57 "camera animates, state settles at moveend" is over-cautious since PR #39 (no-style path jumps synchronously); soften when T-41 touches the file.
 - 2026-08-29 · qa/map-ui-dev → orchestrator · "Hide" collapses only the inspector body; the glass lane still covers the map, so bounds keep excluding it (correct). If Hide should return the lane to the map, that is a layout decision — padding and bounds would follow for free.
+- 2026-08-30 · orchestrator → all · Tier-2 approved by the user (time explicitly not a constraint; agent-parallel build). Integration on develop only; main stays demo-stable until the whole package is green. Category taxonomy and interface contracts are fixed in the dispatches.

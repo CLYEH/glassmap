@@ -13,9 +13,15 @@
  *    untrustedContentHint on the tool's own return is what still governs the
  *    agent-facing answer.
  */
-import type { ActivityEntry, MapToolStore } from "@/lib/store/map-store";
+import {
+  ACTIVITY_FX_HIT_LIMIT,
+  type ActivityEntry,
+  type ActivityFx,
+  type MapToolStore,
+} from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { DATASETS, isFeatureCategory } from "@/lib/data/schema";
+import { isMapCategory } from "@/lib/store/tier2";
 import { DEFAULT_CIRCLE_RADIUS_M, truncate } from "./shapes";
 import { DEFAULT_SURROUNDINGS_RADIUS_M } from "./surroundings";
 import { round5 } from "./state";
@@ -64,6 +70,50 @@ function pointOf(value: unknown): string | undefined {
 }
 
 /**
+ * A point for the page to draw, taken from a `{lng, lat}` a tool already
+ * answered with. Reading the *result* rather than the input is what makes the
+ * mark trustworthy: `near: "Daan Station"` is a name, and only the tool knows
+ * which coordinate it resolved to. Anything unreadable comes back undefined so
+ * the row simply has nothing to draw.
+ */
+function fxPoint(value: unknown): [number, number] | undefined {
+  const o = rec(value);
+  const lng = fin(o?.lng);
+  const lat = fin(o?.lat);
+  return lng !== undefined && lat !== undefined ? [round5(lng), round5(lat)] : undefined;
+}
+
+/**
+ * The ids of the page a search returned, capped at ACTIVITY_FX_HIT_LIMIT. The
+ * cap is a drawing decision — past a few dozen marks the map is a smear — and
+ * it never touches the answer: `total` and `returned` still say what matched.
+ */
+function fxHitIds(result: Rec): string[] | undefined {
+  if (!Array.isArray(result.features)) return undefined;
+  const ids = result.features
+    .slice(0, ACTIVITY_FX_HIT_LIMIT)
+    .map((f) => str(rec(f)?.id))
+    .filter((id): id is string => id !== undefined);
+  return ids.length ? ids : undefined;
+}
+
+/**
+ * One row's `fx`, with everything the answer did not state left out — and no
+ * `fx` at all unless it has a point in it. A radius or a list of hits with
+ * nowhere to put them is not something the page can draw, and a half-filled
+ * object would invite it to fill the gap with the current view.
+ */
+function withFx(parts: ActivityFx): { fx?: ActivityFx } {
+  if (!parts.origin && !parts.originB) return {};
+  const fx: ActivityFx = {};
+  if (parts.origin) fx.origin = parts.origin;
+  if (parts.originB) fx.originB = parts.originB;
+  if (parts.radius_m !== undefined) fx.radius_m = parts.radius_m;
+  if (parts.hitIds?.length) fx.hitIds = parts.hitIds;
+  return { fx };
+}
+
+/**
  * How a row names a place: the name the caller used, or the coordinate they
  * gave. `resolved` is the name the tool looked the place up as, which is more
  * accurate than what was typed and so wins when the tool reports one.
@@ -76,10 +126,20 @@ function placeLabel(value: unknown, resolved?: unknown): string | undefined {
   return pointOf(value);
 }
 
+/**
+ * "Fast food", "Place of worship" — a POI category as a person would read it.
+ * Not pluralised: the English plural of an OSM key is not mechanical, and a
+ * wrong plural in the feed is worse than a bare noun.
+ */
+const poiLabel = (category: string) =>
+  capitalise(category.replace(/_/g, " "));
+
 /** "Parks", "Parks, Schools" — the same words the legend uses for the same data. */
 function categoryLabel(value: unknown): string | undefined {
   if (!Array.isArray(value)) return undefined;
-  const labels = value.filter(isFeatureCategory).map((c) => DATASETS[c].label);
+  const labels = value
+    .filter(isMapCategory)
+    .map((c) => (isFeatureCategory(c) ? DATASETS[c].label : poiLabel(c)));
   return labels.length ? labels.join(", ") : undefined;
 }
 
@@ -104,6 +164,13 @@ function filterSubject(input: Rec): { subject: string; refIds: string[] } {
 interface Summary {
   summary: string;
   refIds?: string[];
+  /**
+   * Where on the map this call happened, for the page to draw. Only the four
+   * tools whose answers state a point carry it; every other row is drawn from
+   * `refIds` (the artifact it made or measured) or not at all. Nothing here is
+   * derived: a value the result did not state is a value the row does without.
+   */
+  fx?: ActivityFx;
 }
 
 /** Both arguments are already known to be plain objects, never null. */
@@ -117,12 +184,16 @@ const SUMMARISERS: Record<string, Summariser> = {
   set_map_view: (input, result) => {
     const zoom = fin(result.zoom);
     const at = zoom === undefined ? "" : ` · z${round5(zoom)}`;
+    // Where the camera actually ended up — the answer is the new map state, so
+    // this is the landing point whether the caller named a place, an id or a
+    // coordinate, and it is the only one of the three the page can draw.
+    const fx = withFx({ origin: fxPoint(result.center) });
     const featureId = str(input.feature_id)?.trim();
-    if (featureId) return { summary: `Flew to ${text(featureId)}${at}`, refIds: [featureId] };
+    if (featureId) return { summary: `Flew to ${text(featureId)}${at}`, refIds: [featureId], ...fx };
     const place = str(input.place)?.trim();
-    if (place) return { summary: `Flew to ${text(place)}${at}` };
+    if (place) return { summary: `Flew to ${text(place)}${at}`, ...fx };
     const centre = pointOf(result.center);
-    return { summary: centre ? `Camera at ${centre}${at}` : `Moved the camera${at}` };
+    return { summary: centre ? `Camera at ${centre}${at}` : `Moved the camera${at}`, ...fx };
   },
 
   list_features_in_view: (input, result) => ({
@@ -133,7 +204,19 @@ const SUMMARISERS: Record<string, Summariser> = {
 
   find_features: (input, result) => {
     const { subject, refIds } = filterSubject(input);
-    return { summary: `${subject} — found ${group(fin(result.total) ?? 0)}`, refIds };
+    return {
+      summary: `${subject} — found ${group(fin(result.total) ?? 0)}`,
+      refIds,
+      // Everything drawable about a search is in its own answer: where it
+      // measured from, how far it looked if it was bounded at all, and which
+      // features came back. A search that bounded nothing gets no radius here
+      // either — the page must not ring an area the tool never applied.
+      ...withFx({
+        origin: fxPoint(result.origin),
+        radius_m: fin(result.radius_m),
+        hitIds: fxHitIds(result),
+      }),
+    };
   },
 
   select_features: (_input, result) => {
@@ -177,11 +260,30 @@ const SUMMARISERS: Record<string, Summariser> = {
   },
 
   describe_surroundings: (input, result) => {
+    // The place the call was about wins over the district it turned out to be
+    // in. The row and the map are looked at together: the page marks the
+    // resolved origin, so a row reading "Around Daan District" while the mark
+    // sits on one named park makes the feed contradict the screen. The tool's
+    // own resolved name comes first — "osm:node:2" and "Daan Station" are both
+    // that station, and only the tool knows which one they found — exactly as
+    // compare_areas names its two sides. A call that named no place — a
+    // coordinate, or the view centre — has nothing to prefer, and there the
+    // district is still the most human answer.
+    // Only the string forms are offered to placeLabel: a caller who gave a
+    // coordinate named nowhere, and the district reads better than a row
+    // repeating the numbers the mark is already sitting on.
     const where =
-      str(result.district) ?? placeLabel(input.from) ?? pointOf(result.origin) ?? "the view";
+      placeLabel(str(input.from), result.name) ??
+      str(result.district) ??
+      pointOf(result.origin) ??
+      "the view";
     const radius = fin(input.radius_m) ?? DEFAULT_SURROUNDINGS_RADIUS_M;
     return {
       summary: `Around ${where} — ${group(fin(result.total) ?? 0)} features within ${metres(radius)}`,
+      // The result echoes the point but not the radius, so the radius is the
+      // one the tool would have used for this input — the same default the
+      // schema documents, never a guess at a number the call did not have.
+      ...withFx({ origin: fxPoint(result.origin), radius_m: radius }),
     };
   },
 
@@ -193,6 +295,14 @@ const SUMMARISERS: Record<string, Summariser> = {
     const radius = fin(result.radius_m);
     return {
       summary: `Compared ${left} with ${right}${radius === undefined ? "" : ` · ${metres(radius)}`}`,
+      // Two centres and the one radius they share: the shared radius is what
+      // makes the comparison mean anything, and the answer states it, so the
+      // page can show both sides being measured the same way.
+      ...withFx({
+        origin: fxPoint(a?.origin),
+        originB: fxPoint(b?.origin),
+        radius_m: radius,
+      }),
     };
   },
 
@@ -241,10 +351,12 @@ export function describeCall(
   const error = str(out.error);
   if (error) return { summary: `Refused — ${text(error, ACTIVITY_ERROR_CHARS)}`, ok: false };
   const summarise = SUMMARISERS[tool];
-  const { summary, refIds } = summarise
+  const { summary, refIds, fx } = summarise
     ? summarise(rec(input) ?? {}, out)
-    : { summary: `Called ${tool}`, refIds: undefined };
-  return { summary, ok: true, ...(refIds?.length ? { refIds } : {}) };
+    : { summary: `Called ${tool}`, refIds: undefined, fx: undefined };
+  // A refusal never gets here, so `fx` can only ever point at a place a call
+  // really used: the row is drawn from the same answer the agent was given.
+  return { summary, ok: true, ...(refIds?.length ? { refIds } : {}), ...(fx ? { fx } : {}) };
 }
 
 /**

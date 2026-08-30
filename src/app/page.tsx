@@ -7,9 +7,11 @@ import { BrandBar } from "@/components/BrandBar";
 import { DrawToolbar } from "@/components/DrawToolbar";
 import { Inspector } from "@/components/Inspector";
 import { Legend } from "@/components/Legend";
+import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
 import { WebMcpBadge } from "@/components/WebMcpBadge";
+import { FxLayer } from "@/components/fx/FxLayer";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
 import { useFeatureData } from "@/components/useFeatureData";
 
@@ -45,6 +47,12 @@ export default function Home() {
       <div className="map-wrap">
         <MapCanvas />
 
+        {/* Agent presence: transient marks that say what a tool call just did
+            to the map. Two layers, both pointer-events: none — the map-space
+            SVG sits under the scrims with the map furniture it comments on,
+            the viewport layer above them and below the glass chrome. */}
+        <FxLayer />
+
         <div className="scrim-top" aria-hidden />
         <div className="scrim-bottom" aria-hidden />
 
@@ -56,6 +64,11 @@ export default function Home() {
         <div className="bottom-bar">
           <Legend />
           <div className="corner">
+            {/* Both are about the link rather than about the map, so they share
+                the corner above the attribution: one says the map has outgrown
+                a URL, the other that a link this page opened asked for data it
+                could not get. */}
+            <ShareRestoreNotice />
             <ShareStatus />
             <Attribution />
             <WebMcpBadge />

@@ -578,6 +578,60 @@ button {
 .legend-zone {
   min-width: 0;
 }
+
+/* Loaded point-of-interest categories, above the legend. Present only when a
+   category is in memory, so the landing view is unchanged; block-level and
+   fit-content so it stacks over the legend without stretching it, and the
+   bottom bar's flex-end alignment makes it grow upward — the legend does not
+   move when it appears. Quieter than the legend by design: text-low, no
+   swatches, the data face for both the category and its count, since these are
+   the agent's own enum values and not names this map has coloured. */
+.poi-strip {
+  display: flex;
+  align-items: center;
+  /* Wraps rather than scrolls. A count is the whole content of this row, and a
+     horizontally scrolled chip cuts it mid-number — at 390px "cafe 2,297"
+     rendered as "cafe 2", which is not a smaller disclosure but a false one.
+     Wrapped, the strip grows upward over the map (the bottom bar is
+     bottom-aligned) and stays whole at every width. The cap is the viewport,
+     not the parent: below the legend's pill breakpoint the legend-zone parent
+     is pill-sized (~121px at 390px), and capping at 100% let long chips like
+     "place_of_worship 1,718" spill onto the basemap unread. */
+  flex-wrap: wrap;
+  gap: 1px 2px;
+  width: fit-content;
+  max-width: calc(100vw - 24px);
+  margin-bottom: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-s);
+}
+.poi-strip-label {
+  font-size: 10px;
+  font-weight: 620;
+  color: var(--text-mid);
+  white-space: nowrap;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--hairline-2);
+}
+.poi-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.poi-cat {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-mid);
+}
+.poi-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
 .legend-full {
   display: flex;
   align-items: center;
@@ -680,6 +734,29 @@ button {
   gap: 6px;
   flex-shrink: 0;
 }
+/* Categories a shared link declared that this page could not load. Glass and
+   text-mid rather than the amber above it: the map is still usable and there is
+   nothing to act on, so this is disclosure, not a warning. Right-aligned like
+   everything else in the corner, and capped at the warning's width so a long
+   category name wraps instead of pushing the attribution off the map. */
+.share-restore {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-mid);
+  text-align: right;
+}
+.share-restore-cat {
+  font-family: var(--font-mono);
+  color: var(--text-hi);
+}
+
 .share-warning {
   display: flex;
   align-items: center;
@@ -950,6 +1027,15 @@ button {
   background: transparent;
   border: 1.5px solid var(--text-low);
   box-shadow: none;
+}
+/* A point of interest: loaded and on the map, but with no colour in the
+   legend's six. Neutral grey rather than a seventh hue, so the swatch never
+   claims a category colour the canvas does not use. Filled, unlike .unknown —
+   the row does resolve to a real place. On the map the same dot is neutral ink
+   (POI_COLOR); the two grounds are opposite, the intent is the same. */
+.sel-dot.poi {
+  background: var(--text-mid);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 .sel-name {
   font-size: 12px;
@@ -1375,6 +1461,102 @@ button {
   .draw-hint {
     display: none;
   }
+}
+
+/* ============================================================
+   Agent presence FX (fx-spec-v3).
+
+   Two surfaces, both pointer-events: none, both empty at rest. Every
+   effect is built and torn down by the driver in src/components/fx —
+   no CSS keyframe drives an effect, because the driver has to be able
+   to freeze any frame for a still. The classes below are only the
+   stage: position, stacking, and the three viewport-space looks
+   (vignette, scan band, pack rect) that are cheaper as box-shadows and
+   gradients than as SVG.
+
+   The colours are the token teal ramp, value for value: --agent
+   (#2dd4bf) and --agent-deep (#0b7285) for the agent, --human
+   (#f48fb1) and --human-deep (#c2255c) for the person. FX introduces
+   no colour of its own. They are written out rather than referenced
+   because these are rgba() ramps of the same hues, and a box-shadow
+   cannot take an alpha off a hex custom property.
+
+   Kill switch: body[data-fx="off"] takes both surfaces off the page.
+   The driver already short-circuits to the final state, so this is the
+   belt to that pair of braces — a screenshot taken with FX off is the
+   calm map, byte for byte.
+   ============================================================ */
+.fx-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  /* Under the scrims (z 5): map-space marks belong with the map
+     furniture they comment on, not over the chrome. */
+  z-index: 4;
+}
+
+.fx-viewport {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Above the scrims, below the feed (15), the brand cluster and the
+     bottom bar (20): the frame is about the map, never about the glass. */
+  z-index: 14;
+}
+
+.fx-holder {
+  position: absolute;
+  inset: 0;
+}
+.fx-holder > * {
+  position: absolute;
+}
+
+.fx-frame {
+  left: 0;
+  top: 0;
+  overflow: visible;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.fx-vignette {
+  inset: 0;
+  box-shadow: inset 0 0 80px 14px rgba(45, 212, 191, 0.45);
+  opacity: 0;
+  will-change: opacity;
+}
+
+.fx-scanband {
+  top: 0;
+  bottom: 0;
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(45, 212, 191, 0),
+    rgba(45, 212, 191, 0.09) 55%,
+    rgba(45, 212, 191, 0.16) 96%,
+    rgba(45, 212, 191, 0.55) 100%
+  );
+  will-change: transform, opacity;
+}
+
+.fx-packrect {
+  border: 2px solid rgba(45, 212, 191, 0.95);
+  border-radius: 14px;
+  opacity: 0;
+  box-shadow:
+    0 0 12px rgba(45, 212, 191, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    inset 0 0 22px rgba(45, 212, 191, 0.15);
+}
+
+body[data-fx="off"] .fx-overlay,
+body[data-fx="off"] .fx-viewport {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

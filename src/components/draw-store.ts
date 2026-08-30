@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useMapStore, type Drawing, type LngLat } from "@/lib/store/map-store";
 import { polygonFromVertices } from "./drawing-style";
+import { emitHumanFx } from "./fx/human-events";
 
 export type DrawMode = "none" | "polygon";
 
@@ -47,6 +48,9 @@ export const useDrawStore = create<DrawStore>((set, get) => ({
       .getState()
       .addDrawing({ source: "user", kind: "polygon", geometry });
     set({ mode: "none", draft: [] });
+    // A person just inked a shape. Announced here rather than diffed out of
+    // the store, so restoring a share link's shapes never replays as a gesture.
+    emitHumanFx({ type: "draw", drawing });
     return drawing;
   },
 }));

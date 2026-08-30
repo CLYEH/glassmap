@@ -1,6 +1,7 @@
 import type { AddLayerObject } from "maplibre-gl";
-import type { Feature, FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { DATASETS, FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import { positionsOf } from "./drawing-style";
 
 /** OpenFreeMap — no API key, no usage limits. */
@@ -55,7 +56,7 @@ export const sourceId = (category: FeatureCategory) => `gm-src-${category}`;
  */
 const asLayer = (spec: object) => spec as AddLayerObject;
 
-/** Paint properties are read back when the selection changes. */
+/** The paint block of a layer spec, for tests that assert the ramp. */
 export const paintOf = (layer: AddLayerObject): Record<string, unknown> =>
   (layer as { paint?: Record<string, unknown> }).paint ?? {};
 
@@ -63,6 +64,19 @@ export const paintOf = (layer: AddLayerObject): Record<string, unknown> =>
 export const CALM_RADIUS = 2;
 export const CALM_OPACITY = 0.55;
 export const CALM_STROKE_WIDTH = 0.5;
+
+/**
+ * Selected point sizes in screen pixels, at zoom 10 / 13 / 16.
+ *
+ * Shared by the bundled categories' `sel` branch and the materialised POI dot
+ * so that "selected" is one size on this map, whichever tier the feature came
+ * from: a person counting highlighted dots must not be able to tell a cafe
+ * from a park by how big its highlight is.
+ */
+export const SELECTED_RADIUS = [6, 9, 12] as const;
+
+/** Opacity of a selected point. Unselected points fade to CALM_OPACITY at z<=13. */
+export const SELECTED_OPACITY = 0.9;
 
 /**
  * Station and listing names only from z14. Below that they printed over every
@@ -77,6 +91,38 @@ export const LABEL_MINZOOM = 14;
  */
 export const SELECTION_SOURCE = "gm-src-selection";
 
+/**
+ * The point-of-interest source, and the one invariant the whole tier-2
+ * treatment rests on: **it holds exactly the selected tier-2 features, and
+ * nothing else**.
+ *
+ * Tier-2 ships unpainted. The calm ramp was designed around 2,063 dots; the
+ * 18 POI categories are 31k features, so drawing a whole loaded category would
+ * be 6-13x the density the landing view was verified at, and no default paint
+ * for them has been designed yet. What the agent or the human explicitly acts
+ * on is a different question — that has to be visible, or "I selected the 14
+ * cafes near you" is a claim about a map nobody can see.
+ *
+ * Membership *is* selection, which is why this layer needs no feature state:
+ * a feature is in the source only while it is selected, so its paint is the
+ * selected look unconditionally and cannot drift out of step with the store
+ * the way a `setData`-then-`setFeatureState` pair can.
+ */
+export const POI_SOURCE = "gm-src-poi";
+
+/**
+ * The materialised POI dot. Neutral ink on purpose: the six bundled categories
+ * own the map's colour vocabulary (CATEGORY_COLOR, mirrored by the legend), so
+ * a POI painted in any of them would make the legend lie, and painting it teal
+ * or rose would claim a provenance it does not have — a POI is data, not
+ * something an agent or a human drew. The white casing and the teal halo
+ * around it are the same treatment every selected feature gets.
+ *
+ * A future design pass that gives the 18 categories their own ramp owns this
+ * value; until then, "a place, category not colour-coded" is the honest look.
+ */
+export const POI_COLOR = "#111827";
+
 /** The halo's teal (= DRAWING_COLOR.agent), cased in white like the map dots. */
 export const HALO_COLOR = "#0b7285";
 
@@ -86,16 +132,135 @@ const HALO_RADIUS = ["interpolate", ["linear"], ["zoom"], 10, 7, 16, 11];
 const POINTS = ["==", ["geometry-type"], "Point"];
 const AREAS = ["!=", ["geometry-type"], "Point"];
 
-/** `true` for features the store currently has selected. */
-const selectedExpr = (ids: readonly string[]) => ["in", ["get", "id"], ["literal", [...ids]]];
+/**
+ * The feature-state key that carries "this one is selected". MapCanvas is the
+ * only writer (`map.setFeatureState`); nothing else puts state on a feature.
+ */
+export const SELECTED_STATE = "selected";
+
+/**
+ * The GeoJSON source every category renders from.
+ *
+ * `promoteId` is what makes the selected look possible at all: a GeoJSON
+ * feature has no id of its own, and `map.setFeatureState` addresses a feature
+ * by *feature id*, never by a property. Promoting `properties.id` — the same
+ * id tools and `store.selection` use — makes the two sides speak one language.
+ */
+export const categorySourceSpec = (): {
+  type: "geojson";
+  data: FeatureCollection;
+  promoteId: string;
+} => ({
+  type: "geojson",
+  data: { type: "FeatureCollection", features: [] },
+  promoteId: "id",
+});
+
+/**
+ * Which category source holds each feature, by id. Feature state is stored per
+ * source, so an id in `store.selection` cannot be marked until we know which
+ * of the six sources to mark it on.
+ *
+ * Tier-2 ids are deliberately absent. POIs render out of POI_SOURCE, whose
+ * paint reads no feature state at all, so listing them here would write state
+ * that nothing reads — and would make `syncSelectionState` believe it had
+ * highlighted a feature by a mechanism that is not the one doing the work.
+ */
+export function featureSourceIndex(features: readonly GlassMapFeature[]): Map<string, string> {
+  return new Map(features.map((f) => [f.properties.id, sourceId(f.properties.category)]));
+}
+
+/**
+ * The selected tier-2 features, in the store's order — everything POI_SOURCE
+ * is allowed to contain.
+ *
+ * Selection order is not preserved (the store's is), which costs nothing: the
+ * result is only ever drawn, never listed. Scanning the tier-2 slice rather
+ * than indexing it keeps this a function of two arrays with no cache to go
+ * stale, and it runs on selection changes only.
+ */
+export function selectedPoiFeatures(
+  tier2: readonly MapFeature[],
+  selection: readonly string[],
+): MapFeature[] {
+  if (selection.length === 0 || tier2.length === 0) return [];
+  const wanted = new Set(selection);
+  return tier2.filter((f) => wanted.has(f.properties.id));
+}
+
+/** How `map.setFeatureState` / `map.removeFeatureState` address one feature. */
+export type FeatureStateTarget = { source: string; id: string };
+
+/**
+ * Move the map's selected-feature state to `selection`, and report what is
+ * flagged afterwards as id -> source (the shape to pass back in as `applied`).
+ *
+ * Only the ids whose membership changed are touched. Clearing everything and
+ * re-setting everything would put the whole selection through MapLibre's paint
+ * -array update on each keystroke of a refinement, which is the cost this
+ * mechanism exists to avoid.
+ *
+ * Ids the store has selected but no dataset has yet are skipped: `featureSources`
+ * only knows the features that are loaded, and feature state cannot be written
+ * without a source to write it to. A later call picks them up.
+ *
+ * `reapply` re-states every addressable selected id even if it was already
+ * flagged. It is for the moment new feature data lands: `setData` reloads the
+ * source's tiles, which ids are even addressable changes with the data, and
+ * whether the reload keeps the previously applied state is MapLibre's internal
+ * business - not something the highlight should depend on.
+ *
+ * Written as a plain function over two callbacks so the diff can be tested
+ * without a live map (the map never loads under the network-isolated e2e run).
+ */
+export function syncSelectionState(args: {
+  selection: readonly string[];
+  /** What the map currently has flagged, id -> source. */
+  applied: ReadonlyMap<string, string>;
+  /** Every feature the store has loaded, id -> source; see `featureSourceIndex`. */
+  featureSources: ReadonlyMap<string, string>;
+  reapply?: boolean;
+  setFeatureState: (target: FeatureStateTarget, state: Record<string, boolean>) => void;
+  removeFeatureState: (target: FeatureStateTarget, key: string) => void;
+}): Map<string, string> {
+  const { selection, applied, featureSources, reapply = false } = args;
+  const next = new Map<string, string>();
+  for (const id of selection) {
+    const source = featureSources.get(id);
+    if (source) next.set(id, source);
+  }
+  for (const [id, source] of applied) {
+    // Only our own key: `removeFeatureState` without one would drop any other
+    // state a future feature might carry.
+    if (next.get(id) !== source) args.removeFeatureState({ source, id }, SELECTED_STATE);
+  }
+  for (const [id, source] of next) {
+    if (reapply || applied.get(id) !== source) {
+      args.setFeatureState({ source, id }, { [SELECTED_STATE]: true });
+    }
+  }
+  return next;
+}
+
+/**
+ * `true` for features the map currently has marked as selected.
+ *
+ * Read from feature state rather than from the ids themselves. The previous
+ * form, `["in", ["get","id"], ["literal", selection]]`, made MapLibre scan the
+ * id array once per feature per evaluation pass — O(features x selected) — and
+ * the whole paint array was re-evaluated on every selection change because the
+ * expression itself changed. A feature-state lookup is O(1), the expressions
+ * are constant, and only the features whose state actually changed are
+ * re-uploaded (see `ProgramConfiguration.updatePaintArrays`).
+ */
+const sel = ["boolean", ["feature-state", SELECTED_STATE], false];
 
 /**
  * Every layer GlassMap adds on top of the basemap, in draw order.
- * Called again whenever the selection changes: the returned `paint` objects are
- * replayed through `setPaintProperty`, so highlighting needs no extra layers.
+ * Built once, at `map.load`: the selected look is driven by feature state, so
+ * no layer or paint property ever has to be rewritten when the selection moves.
  */
-export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] {
-  const sel = selectedExpr(selection);
+export function buildLayerSpecs(): AddLayerObject[] {
   const specs: AddLayerObject[] = [];
 
   for (const category of FEATURE_CATEGORIES) {
@@ -132,7 +297,7 @@ export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] 
   }
 
   for (const category of FEATURE_CATEGORIES) {
-    const opaque = category === "listing" ? 0.6 : 0.9;
+    const opaque = category === "listing" ? 0.6 : SELECTED_OPACITY;
     specs.push(
       asLayer({
         id: `gm-${category}-circle`,
@@ -151,11 +316,11 @@ export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] 
             ["linear"],
             ["zoom"],
             10,
-            ["case", sel, 6, CALM_RADIUS],
+            ["case", sel, SELECTED_RADIUS[0], CALM_RADIUS],
             13,
-            ["case", sel, 9, CALM_RADIUS],
+            ["case", sel, SELECTED_RADIUS[1], CALM_RADIUS],
             16,
-            ["case", sel, 12, 6],
+            ["case", sel, SELECTED_RADIUS[2], 6],
           ],
           "circle-opacity": [
             "interpolate",
@@ -226,6 +391,36 @@ export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] 
     }),
   );
 
+  // The materialised POI dot, above the bundled data and below the halo that
+  // rings it. No `sel` anywhere in its paint: everything in POI_SOURCE is
+  // selected by construction (see the constant), so the selected look is the
+  // only look this layer has.
+  specs.push(
+    asLayer({
+      id: "gm-poi-circle",
+      type: "circle",
+      source: POI_SOURCE,
+      filter: POINTS,
+      paint: {
+        "circle-color": POI_COLOR,
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          10,
+          SELECTED_RADIUS[0],
+          13,
+          SELECTED_RADIUS[1],
+          16,
+          SELECTED_RADIUS[2],
+        ],
+        "circle-opacity": SELECTED_OPACITY,
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1.5,
+      },
+    }),
+  );
+
   // The selection halo, on top of everything else GlassMap draws: a
   // white-cased teal ring at the centre of each selected feature. Two layers
   // because a circle layer has one stroke, and the white casing is what keeps
@@ -259,21 +454,33 @@ export function buildLayerSpecs(selection: readonly string[]): AddLayerObject[] 
   return specs;
 }
 
+/** All a halo anchor needs: an id to match on and a geometry to average. */
+type AnchorFeature = { geometry: Geometry | null; properties: { id: string } };
+
 /**
  * Where each selected feature's ring goes: the average of the feature's own
  * coordinates, which is the anchor rule labelled drawings already use
  * (`labelPointsToGeoJson`). Unknown ids contribute nothing — a tool can select
  * an id before the datasets have finished loading.
  *
+ * `poi` is the selected tier-2 features (see `selectedPoiFeatures`); they live
+ * in no category source, so without them a selected cafe would be the one
+ * highlighted feature on the map with no ring around it. Bundled features win
+ * a shared id, which is the same precedence the store applies when it appends
+ * a tier-2 category.
+ *
  * The points deliberately carry no `id` property: the halo layers are hit by
  * clicks like every other non-symbol layer, and a ring must not become a
  * second, invisible way to toggle the feature underneath it.
  */
 export function selectionAnchorsToGeoJson(
-  features: readonly GlassMapFeature[],
+  features: readonly AnchorFeature[],
   selection: readonly string[],
+  poi: readonly AnchorFeature[] = [],
 ): FeatureCollection {
-  const byId = new Map(features.map((feature) => [feature.properties.id, feature]));
+  const byId = new Map<string, AnchorFeature>();
+  for (const feature of poi) byId.set(feature.properties.id, feature);
+  for (const feature of features) byId.set(feature.properties.id, feature);
   const out: Feature[] = [];
   for (const id of selection) {
     const feature = byId.get(id);
@@ -299,7 +506,11 @@ export function selectionAnchorsToGeoJson(
  * thing it names, and the selection halo is excluded because its rings carry
  * no feature id — hovering one showed a pointer that promised a selection the
  * click could not make.
+ *
+ * The POI layer is in: a materialised POI is on the map because someone acted
+ * on it, and clicking the thing you can see to take it off the map again is
+ * the same gesture every other dot answers to.
  */
-export const INTERACTIVE_LAYER_IDS = buildLayerSpecs([])
+export const INTERACTIVE_LAYER_IDS = buildLayerSpecs()
   .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
   .map((l) => l.id);

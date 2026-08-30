@@ -161,8 +161,11 @@ export function PlacesDock() {
 
       {/* The landing sentence: what a person can do here, before anything has
           happened. It goes the moment they do any of it — a hint that outlives
-          its own advice is furniture. */}
-      {mode === "idle" && category === null && !open ? (
+          its own advice is furniture. It survives into `waking` so the
+          awakening can fade it out in its first tenth: unmounted on the first
+          frame instead, it would vanish with a pop while everything else in
+          the transition travels. */}
+      {mode !== "awake" && category === null && !open ? (
         <p className="hint lg" data-testid="map-hint">
           Explore Taipei — tap a place, draw a shape, or browse <b>Places</b>.
         </p>

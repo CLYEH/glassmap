@@ -2181,3 +2181,307 @@ body[data-fx="off"] .fx-viewport {
     transition: none;
   }
 }
+
+/* ============================================================
+   The Awakening (design2-v5 §6, mockup2-v5.html).
+
+   A one-time MODE TRANSITION, not an FX: its product — the agent
+   chrome — persists, and the FX driver's law is zero residue. It
+   lives in `src/components/awaken/`, on a 1800 ms clock inside the
+   module's 2 s ceiling, and this stylesheet's whole job is the
+   middle state.
+
+   `html[data-chrome="waking"]`: the agent surfaces are MOUNTED but
+   transparent, and everything else keeps its human position. The
+   choreography drives both from there, so a paint that lands before
+   the first frame shows the human chrome rather than a flash of the
+   agent's. At p=1 the inline styles come off and `data-chrome`
+   becomes "awake" — every displacement is computed as the exact
+   delta between the two rules, so nothing moves at the handover.
+   ============================================================ */
+
+html[data-chrome="waking"] .app .feed,
+html[data-chrome="waking"] .app .inspector,
+html[data-chrome="waking"] .app .ticker,
+html[data-chrome="waking"] .app .badge,
+html[data-chrome="waking"] .app .cam-chip {
+  opacity: 0;
+}
+/* The camera chip is hidden in human chrome (`:not([data-chrome="awake"])`),
+   and the transition has to be able to fade it in. Same specificity as that
+   rule, later in the file, so this wins for the one state it names. */
+html[data-chrome="waking"] .app .cam-chip {
+  display: flex;
+}
+/* Below 921px the lane is a bottom sheet: it starts under the screen and rises.
+   Above it, the pane comes in from the east and the choreography's own
+   translateX replaces this on the first frame. */
+@media (max-width: 920px) {
+  html[data-chrome="waking"] .app .inspector {
+    transform: translateY(110%);
+  }
+}
+/* The first-visit pill invites an agent that has now arrived. */
+html[data-chrome="waking"] .app .spark-callout {
+  display: none;
+}
+/* The agent panes' teal rim is part of what arrives, not a shadow that snaps on
+   at the end: the same rule as the awake one, so the glass never pops. */
+html[data-chrome="waking"] .app .lg.wake {
+  box-shadow:
+    0 18px 44px rgba(3, 7, 13, 0.46),
+    0 1px 2px rgba(3, 7, 13, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(45, 212, 191, 0.07),
+    0 0 24px rgba(45, 212, 191, 0.05);
+}
+
+/* ---------------------------------------------------- the light
+   Three emitters and two lights, all additive (`plus-lighter`): on a dark
+   tinted panel, brightness-on-tint renders grey mud, so light has to EMIT
+   rather than brighten. Sized and placed per frame by the choreography; every
+   one of them is at opacity 0 at rest and back to 0 when the story lands (zero
+   residue, like the FX layer).
+
+   No z-index on the stage itself — it must not open a stacking context, or the
+   bloom could not sit under the feed while the flare sits over it. */
+.awaken-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.awaken-flare {
+  position: absolute;
+  z-index: 61;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  mix-blend-mode: plus-lighter;
+  filter: blur(2px);
+  background: radial-gradient(
+    closest-side,
+    rgba(240, 255, 252, 0.98),
+    rgba(140, 240, 228, 0.6) 42%,
+    rgba(45, 212, 191, 0) 72%
+  );
+}
+.awaken-ripple {
+  position: absolute;
+  z-index: 60;
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  border: 4px solid rgba(170, 247, 236, 0.9);
+  box-shadow:
+    0 0 26px 8px rgba(45, 212, 191, 0.5),
+    0 0 100px 46px rgba(45, 212, 191, 0.17),
+    inset 0 0 44px 12px rgba(45, 212, 191, 0.3),
+    inset 0 0 150px 66px rgba(255, 255, 255, 0.12);
+}
+.awaken-ripple::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(200, 255, 247, 0.55);
+}
+/* The feed condenses out of this: it gathers where the panel will be, and it is
+   gone before the panel is hard. Under the feed's own z-index (15). */
+.awaken-bloom {
+  position: absolute;
+  z-index: 14;
+  opacity: 0;
+  border-radius: 30px;
+  mix-blend-mode: plus-lighter;
+  filter: blur(14px);
+  background: radial-gradient(
+    62% 58% at 50% 42%,
+    rgba(225, 255, 250, 0.95),
+    rgba(45, 212, 191, 0.5) 55%,
+    rgba(45, 212, 191, 0) 78%
+  );
+}
+/* A specular sweep across the hardened slab, clipped to its box. */
+.awaken-sheen {
+  position: absolute;
+  z-index: 16;
+  opacity: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+.awaken-sheen i {
+  position: absolute;
+  inset: -20% -60%;
+  display: block;
+  mix-blend-mode: plus-lighter;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.16) 45%,
+    rgba(255, 255, 255, 0)
+  );
+}
+/* The lit leading edge of the arriving pane. It travels with the lane, and the
+   lane's own words wait until it has passed. */
+.awaken-lane-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 31;
+  opacity: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(45, 212, 191, 0),
+    rgba(170, 247, 236, 0.9) 22%,
+    rgba(45, 212, 191, 0.35) 70%,
+    rgba(45, 212, 191, 0)
+  );
+  box-shadow: 0 0 22px 6px rgba(45, 212, 191, 0.35);
+}
+/* Kill switch: the belt to the choreography's braces. `data-fx="off"` already
+   short-circuits the story to its end state, so a screenshot taken with FX off
+   is the calm map — this makes it impossible for a stray frame to say otherwise. */
+body[data-fx="off"] .awaken-stage {
+  display: none;
+}
+
+/* ---------------------------------------------------- the caption toast
+   Session chrome, not FX (r2 Ruling 1): it blooms in the last beat and then
+   dwells ~3.2 s on its own clock. Dismissed by a tap anywhere on it, by the ×
+   (the keyboard path — its click bubbles), or by Esc while it shows.
+   `role="status"` + `aria-live="polite"` are on the element, and it is `inert`
+   while hidden so Tab can never land on an invisible control. */
+.awaken-cap {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  padding: 9px 16px;
+  font-size: 12.5px;
+  font-weight: 570;
+  color: var(--text-hi);
+  opacity: 0;
+  pointer-events: none;
+}
+.awaken-cap .cap-spark {
+  color: var(--agent);
+  flex-shrink: 0;
+}
+.awaken-cap .cap-x {
+  color: var(--text-low);
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 2px;
+  border-radius: 5px;
+}
+.awaken-cap .cap-x:hover,
+.awaken-cap .cap-x:focus-visible {
+  color: var(--text-hi);
+}
+
+/* ---------------------------------------------------- restored from a link
+   What a page opened from somebody else's URL is allowed to say. The wire
+   carries no activity (`map-tools/share.ts`), so the feed shows one
+   synthesized, object-derived row under a divider — not a call: no tool name,
+   no timestamp, and a hollow ring rather than a filled dot. */
+.restored-chip {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 28px);
+  padding: 9px 14px;
+  font-size: 12px;
+  color: var(--text-hi);
+}
+.restored-chip svg {
+  color: var(--agent);
+  flex-shrink: 0;
+}
+.restored-chip .x {
+  color: var(--text-low);
+  font-size: 13px;
+  line-height: 1;
+  padding-left: 3px;
+}
+.restored-chip .x:hover,
+.restored-chip .x:focus-visible {
+  color: var(--text-hi);
+}
+.feed-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--text-low);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.feed-divider::before,
+.feed-divider::after {
+  content: "";
+  height: 1px;
+  background: var(--hairline);
+  flex: 1;
+}
+.call.restored-sum .dot {
+  border-color: var(--agent);
+  background: transparent;
+}
+.call.restored-sum .call-head {
+  margin-top: 3px;
+}
+.call.restored-sum .tool {
+  color: var(--text-low);
+}
+/* No live agent on a restored page, so the header's "live" light holds still. */
+.feed[data-restored="true"] .pulse::after,
+.ticker[data-restored="true"] .pulse::after {
+  animation: none;
+}
+
+/* The SELECTED section's one-word claim about who put these here. "FROM LINK"
+   is the hedge a `su`-less link forces (design2-v5 §2.5): the page knows the
+   selection came from the URL and cannot prove who made it. */
+.sec-tag {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--agent);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: 20px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.sec-tag.you {
+  color: var(--human);
+  border-color: rgba(244, 143, 177, 0.35);
+}
+.sec-head .sec-tag + .sec-count {
+  margin-left: 0;
+}
+
+@media (max-width: 920px) {
+  /* Below the ticker, both of them — never over the brand. */
+  .awaken-cap,
+  .restored-chip {
+    top: 104px;
+  }
+}

@@ -8,6 +8,7 @@ import { selectActivity } from "./activity-model";
 import { categorySingular } from "./category-labels";
 import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
+import { selectionClaim, type SelectionClaim } from "./restored-model";
 import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
 import { SHEET_TIER, useMediaQuery } from "./useMediaQuery";
@@ -23,17 +24,25 @@ function SectionHead({
   count,
   testid,
   highlight,
+  tag,
 }: {
   icon: React.ReactNode;
   title: string;
   count: number;
   testid: string;
   highlight?: boolean;
+  /** Who put these here, when the page can say so honestly (`selectionClaim`). */
+  tag?: SelectionClaim | null;
 }) {
   return (
     <div className="sec-head">
       {icon}
       <h3>{title}</h3>
+      {tag ? (
+        <span className={`sec-tag${tag === "YOU" ? " you" : ""}`} data-testid={`${testid}-tag`}>
+          {tag}
+        </span>
+      ) : null}
       <span className={`sec-count${highlight && count > 0 ? " active" : ""}`} data-testid={testid}>
         {count}
       </span>
@@ -152,6 +161,8 @@ export function Inspector() {
   const removeDrawing = useMapStore((s) => s.removeDrawing);
   const removeAnnotation = useMapStore((s) => s.removeAnnotation);
   const activityCount = useMapStore((s) => selectActivity(s).length);
+  const selectionSources = useMapStore((s) => s.selectionSources);
+  const selectionAttributionExplicit = useMapStore((s) => s.selectionAttributionExplicit);
   const sheet = useMediaQuery(SHEET_TIER);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -159,6 +170,10 @@ export function Inspector() {
     () => resolveSelection(features, selection, tier2Features),
     [features, selection, tier2Features],
   );
+  // Who selected these, on the one surface that lists them all. Null — no tag —
+  // whenever the answer is not the same for every row: a section head has room
+  // for one word, and one word about a mixed list would be false for part of it.
+  const claim = selectionClaim(selection, selectionSources, selectionAttributionExplicit);
   const quiet = rows.length === 0 && drawings.length === 0 && annotations.length === 0;
 
   // In the sheet, the feed shares the inspector's scroll container, so
@@ -222,6 +237,7 @@ export function Inspector() {
               count={rows.length}
               testid="sidebar-selection-count"
               highlight
+              tag={claim}
             />
             <ul data-testid="sidebar-selection">
               {rows.map((row) => (

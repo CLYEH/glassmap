@@ -15,9 +15,12 @@ import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
 import { Tools } from "@/components/Tools";
 import { WebMcpBadge } from "@/components/WebMcpBadge";
+import { AwakenStage } from "@/components/awaken/AwakenStage";
+import { useAwakenController } from "@/components/awaken/controller";
 import { FxLayer } from "@/components/fx/FxLayer";
+import { RestoredChip } from "@/components/RestoredChip";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
-import { useAwakenMode, useChromeAttribute } from "@/components/useAwakenMode";
+import { useAwakenMode } from "@/components/useAwakenMode";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
@@ -41,19 +44,29 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * `src/lib/awaken/`'s own `bootMode`, read through `useAwakenMode`, so the
  * chrome and the awakening cannot disagree about what state the page is in.
  *
- * In this cut the crossing is instantaneous. The choreography that makes it
- * *legible* — the 1800 ms transition, `body[data-awaken]`, the toast — is
- * T-83's, and it replaces the flip without moving anything below.
+ * **The crossing itself (`html[data-chrome="waking"]`).** It is not a flip: for
+ * 1800 ms the agent chrome *arrives* — the feed condenses out of light, the
+ * lane slides in from the east displacing the tools and the corner in exact
+ * sync, the spark hands over to the badge, the first call writes itself, and a
+ * toast says out loud what happened (`components/awaken/`). The panels mount
+ * for `waking` because the story needs something to move; the human surfaces
+ * stay until `awake` because the story is made of them leaving.
  *
- * The attribute lives on the root element, written by `useChromeAttribute` and,
+ * `useAwakenController` mounts the one controller this document may have, and
+ * it is mounted *here*, in the page, rather than inside `AwakenStage`: React
+ * runs child effects before parent ones, so a controller in a child would boot
+ * before `ShareStatus` had applied the URL fragment and would write the human
+ * chrome over the boot script's answer for a frame.
+ *
+ * The attribute lives on the root element, written by the controller and,
  * before hydration, by the inline script in `layout.tsx` — a restored agent
  * link has to be dressed correctly at the first paint, and a URL fragment never
- * reaches the server, so nothing React renders can know it in time. Not on
- * `body`, which belongs to the awakening controller (`body[data-awaken]`, the
- * e2e lifecycle contract): two writers on one attribute is how a page ends up
- * half dressed. The panels themselves still arrive with hydration — this JSX is
- * what mounts them — so what the script buys is that nothing which is only true
- * of the human chrome is ever painted on an agent's link.
+ * reaches the server, so nothing React renders can know it in time. The
+ * lifecycle attribute `body[data-awaken]` carries the same three values for
+ * e2e, which waits on "awake" rather than on a frame. The panels themselves
+ * still arrive with hydration — this JSX is what mounts them — so what the
+ * script buys is that nothing which is only true of the human chrome is ever
+ * painted on an agent's link.
  *
  * Below 921px the inspector is a bottom sheet and the map is shortened to sit
  * above it (globals.css) — in human chrome there is no sheet, so the map keeps
@@ -68,9 +81,12 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 export default function Home() {
   useFeatureData();
   useDevStoreHandle();
-  useChromeAttribute();
+  useAwakenController();
   const mode = useAwakenMode();
-  const awake = mode !== "idle";
+  /** Is the agent chrome on screen at all — arriving counts. */
+  const agent = mode !== "idle";
+  /** Are the human-only surfaces still there — they leave *during* the story. */
+  const human = mode !== "awake";
 
   return (
     <main data-testid="map-page" className="app">
@@ -87,12 +103,19 @@ export default function Home() {
             the viewport layer above them and below the glass chrome. */}
         <FxLayer />
 
+        {/* The one-time transformation: the light it is made of, and the toast
+            it ends on. Beside `FxLayer` because it is the same kind of thing —
+            imperative, per-frame, pointer-transparent — and because the two
+            must never both be driving the same node. */}
+        <AwakenStage />
+
         <div className="scrim-top" aria-hidden />
         <div className="scrim-bottom" aria-hidden />
 
         <BrandBar />
-        {awake ? <ActivityFeed /> : null}
-        {awake ? <ActivityTicker /> : null}
+        <RestoredChip />
+        {agent ? <ActivityFeed /> : null}
+        {agent ? <ActivityTicker /> : null}
         <Tools />
         <OnTheMapCard />
         <PlacesDock />
@@ -108,15 +131,17 @@ export default function Home() {
             <ShareStatus />
             {/* The whisper and the badge are the same corner slot in the two
                 chromes: "an agent could read this" until one does, then "an
-                agent is reading this". */}
-            {awake ? null : <AgentWhisper />}
+                agent is reading this". During the transition both are mounted
+                — the handover from the spark to the badge is a beat of the
+                story, not a swap between two renders. */}
+            {human ? <AgentWhisper /> : null}
             <Attribution />
             <WebMcpBadge />
           </div>
         </div>
       </div>
 
-      {awake ? <Inspector /> : null}
+      {agent ? <Inspector /> : null}
       <StateOverlay />
       {/* Off screen: what the bead layers have been asked to draw, in words —
           the map's marks are pixels on a canvas, and a headless run has no

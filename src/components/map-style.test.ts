@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Position } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import {
@@ -7,6 +7,7 @@ import {
   CALM_STROKE_WIDTH,
   INTERACTIVE_LAYER_IDS,
   LABEL_MINZOOM,
+  SELECTED_STATE,
   SELECTION_SOURCE,
   buildLayerSpecs,
   categorySourceSpec,
@@ -14,6 +15,8 @@ import {
   paintOf,
   selectionAnchorsToGeoJson,
   sourceId,
+  syncSelectionState,
+  type FeatureStateTarget,
 } from "./map-style";
 
 const props = (id: string) => ({ id, name: id, category: "park" as const, source: "osm" as const });
@@ -231,5 +234,181 @@ describe("the selection halo", () => {
     // A tool can select an id before the datasets have finished loading, and
     // an unplaceable id must not become a ring at [0, 0].
     expect(selectionAnchorsToGeoJson([], ["osm:node:404"]).features).toEqual([]);
+  });
+});
+
+/**
+ * The selection diff — the one piece of the feature-state highlight with no
+ * other net under it. The e2e suite runs network-isolated, so the basemap never
+ * loads and no browser test ever executes this path; if the diff regresses, the
+ * highlight silently stops matching `store.selection` and everything else stays
+ * green.
+ */
+describe("syncSelectionState", () => {
+  const PARK = sourceId("park");
+  const SCHOOL = sourceId("school");
+  /** Three loaded features across two sources: state is stored per source. */
+  const loaded = new Map([
+    ["a", PARK],
+    ["b", SCHOOL],
+    ["c", PARK],
+  ]);
+
+  const spies = () => ({
+    setFeatureState: vi.fn<(target: FeatureStateTarget, state: Record<string, boolean>) => void>(),
+    removeFeatureState: vi.fn<(target: FeatureStateTarget, key: string) => void>(),
+  });
+
+  it("sets only the ids that entered the selection", () => {
+    // Adding one place to a selection of 500 must cost one setFeatureState,
+    // not 501: re-flagging the whole selection is exactly the paint-array
+    // update this mechanism was built to stop doing.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map([["a", PARK]]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "b" }, { selected: true }]]);
+    expect(calls.removeFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(
+      new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+    );
+  });
+
+  it("removes only the ids that left, and only our own state key", () => {
+    // `removeFeatureState({source, id})` with no key drops *every* state on the
+    // feature. Nothing else writes feature state today, so a blanket removal
+    // would look correct until the first time something does.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a"],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "b" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map([["a", PARK]]));
+  });
+
+  it("touches nothing when the selection only shifts around", () => {
+    // A refinement typically swaps a few ids. The ones that stayed selected are
+    // already flagged and must not be re-written.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["b", "c"],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: PARK, id: "a" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: PARK, id: "c" }, { selected: true }]]);
+    expect(applied).toEqual(
+      new Map([
+        ["b", SCHOOL],
+        ["c", PARK],
+      ]),
+    );
+  });
+
+  it("skips ids no dataset has yet, without touching the map", () => {
+    // A tool can select before the datasets finish loading. Feature state needs
+    // a source to write to, and guessing one would write onto a source that
+    // does not hold the feature.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["osm:node:404"],
+      applied: new Map(),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(calls.removeFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map());
+  });
+
+  it("picks up a select-before-load id when the data arrives", () => {
+    // The whole reason `reapply` exists: select while nothing is loaded (no
+    // call is possible), then feature data lands and the same selection has to
+    // light up. `reapply` also re-states ids that were already flagged, because
+    // `setData` reloads the source's tiles and what survives that is MapLibre's
+    // business, not a guarantee the highlight may lean on.
+    const calls = spies();
+    const early = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map(),
+      featureSources: new Map(),
+      ...calls,
+    });
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(early).toEqual(new Map());
+
+    const afterLoad = syncSelectionState({
+      selection: ["a", "b"],
+      applied: new Map([["a", PARK]]),
+      featureSources: loaded,
+      reapply: true,
+      ...calls,
+    });
+    expect(calls.setFeatureState.mock.calls).toEqual([
+      [{ source: PARK, id: "a" }, { selected: true }],
+      [{ source: SCHOOL, id: "b" }, { selected: true }],
+    ]);
+    expect(afterLoad).toEqual(
+      new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+    );
+  });
+
+  it("clears exactly the ids it had flagged when the selection empties", () => {
+    // "Clear selection" has to leave no stale highlight behind, and it must not
+    // reach for ids it never set - `applied`, not the whole feature index, is
+    // the list of what is on the map.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: [],
+      applied: new Map([
+        ["a", PARK],
+        ["b", SCHOOL],
+      ]),
+      featureSources: loaded,
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([
+      [{ source: PARK, id: "a" }, SELECTED_STATE],
+      [{ source: SCHOOL, id: "b" }, SELECTED_STATE],
+    ]);
+    expect(calls.setFeatureState).not.toHaveBeenCalled();
+    expect(applied).toEqual(new Map());
+  });
+
+  it("moves the flag when a feature's data changes category", () => {
+    // Why the applied ids are tracked with their source rather than as a plain
+    // set: state written on the old source stays there forever if it is not
+    // removed from *that* source, so the feature would keep a highlight nothing
+    // can clear.
+    const calls = spies();
+    const applied = syncSelectionState({
+      selection: ["a"],
+      applied: new Map([["a", PARK]]),
+      featureSources: new Map([["a", SCHOOL]]),
+      ...calls,
+    });
+    expect(calls.removeFeatureState.mock.calls).toEqual([[{ source: PARK, id: "a" }, SELECTED_STATE]]);
+    expect(calls.setFeatureState.mock.calls).toEqual([[{ source: SCHOOL, id: "a" }, { selected: true }]]);
+    expect(applied).toEqual(new Map([["a", SCHOOL]]));
   });
 });

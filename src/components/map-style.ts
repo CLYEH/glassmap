@@ -119,6 +119,60 @@ export function featureSourceIndex(features: readonly GlassMapFeature[]): Map<st
   return new Map(features.map((f) => [f.properties.id, sourceId(f.properties.category)]));
 }
 
+/** How `map.setFeatureState` / `map.removeFeatureState` address one feature. */
+export type FeatureStateTarget = { source: string; id: string };
+
+/**
+ * Move the map's selected-feature state to `selection`, and report what is
+ * flagged afterwards as id -> source (the shape to pass back in as `applied`).
+ *
+ * Only the ids whose membership changed are touched. Clearing everything and
+ * re-setting everything would put the whole selection through MapLibre's paint
+ * -array update on each keystroke of a refinement, which is the cost this
+ * mechanism exists to avoid.
+ *
+ * Ids the store has selected but no dataset has yet are skipped: `featureSources`
+ * only knows the features that are loaded, and feature state cannot be written
+ * without a source to write it to. A later call picks them up.
+ *
+ * `reapply` re-states every addressable selected id even if it was already
+ * flagged. It is for the moment new feature data lands: `setData` reloads the
+ * source's tiles, which ids are even addressable changes with the data, and
+ * whether the reload keeps the previously applied state is MapLibre's internal
+ * business - not something the highlight should depend on.
+ *
+ * Written as a plain function over two callbacks so the diff can be tested
+ * without a live map (the map never loads under the network-isolated e2e run).
+ */
+export function syncSelectionState(args: {
+  selection: readonly string[];
+  /** What the map currently has flagged, id -> source. */
+  applied: ReadonlyMap<string, string>;
+  /** Every feature the store has loaded, id -> source; see `featureSourceIndex`. */
+  featureSources: ReadonlyMap<string, string>;
+  reapply?: boolean;
+  setFeatureState: (target: FeatureStateTarget, state: Record<string, boolean>) => void;
+  removeFeatureState: (target: FeatureStateTarget, key: string) => void;
+}): Map<string, string> {
+  const { selection, applied, featureSources, reapply = false } = args;
+  const next = new Map<string, string>();
+  for (const id of selection) {
+    const source = featureSources.get(id);
+    if (source) next.set(id, source);
+  }
+  for (const [id, source] of applied) {
+    // Only our own key: `removeFeatureState` without one would drop any other
+    // state a future feature might carry.
+    if (next.get(id) !== source) args.removeFeatureState({ source, id }, SELECTED_STATE);
+  }
+  for (const [id, source] of next) {
+    if (reapply || applied.get(id) !== source) {
+      args.setFeatureState({ source, id }, { [SELECTED_STATE]: true });
+    }
+  }
+  return next;
+}
+
 /**
  * `true` for features the map currently has marked as selected.
  *

@@ -31,7 +31,6 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
-  SELECTED_STATE,
   SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
@@ -39,6 +38,7 @@ import {
   featureSourceIndex,
   selectionAnchorsToGeoJson,
   sourceId,
+  syncSelectionState,
 } from "./map-style";
 import { approximateBounds, visibleBounds } from "./viewport-bounds";
 
@@ -400,40 +400,26 @@ export default function MapCanvas() {
     let selectedFeatures = new Map<string, string>();
 
     /**
-     * Move the map's feature state to `selection`, touching only the ids whose
-     * membership changed. Clearing everything and re-setting everything would
-     * put the whole selection through MapLibre's paint-array update on each
-     * keystroke of a refinement, which is the cost this mechanism exists to
-     * avoid. Ids the store has selected but no dataset has yet are skipped -
-     * `reapply` picks them up once their data arrives.
+     * Move the map's feature state to `selection`. The diff itself lives in
+     * `syncSelectionState` (map-style.ts), where it can be unit-tested without
+     * a live map; this only binds it to the two MapLibre calls and keeps the
+     * result.
      */
     const applySelectionState = (selection: readonly string[], reapply = false) => {
-      const next = new Map<string, string>();
-      for (const id of selection) {
-        const source = featureSources.get(id);
-        if (source) next.set(id, source);
-      }
-      for (const [id, source] of selectedFeatures) {
-        // Only our own key: `removeFeatureState` without one would drop any
-        // other state a future feature might carry.
-        if (next.get(id) !== source) map.removeFeatureState({ source, id }, SELECTED_STATE);
-      }
-      for (const [id, source] of next) {
-        if (reapply || selectedFeatures.get(id) !== source) {
-          map.setFeatureState({ source, id }, { [SELECTED_STATE]: true });
-        }
-      }
-      selectedFeatures = next;
+      selectedFeatures = syncSelectionState({
+        selection,
+        applied: selectedFeatures,
+        featureSources,
+        reapply,
+        setFeatureState: (target, state) => map.setFeatureState(target, state),
+        removeFeatureState: (target, key) => map.removeFeatureState(target, key),
+      });
     };
 
     /**
-     * New feature data, and the selection re-stated on top of it.
-     *
-     * `setData` reloads the source's tiles, so the state has to be re-stated
-     * rather than diffed: which ids are even addressable changes with the data
-     * (a selected id whose category had not loaded yet becomes markable), and
-     * whether the reload keeps the previously applied state is MapLibre's
-     * internal business, not something the highlight should depend on.
+     * New feature data, and the selection re-stated on top of it (`reapply`,
+     * see `syncSelectionState`): a selected id whose category had not loaded
+     * yet becomes markable only now.
      */
     const applyFeatureData = (
       features: readonly GlassMapFeature[],

@@ -23,6 +23,8 @@ export interface ToolResult {
   bounds?: BoundsResult | null;
   selection?: { count: number; ids: string[] };
   features_loaded?: number;
+  /** Absent until something has touched tier-2 at all (see state.ts). */
+  tier2?: Tier2StateResult;
   drawings?: { count: number; items: DrawingResult[] };
   annotations?: { count: number; items: AnnotationResult[] };
   // draw_shape / annotate / get_share_link success responses.
@@ -33,6 +35,32 @@ export interface ToolResult {
   url?: string;
   bytes?: number;
   omitted?: { drawings: number; annotations: number };
+  // Tier-2 (T-62/T-63): present on find_features / select_features /
+  // list_features_in_view answers that left something city-wide unsearched,
+  // and (matched) on a select_features refusal over SELECT_MATCH_LIMIT.
+  searched_categories?: string[];
+  unsearched_categories?: UnsearchedCategoryResult[];
+  category_counts?: Record<string, number>;
+  matched?: number;
+}
+
+/** A category that exists city-wide but was not part of this answer. */
+export interface UnsearchedCategoryResult {
+  category: string;
+  /** From the manifest: how many exist in the whole city, without loading any. */
+  citywide_count: number;
+}
+
+/** The point-of-interest slice of map state; see `state.ts`'s Tier2StateOutput. */
+export interface Tier2StateResult {
+  /** Sorted category names whose features are loaded, city-wide. */
+  loaded: string[];
+  /** How many categories the index offers in total. */
+  available: number;
+  /** Categories a share link this page was opened with is still fetching. */
+  loading?: string[];
+  /** Categories a share link declared that this page could not load, and why. */
+  failed?: { category: string; error: string }[];
 }
 
 export interface DrawingResult {
@@ -84,6 +112,8 @@ export interface MapStateResult {
   bounds: BoundsResult | null;
   selection: { count: number; ids: string[] };
   features_loaded: number;
+  /** Absent until something has touched tier-2 at all (see state.ts). */
+  tier2?: Tier2StateResult;
   drawings: { count: number; items: DrawingResult[] };
   annotations: { count: number; items: AnnotationResult[] };
 }

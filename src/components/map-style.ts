@@ -1,6 +1,7 @@
 import type { AddLayerObject } from "maplibre-gl";
-import type { Feature, FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { DATASETS, FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import { positionsOf } from "./drawing-style";
 
 /** OpenFreeMap — no API key, no usage limits. */
@@ -65,6 +66,19 @@ export const CALM_OPACITY = 0.55;
 export const CALM_STROKE_WIDTH = 0.5;
 
 /**
+ * Selected point sizes in screen pixels, at zoom 10 / 13 / 16.
+ *
+ * Shared by the bundled categories' `sel` branch and the materialised POI dot
+ * so that "selected" is one size on this map, whichever tier the feature came
+ * from: a person counting highlighted dots must not be able to tell a cafe
+ * from a park by how big its highlight is.
+ */
+export const SELECTED_RADIUS = [6, 9, 12] as const;
+
+/** Opacity of a selected point. Unselected points fade to CALM_OPACITY at z<=13. */
+export const SELECTED_OPACITY = 0.9;
+
+/**
  * Station and listing names only from z14. Below that they printed over every
  * dot in the frame, which is what made the zoomed-out map unreadable.
  */
@@ -76,6 +90,38 @@ export const LABEL_MINZOOM = 14;
  * circle at every vertex of a polygon, so a park would get a ring per corner.
  */
 export const SELECTION_SOURCE = "gm-src-selection";
+
+/**
+ * The point-of-interest source, and the one invariant the whole tier-2
+ * treatment rests on: **it holds exactly the selected tier-2 features, and
+ * nothing else**.
+ *
+ * Tier-2 ships unpainted. The calm ramp was designed around 2,063 dots; the
+ * 18 POI categories are 31k features, so drawing a whole loaded category would
+ * be 6-13x the density the landing view was verified at, and no default paint
+ * for them has been designed yet. What the agent or the human explicitly acts
+ * on is a different question — that has to be visible, or "I selected the 14
+ * cafes near you" is a claim about a map nobody can see.
+ *
+ * Membership *is* selection, which is why this layer needs no feature state:
+ * a feature is in the source only while it is selected, so its paint is the
+ * selected look unconditionally and cannot drift out of step with the store
+ * the way a `setData`-then-`setFeatureState` pair can.
+ */
+export const POI_SOURCE = "gm-src-poi";
+
+/**
+ * The materialised POI dot. Neutral ink on purpose: the six bundled categories
+ * own the map's colour vocabulary (CATEGORY_COLOR, mirrored by the legend), so
+ * a POI painted in any of them would make the legend lie, and painting it teal
+ * or rose would claim a provenance it does not have — a POI is data, not
+ * something an agent or a human drew. The white casing and the teal halo
+ * around it are the same treatment every selected feature gets.
+ *
+ * A future design pass that gives the 18 categories their own ramp owns this
+ * value; until then, "a place, category not colour-coded" is the honest look.
+ */
+export const POI_COLOR = "#111827";
 
 /** The halo's teal (= DRAWING_COLOR.agent), cased in white like the map dots. */
 export const HALO_COLOR = "#0b7285";
@@ -114,9 +160,32 @@ export const categorySourceSpec = (): {
  * Which category source holds each feature, by id. Feature state is stored per
  * source, so an id in `store.selection` cannot be marked until we know which
  * of the six sources to mark it on.
+ *
+ * Tier-2 ids are deliberately absent. POIs render out of POI_SOURCE, whose
+ * paint reads no feature state at all, so listing them here would write state
+ * that nothing reads — and would make `syncSelectionState` believe it had
+ * highlighted a feature by a mechanism that is not the one doing the work.
  */
 export function featureSourceIndex(features: readonly GlassMapFeature[]): Map<string, string> {
   return new Map(features.map((f) => [f.properties.id, sourceId(f.properties.category)]));
+}
+
+/**
+ * The selected tier-2 features, in the store's order — everything POI_SOURCE
+ * is allowed to contain.
+ *
+ * Selection order is not preserved (the store's is), which costs nothing: the
+ * result is only ever drawn, never listed. Scanning the tier-2 slice rather
+ * than indexing it keeps this a function of two arrays with no cache to go
+ * stale, and it runs on selection changes only.
+ */
+export function selectedPoiFeatures(
+  tier2: readonly MapFeature[],
+  selection: readonly string[],
+): MapFeature[] {
+  if (selection.length === 0 || tier2.length === 0) return [];
+  const wanted = new Set(selection);
+  return tier2.filter((f) => wanted.has(f.properties.id));
 }
 
 /** How `map.setFeatureState` / `map.removeFeatureState` address one feature. */
@@ -228,7 +297,7 @@ export function buildLayerSpecs(): AddLayerObject[] {
   }
 
   for (const category of FEATURE_CATEGORIES) {
-    const opaque = category === "listing" ? 0.6 : 0.9;
+    const opaque = category === "listing" ? 0.6 : SELECTED_OPACITY;
     specs.push(
       asLayer({
         id: `gm-${category}-circle`,
@@ -247,11 +316,11 @@ export function buildLayerSpecs(): AddLayerObject[] {
             ["linear"],
             ["zoom"],
             10,
-            ["case", sel, 6, CALM_RADIUS],
+            ["case", sel, SELECTED_RADIUS[0], CALM_RADIUS],
             13,
-            ["case", sel, 9, CALM_RADIUS],
+            ["case", sel, SELECTED_RADIUS[1], CALM_RADIUS],
             16,
-            ["case", sel, 12, 6],
+            ["case", sel, SELECTED_RADIUS[2], 6],
           ],
           "circle-opacity": [
             "interpolate",
@@ -322,6 +391,36 @@ export function buildLayerSpecs(): AddLayerObject[] {
     }),
   );
 
+  // The materialised POI dot, above the bundled data and below the halo that
+  // rings it. No `sel` anywhere in its paint: everything in POI_SOURCE is
+  // selected by construction (see the constant), so the selected look is the
+  // only look this layer has.
+  specs.push(
+    asLayer({
+      id: "gm-poi-circle",
+      type: "circle",
+      source: POI_SOURCE,
+      filter: POINTS,
+      paint: {
+        "circle-color": POI_COLOR,
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          10,
+          SELECTED_RADIUS[0],
+          13,
+          SELECTED_RADIUS[1],
+          16,
+          SELECTED_RADIUS[2],
+        ],
+        "circle-opacity": SELECTED_OPACITY,
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1.5,
+      },
+    }),
+  );
+
   // The selection halo, on top of everything else GlassMap draws: a
   // white-cased teal ring at the centre of each selected feature. Two layers
   // because a circle layer has one stroke, and the white casing is what keeps
@@ -355,21 +454,33 @@ export function buildLayerSpecs(): AddLayerObject[] {
   return specs;
 }
 
+/** All a halo anchor needs: an id to match on and a geometry to average. */
+type AnchorFeature = { geometry: Geometry | null; properties: { id: string } };
+
 /**
  * Where each selected feature's ring goes: the average of the feature's own
  * coordinates, which is the anchor rule labelled drawings already use
  * (`labelPointsToGeoJson`). Unknown ids contribute nothing — a tool can select
  * an id before the datasets have finished loading.
  *
+ * `poi` is the selected tier-2 features (see `selectedPoiFeatures`); they live
+ * in no category source, so without them a selected cafe would be the one
+ * highlighted feature on the map with no ring around it. Bundled features win
+ * a shared id, which is the same precedence the store applies when it appends
+ * a tier-2 category.
+ *
  * The points deliberately carry no `id` property: the halo layers are hit by
  * clicks like every other non-symbol layer, and a ring must not become a
  * second, invisible way to toggle the feature underneath it.
  */
 export function selectionAnchorsToGeoJson(
-  features: readonly GlassMapFeature[],
+  features: readonly AnchorFeature[],
   selection: readonly string[],
+  poi: readonly AnchorFeature[] = [],
 ): FeatureCollection {
-  const byId = new Map(features.map((feature) => [feature.properties.id, feature]));
+  const byId = new Map<string, AnchorFeature>();
+  for (const feature of poi) byId.set(feature.properties.id, feature);
+  for (const feature of features) byId.set(feature.properties.id, feature);
   const out: Feature[] = [];
   for (const id of selection) {
     const feature = byId.get(id);
@@ -395,6 +506,10 @@ export function selectionAnchorsToGeoJson(
  * thing it names, and the selection halo is excluded because its rings carry
  * no feature id — hovering one showed a pointer that promised a selection the
  * click could not make.
+ *
+ * The POI layer is in: a materialised POI is on the map because someone acted
+ * on it, and clicking the thing you can see to take it off the map again is
+ * the same gesture every other dot answers to.
  */
 export const INTERACTIVE_LAYER_IDS = buildLayerSpecs()
   .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)

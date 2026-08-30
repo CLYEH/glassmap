@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isFeatureCategory } from "@/lib/data/schema";
 import { useMapStore, type Annotation, type Drawing } from "@/lib/store/map-store";
 import { ActivityPanel } from "./ActivityFeed";
 import { AddNoteForm } from "./AddNoteForm";
 import { selectActivity } from "./activity-model";
-import { CATEGORY_SINGULAR } from "./category-labels";
+import { categorySingular } from "./category-labels";
 import { CATEGORY_COLOR } from "./map-style";
-import { resolveSelection } from "./selection-model";
+import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
 import { SHEET_TIER, useMediaQuery } from "./useMediaQuery";
 
@@ -101,6 +102,19 @@ function NoteSwatch({ annotation }: { annotation: Annotation }) {
   );
 }
 
+/**
+ * The row's swatch. Three states, because there are three things a row can be:
+ * a bundled feature (its category colour, the same six the legend shows), a
+ * point of interest (neutral — the 18 POI categories have no colour on this
+ * map, and inventing one here would put a swatch in the sidebar that matches
+ * nothing on the canvas), or an id nothing has loaded (a hollow ring).
+ */
+function SelectedDot({ category }: { category: SelectedRow["category"] }) {
+  if (category === null) return <span aria-hidden className="sel-dot unknown" />;
+  if (!isFeatureCategory(category)) return <span aria-hidden className="sel-dot poi" />;
+  return <span aria-hidden className="sel-dot" style={{ backgroundColor: CATEGORY_COLOR[category] }} />;
+}
+
 /** "8 selected · 1 shape · 1 note", or "quiet" when the map is untouched. */
 function summarise(selection: number, shapes: number, notes: number): string {
   const parts: string[] = [];
@@ -128,6 +142,7 @@ export function Inspector() {
   const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<"contents" | "activity">("activity");
   const features = useMapStore((s) => s.features);
+  const tier2Features = useMapStore((s) => s.tier2Features);
   const selection = useMapStore((s) => s.selection);
   const drawings = useMapStore((s) => s.drawings);
   const annotations = useMapStore((s) => s.annotations);
@@ -137,7 +152,10 @@ export function Inspector() {
   const sheet = useMediaQuery(SHEET_TIER);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const rows = useMemo(() => resolveSelection(features, selection), [features, selection]);
+  const rows = useMemo(
+    () => resolveSelection(features, selection, tier2Features),
+    [features, selection, tier2Features],
+  );
   const quiet = rows.length === 0 && drawings.length === 0 && annotations.length === 0;
 
   // In the sheet, the feed shares the inspector's scroll container, so
@@ -204,19 +222,18 @@ export function Inspector() {
             />
             <ul data-testid="sidebar-selection">
               {rows.map((row) => (
-                <li key={row.id} className="sel-row" data-feature-id={row.id}>
-                  <span
-                    aria-hidden
-                    className={`sel-dot${row.category ? "" : " unknown"}`}
-                    style={
-                      row.category ? { backgroundColor: CATEGORY_COLOR[row.category] } : undefined
-                    }
-                  />
+                <li
+                  key={row.id}
+                  className="sel-row"
+                  data-feature-id={row.id}
+                  data-category={row.category ?? undefined}
+                >
+                  <SelectedDot category={row.category} />
                   <span className="sel-name" title={row.name}>
                     {row.name}
                   </span>
                   <span className="sel-cat">
-                    {row.category ? CATEGORY_SINGULAR[row.category] : "not loaded"}
+                    {row.category ? categorySingular(row.category) : "not loaded"}
                     {row.sample ? " (sample)" : ""}
                   </span>
                 </li>

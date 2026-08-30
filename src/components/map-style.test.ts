@@ -1,18 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Position } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature, Tier2Category } from "@/lib/store/tier2";
 import {
   CALM_OPACITY,
   CALM_RADIUS,
   CALM_STROKE_WIDTH,
   INTERACTIVE_LAYER_IDS,
   LABEL_MINZOOM,
+  POI_SOURCE,
+  SELECTED_OPACITY,
+  SELECTED_RADIUS,
   SELECTED_STATE,
   SELECTION_SOURCE,
   buildLayerSpecs,
   categorySourceSpec,
   featureSourceIndex,
   paintOf,
+  selectedPoiFeatures,
   selectionAnchorsToGeoJson,
   sourceId,
   syncSelectionState,
@@ -25,6 +30,12 @@ const point = (id: string, at: Position): GlassMapFeature => ({
   type: "Feature",
   geometry: { type: "Point", coordinates: at },
   properties: props(id),
+});
+
+const poi = (id: string, at: Position, category: Tier2Category = "cafe"): MapFeature => ({
+  type: "Feature",
+  geometry: { type: "Point", coordinates: at },
+  properties: { id, name: id, category, source: "osm" },
 });
 
 /**
@@ -234,6 +245,106 @@ describe("the selection halo", () => {
     // A tool can select an id before the datasets have finished loading, and
     // an unplaceable id must not become a ring at [0, 0].
     expect(selectionAnchorsToGeoJson([], ["osm:node:404"]).features).toEqual([]);
+  });
+
+  it("rings a selected POI exactly like a bundled feature", () => {
+    // Tier-2 features live in no category source, so before they were passed
+    // in a selected cafe was the one highlighted thing on the map with no ring
+    // around it — "these are the 14 I mean" pointing at nothing.
+    const collection = selectionAnchorsToGeoJson(
+      [point("osm:node:1", [121.5, 25])],
+      ["osm:node:1", "osm:node:7"],
+      [poi("osm:node:7", [121.55, 25.03])],
+    );
+    expect(collection.features.map((f) => f.geometry)).toEqual([
+      { type: "Point", coordinates: [121.5, 25] },
+      { type: "Point", coordinates: [121.55, 25.03] },
+    ]);
+  });
+
+  it("lets a bundled feature win an id a POI file also carries", () => {
+    // The store applies the same precedence when it appends a category
+    // (`appendTier2Features` skips a bundled id), so the ring has to agree
+    // with the geometry the rest of the map is drawing.
+    const collection = selectionAnchorsToGeoJson(
+      [point("osm:node:1", [121.5, 25])],
+      ["osm:node:1"],
+      [poi("osm:node:1", [0, 0])],
+    );
+    expect(collection.features[0].geometry).toEqual({ type: "Point", coordinates: [121.5, 25] });
+  });
+});
+
+/**
+ * Tier-2 ships unpainted — 31k POIs would be 6-13x the density the calm ramp
+ * was verified at — but what someone explicitly acted on has to be visible.
+ * The whole treatment rests on one invariant: POI_SOURCE holds the selected
+ * tier-2 features and nothing else, so "in the source" *is* "selected".
+ */
+describe("the materialised POI dot", () => {
+  const layer = () => buildLayerSpecs().find((l) => l.id === "gm-poi-circle")!;
+
+  it("draws only what is selected", () => {
+    const loaded = [poi("osm:node:1", [121.5, 25]), poi("osm:node:2", [121.6, 25.1])];
+    expect(selectedPoiFeatures(loaded, ["osm:node:2"]).map((f) => f.properties.id)).toEqual([
+      "osm:node:2",
+    ]);
+  });
+
+  it("empties the moment the selection is cleared, so the calm map comes back", () => {
+    // Deselect is the only way a POI leaves the screen: the category stays in
+    // memory for the tools, and off the canvas.
+    const loaded = [poi("osm:node:1", [121.5, 25])];
+    expect(selectedPoiFeatures(loaded, [])).toEqual([]);
+  });
+
+  it("ignores selected ids that belong to no loaded category", () => {
+    expect(selectedPoiFeatures([poi("osm:node:1", [121.5, 25])], ["osm:node:404"])).toEqual([]);
+  });
+
+  it("needs no feature state, because membership is selection", () => {
+    // The bundled layers read `["feature-state","selected"]`; this one must
+    // not. If it did, a POI whose state had not been written yet would render
+    // at the *unselected* calm size — a 2px dot for the one feature the agent
+    // just said it was pointing at.
+    expect(JSON.stringify(layer())).not.toContain("feature-state");
+    expect((layer() as { source?: string }).source).toBe(POI_SOURCE);
+  });
+
+  it("is the same size as a selected bundled dot at every stop", () => {
+    // "Selected" has to be one size on this map. If a cafe's highlight were a
+    // different size from a park's, the size would start meaning "which tier
+    // is this" instead of "this is the one I meant".
+    const bundled = paintOf(buildLayerSpecs().find((l) => l.id === "gm-park-circle")!);
+    const poiPaint = paintOf(layer());
+    for (const [zoom, radius] of [
+      [10, SELECTED_RADIUS[0]],
+      [13, SELECTED_RADIUS[1]],
+      [16, SELECTED_RADIUS[2]],
+    ] as const) {
+      expect(forSelected(atZoom(bundled["circle-radius"], zoom), true)).toBe(radius);
+      expect(atZoom(poiPaint["circle-radius"], zoom)).toBe(radius);
+    }
+    expect(poiPaint["circle-opacity"]).toBe(SELECTED_OPACITY);
+    expect(forSelected(atZoom(bundled["circle-opacity"], 13), true)).toBe(SELECTED_OPACITY);
+  });
+
+  it("is drawn under the halo that rings it", () => {
+    const ids = buildLayerSpecs().map((l) => l.id);
+    expect(ids.indexOf("gm-poi-circle")).toBeGreaterThan(-1);
+    expect(ids.indexOf("gm-poi-circle")).toBeLessThan(ids.indexOf("gm-selection-halo-case"));
+  });
+
+  it("is clickable, so the dot you can see is the dot you can deselect", () => {
+    expect(INTERACTIVE_LAYER_IDS).toContain("gm-poi-circle");
+  });
+
+  it("stays out of the feature-state index", () => {
+    // Nothing reads feature state on POI_SOURCE, so writing it would be state
+    // that no paint consults — and would make `syncSelectionState` report a
+    // highlight it did not cause.
+    const index = featureSourceIndex([point("osm:node:1", [121.5, 25])]);
+    expect([...index.values()]).not.toContain(POI_SOURCE);
   });
 });
 

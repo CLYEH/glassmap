@@ -11,6 +11,7 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import {
   useMapStore,
   type Annotation,
@@ -31,11 +32,13 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
+  POI_SOURCE,
   SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
   categorySourceSpec,
   featureSourceIndex,
+  selectedPoiFeatures,
   selectionAnchorsToGeoJson,
   sourceId,
   syncSelectionState,
@@ -112,9 +115,10 @@ function applySelectionHalo(
   map: MapLibreMap,
   features: readonly GlassMapFeature[],
   selection: readonly string[],
+  poi: readonly MapFeature[],
 ) {
   const source = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
-  source?.setData(selectionAnchorsToGeoJson(features, selection));
+  source?.setData(selectionAnchorsToGeoJson(features, selection, poi));
 }
 
 /** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
@@ -430,15 +434,41 @@ export default function MapCanvas() {
       applySelectionState(selection, true);
     };
 
+    /**
+     * Materialise the selected POIs and ring them.
+     *
+     * One call does both because the two must never disagree: the halo is what
+     * says "this is the thing I meant", and a POI dot that appeared without one
+     * would read as map furniture rather than as an answer. Deselecting empties
+     * the source, which is how the calm map comes back — a category stays in
+     * memory for the tools, and off the screen.
+     */
+    const applySelectedPoi = (
+      tier2: readonly MapFeature[],
+      features: readonly GlassMapFeature[],
+      selection: readonly string[],
+    ) => {
+      const poi = selectedPoiFeatures(tier2, selection);
+      setSourceData(map, POI_SOURCE, { type: "FeatureCollection", features: poi });
+      applySelectionHalo(map, features, selection, poi);
+    };
+
     map.on("load", () => {
       for (const category of FEATURE_CATEGORIES) {
         map.addSource(sourceId(category), categorySourceSpec());
       }
+      // Empty, and empty is also its resting state: it only ever holds the
+      // selected tier-2 features. `buildLayerSpecs` puts its layer under the
+      // halo layers, which is what makes a ring land on top of its dot.
+      map.addSource(POI_SOURCE, { type: "geojson", data: EMPTY });
       map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
-      const { features, selection, drawings } = store.getState();
+      const { features, selection, drawings, tier2Features } = store.getState();
       for (const layer of buildLayerSpecs()) map.addLayer(layer);
       applyFeatureData(features, selection);
-      applySelectionHalo(map, features, selection);
+      // Read from the store rather than started empty: a category can already
+      // be loaded and selected by the time the style finishes (the tools work
+      // before the basemap does, and a remount re-runs this whole effect).
+      applySelectedPoi(tier2Features, features, selection);
 
       // Drawings sit on top of the data layers: a shape is always about the
       // features under it.
@@ -520,8 +550,15 @@ export default function MapCanvas() {
       // would only undo work it has already done.
       if (state.features !== previous.features) applyFeatureData(state.features, state.selection);
       else if (state.selection !== previous.selection) applySelectionState(state.selection);
-      if (state.selection !== previous.selection || state.features !== previous.features) {
-        applySelectionHalo(map, state.features, state.selection);
+      // A tier-2 category arriving changes nothing on screen on its own — only
+      // the selected subset is ever drawn — but it does change which selected
+      // ids can be placed, so it is one of the three inputs here.
+      if (
+        state.selection !== previous.selection ||
+        state.features !== previous.features ||
+        state.tier2Features !== previous.tier2Features
+      ) {
+        applySelectedPoi(state.tier2Features, state.features, state.selection);
       }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });

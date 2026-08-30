@@ -176,7 +176,7 @@ out center;`;
       name,
       category,
     };
-    if (typeof tags["name:en"] === "string") properties.name_en = tags["name:en"];
+    if (typeof tags["name:en"] === "string") properties.nameEn = tags["name:en"];
     if (typeof tags.cuisine === "string") properties.cuisine = tags.cuisine;
     if (typeof tags.brand === "string") properties.brand = tags.brand;
     if (typeof tags.opening_hours === "string") {

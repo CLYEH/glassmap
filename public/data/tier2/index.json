@@ -6,109 +6,109 @@
       "category": "bakery",
       "count": 497,
       "file": "/data/tier2/bakery.geojson",
-      "bytes": 92396
+      "bytes": 92293
     },
     {
       "category": "bank",
       "count": 1576,
       "file": "/data/tier2/bank.geojson",
-      "bytes": 380526
+      "bytes": 379013
     },
     {
       "category": "bar",
       "count": 205,
       "file": "/data/tier2/bar.geojson",
-      "bytes": 37964
+      "bytes": 37927
     },
     {
       "category": "bicycle_rental",
       "count": 2602,
       "file": "/data/tier2/bicycle_rental.geojson",
-      "bytes": 702165
+      "bytes": 699580
     },
     {
       "category": "cafe",
       "count": 2297,
       "file": "/data/tier2/cafe.geojson",
-      "bytes": 478250
+      "bytes": 477221
     },
     {
       "category": "clinic",
       "count": 864,
       "file": "/data/tier2/clinic.geojson",
-      "bytes": 157160
+      "bytes": 157136
     },
     {
       "category": "convenience",
       "count": 3231,
       "file": "/data/tier2/convenience.geojson",
-      "bytes": 699646
+      "bytes": 697863
     },
     {
       "category": "fast_food",
       "count": 1288,
       "file": "/data/tier2/fast_food.geojson",
-      "bytes": 301641
+      "bytes": 300660
     },
     {
       "category": "hospital",
       "count": 74,
       "file": "/data/tier2/hospital.geojson",
-      "bytes": 15014
+      "bytes": 14973
     },
     {
       "category": "hotel",
       "count": 576,
       "file": "/data/tier2/hotel.geojson",
-      "bytes": 109235
+      "bytes": 108913
     },
     {
       "category": "library",
       "count": 209,
       "file": "/data/tier2/library.geojson",
-      "bytes": 43404
+      "bytes": 43352
     },
     {
       "category": "museum",
       "count": 119,
       "file": "/data/tier2/museum.geojson",
-      "bytes": 27304
+      "bytes": 27217
     },
     {
       "category": "parking",
       "count": 986,
       "file": "/data/tier2/parking.geojson",
-      "bytes": 184505
+      "bytes": 184350
     },
     {
       "category": "pharmacy",
       "count": 563,
       "file": "/data/tier2/pharmacy.geojson",
-      "bytes": 101261
+      "bytes": 101210
     },
     {
       "category": "place_of_worship",
       "count": 1718,
       "file": "/data/tier2/place_of_worship.geojson",
-      "bytes": 312467
+      "bytes": 312373
     },
     {
       "category": "police",
       "count": 220,
       "file": "/data/tier2/police.geojson",
-      "bytes": 39617
+      "bytes": 39593
     },
     {
       "category": "post_office",
       "count": 254,
       "file": "/data/tier2/post_office.geojson",
-      "bytes": 65551
+      "bytes": 65308
     },
     {
       "category": "restaurant",
       "count": 13789,
       "file": "/data/tier2/restaurant.geojson",
-      "bytes": 2655095
+      "bytes": 2653805
     }
   ]
 }

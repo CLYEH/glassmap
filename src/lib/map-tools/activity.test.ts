@@ -338,10 +338,22 @@ describe("summary copy", () => {
     // call resolved to, so a row saying "Around 大安區" beside a mark sitting
     // on one station is the feed contradicting the screen. The district is a
     // true fact about the place and still the wrong answer to "where is this
-    // row about?" when the caller named somewhere.
+    // row about?" when the caller named somewhere. What the row shows is the
+    // name the tool resolved, not the romanisation that was typed: the map
+    // labels that station in its own words, and the row must match the label.
     const { store, byName } = setup();
     await call(byName.describe_surroundings, { from: "Daan Station" });
-    expect(last(store).summary).toMatch(/^Around Daan Station — \d+ features within 500 m$/);
+    expect(last(store).summary).toMatch(/^Around 大安 — \d+ features within 500 m$/);
+  });
+
+  it("describe_surroundings turns an id into the name the tool resolved it to", async () => {
+    // Agents pass ids around: from is usually "osm:node:2", not a name a
+    // person typed. "Around osm:node:2" is a row a human cannot check against
+    // the map at all, and the name is the tool's own answer — the same echo
+    // compare_areas' row is written from.
+    const { store, byName } = setup();
+    await call(byName.describe_surroundings, { from: "osm:node:2" });
+    expect(last(store).summary).toMatch(/^Around 大安 — \d+ features within 500 m$/);
   });
 
   it("describe_surroundings falls back to the district when the call named nowhere", async () => {

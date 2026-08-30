@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMapTools, PLACE_ZOOM, validateSetMapView } from "./index";
 import { createMemoryToolStore, DEFAULT_VIEW, type MemoryToolStore } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { FeatureOutput } from "./output";
+import { distanceMeters, featureCenter, type FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
 import { DEFAULT_LIMIT, DEFAULT_RADIUS_M, MAX_QUERY_RADIUS_M } from "./query";
 import {
@@ -619,6 +619,33 @@ describe("find_features", () => {
     const { byName } = mapReady();
     const out = await call(byName.find_features, { near: { lng: 121.123456789, lat: 25.987654321 } });
     expect(out.origin).toEqual({ lng: 121.12346, lat: 25.98765 });
+  });
+
+  it("measures from the origin it prints, so every distance can be recomputed", async () => {
+    // Rounding on the way out alone would print a point up to a metre from the
+    // one the distances were taken from, and both search tools would look
+    // right while disagreeing: an agent replaying "220 m NE" from the origin it
+    // was handed would get a different number, with nothing in the answer to
+    // say which of the two was the map's. Rounding before measuring makes the
+    // echo checkable, which is the only reason it is worth its tokens.
+    const { byName, store } = mapReady();
+    const centre = { lng: 121.5375024, lat: 25.0325044 };
+    store.setView({ center: [centre.lng, centre.lat] });
+    const unreplayable = (out: ToolResult) => {
+      const { lng, lat } = out.origin as { lng: number; lat: number };
+      return (out.features ?? [])
+        .filter((f) => {
+          const feature = FIXTURE_FEATURES.find((x) => x.properties.id === f.id)!;
+          return distanceMeters([lng, lat], featureCenter(feature)!) !== f.distance_m;
+        })
+        .map((f) => f.id);
+    };
+    const listed = await call(byName.list_features_in_view);
+    expect(listed.features?.length).toBe(IN_VIEW_IDS_BY_DISTANCE.length);
+    expect(unreplayable(listed)).toEqual([]);
+    const found = await call(byName.find_features, { near: centre });
+    expect(found.features?.length).toBeGreaterThan(0);
+    expect(unreplayable(found)).toEqual([]);
   });
 
   it("refuses an unknown shape id instead of ignoring the filter", async () => {

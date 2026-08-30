@@ -181,6 +181,11 @@ export class HttpStatusError extends Error {
  * Timeout (RFC 9110 §15.5.9 — the client MAY repeat the request), 425 Too Early
  * (RFC 8470 §5.2 — retry once the request is no longer early data) and 429 Too
  * Many Requests (RFC 6585 §4 — retry after backing off).
+ *
+ * "Retryable" here means the next tool call that needs the category may ask
+ * again; there is no backoff and no retry loop, because there is nothing to
+ * back off from — one probe per call, against a static file on a CDN, and the
+ * agent is not calling faster than a human can read the answers.
  */
 const RETRYABLE_4XX = new Set([408, 425, 429]);
 

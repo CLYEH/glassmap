@@ -260,15 +260,20 @@ const SUMMARISERS: Record<string, Summariser> = {
   },
 
   describe_surroundings: (input, result) => {
-    // The place the caller named wins over the district it turned out to be
+    // The place the call was about wins over the district it turned out to be
     // in. The row and the map are looked at together: the page marks the
     // resolved origin, so a row reading "Around Daan District" while the mark
-    // sits on one named park makes the feed contradict the screen. A call that
-    // named no place — a coordinate, or the view centre — has nothing to
-    // prefer, and there the district is still the most human answer.
-    const named = str(input.from)?.trim();
+    // sits on one named park makes the feed contradict the screen. The tool's
+    // own resolved name comes first — "osm:node:2" and "Daan Station" are both
+    // that station, and only the tool knows which one they found — exactly as
+    // compare_areas names its two sides. A call that named no place — a
+    // coordinate, or the view centre — has nothing to prefer, and there the
+    // district is still the most human answer.
+    // Only the string forms are offered to placeLabel: a caller who gave a
+    // coordinate named nowhere, and the district reads better than a row
+    // repeating the numbers the mark is already sitting on.
     const where =
-      (named ? text(named) : undefined) ??
+      placeLabel(str(input.from), result.name) ??
       str(result.district) ??
       pointOf(result.origin) ??
       "the view";

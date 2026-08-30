@@ -1200,10 +1200,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       // Names of the loaded categories, not their features: the recipient
       // fetches the same files. Without them a link whose selection is made of
       // points of interest arrives at a page that has never heard of them, and
-      // the map the sender is looking at cannot be reproduced at all.
+      // the map the sender is looking at cannot be reproduced at all. The
+      // failures are here because a bad second on this page must not be
+      // inherited: see `shareCategories`.
       const categories = shareCategories(
         store.getLoadedCategories(),
         store.getPendingCategories(),
+        store.getRestoreFailures(),
       );
       const hash = encodeShareState({
         view: store.getView(),

@@ -144,7 +144,12 @@ export function describeState(store: MapToolStore): MapStateOutput {
     loaded: [...loaded],
     available,
     ...(loading.length ? { loading: [...loading] } : {}),
-    ...(failed.length ? { failed: failed.map((f) => ({ ...f })) } : {}),
+    // Field by field, not a spread: `permanent` decides what a link this page
+    // hands on declares, which is the store's business and not an answer to the
+    // question the agent asked. The reason is already in `error`.
+    ...(failed.length
+      ? { failed: failed.map((f) => ({ category: f.category, error: f.error })) }
+      : {}),
   };
   return {
     ...describeView(store.getView()),

@@ -36,6 +36,7 @@ import { TIER2_CATEGORIES, type FetchJson } from "@/lib/store/tier2";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { circleGeometry, MAX_SHAPE_POINTS } from "./shapes";
 import {
+  createFlakyTier2Fetch,
   createGatedTier2Fetch,
   createTier2Fetch,
   FIXTURE_FEATURES,
@@ -767,6 +768,43 @@ describe("opening a shared map on a page with no categories loaded", () => {
     const out = await recipient.select({ ids: [], replace: false });
     expect(out.state.selection.ids).toEqual(["osm:way:10"]);
     expect(out.pending_ids).toBeUndefined();
+  });
+
+  it("keeps declaring a category the recipient's page failed to fetch for a moment", async () => {
+    // The recipient's cafe file answered 503, so the restore gave up on it -
+    // and every link this page hands on is built from this same store. A link
+    // built from what loaded would quietly drop cafe, and the person the
+    // recipient forwards it to gets the sender's two cafe ids with no category
+    // declaring them: a selection nothing on that page will ever resolve, from
+    // a link that looks perfectly well formed. One bad second, and the map
+    // degrades one reader at a time. What the recipient hands on is what they
+    // were sent, and the next page asks the server again.
+    const url = await cafeLink();
+    const recipient = page(createFlakyTier2Fetch("cafe").fetchJson);
+    const { settled } = applyLink(recipient.store, url);
+
+    const result = await settled;
+    expect(result.failed[0]).toMatchObject({ category: "cafe", permanent: false });
+    expect((await recipient.share()).url).toBe(url);
+  });
+
+  it("stops declaring a category this deployment does not ship at all", async () => {
+    // The other half of the same rule. A 404 is not a bad second: no reader of
+    // this link will ever get that file, and a link that keeps naming it only
+    // makes each of them wait for the same missing request. The page has
+    // already pruned the ids that depended on it, for the same reason.
+    const url = await cafeLink();
+    const recipient = page(createTier2Fetch({}).fetchJson); // the index, and no files
+    const { settled } = applyLink(recipient.store, url);
+
+    const result = await settled;
+    expect(result.failed[0]).toMatchObject({ category: "cafe", permanent: true });
+
+    const reshared = await recipient.share();
+    if (!reshared.url) throw new Error(reshared.error);
+    const decoded = decodeShareState(reshared.url.slice(reshared.url.indexOf("#")));
+    if ("error" in decoded) throw new Error(decoded.error);
+    expect(decoded.categories).toEqual([]);
   });
 
   it("reproduces the sender's link byte for byte once the categories are loaded", async () => {

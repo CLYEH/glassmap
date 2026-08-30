@@ -15,6 +15,7 @@
  */
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import { TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
 
 type Props = GlassMapFeature["properties"];
 
@@ -209,3 +210,159 @@ export const EAST_DISTRICT = box(
 
 /** In the seam: inside neither polygon, ~81 m from West and ~121 m from East. */
 export const SEAM_POINT: LngLat = [121.5108, 25.005];
+
+// ------------------------------------------------------- tier-2 (POI) fixtures
+
+/**
+ * Point-of-interest files exactly as the generator writes them: `nameEn` like
+ * the bundled datasets, no `source`, and absolute `file` paths in the index.
+ * That format is owned by the data task, and this is the only place where the
+ * two halves of the contract meet.
+ */
+function poi(
+  id: string,
+  name: string,
+  nameEn: string,
+  category: string,
+  coordinates: [number, number],
+  extra: Record<string, string> = {},
+) {
+  return {
+    type: "Feature",
+    properties: { id, name, nameEn, category, ...extra },
+    geometry: { type: "Point", coordinates },
+  };
+}
+
+/**
+ * Three cafes, chosen for what they break rather than for realism:
+ *  - one within the default 800 m walk of Daan Station, and inside VIEW_BOUNDS;
+ *  - one named 大安, exactly like DAAN_STATION — the measured citywide name
+ *    collision. Once cafes are loaded, "大安" has to become a question rather
+ *    than a guess;
+ *  - one across town and outside the viewport, so "loaded city-wide" and "in
+ *    view" can be told apart.
+ */
+export const TIER2_CAFE_COLLECTION = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:100", "路易莎咖啡", "Louisa Coffee", "cafe", [121.5432, 25.0338], {
+      brand: "Louisa Coffee",
+      opening_hours: "Mo-Su 07:00-22:00",
+    }),
+    poi("osm:node:101", "大安", "Daan Coffee", "cafe", [121.5425, 25.0331]),
+    poi("osm:node:102", "小林咖啡", "Xiaolin Coffee", "cafe", [121.512, 25.0505]),
+  ],
+};
+
+export const TIER2_RESTAURANT_COLLECTION = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:110", "鼎泰豐", "Din Tai Fung", "restaurant", [121.5361, 25.0331], {
+      cuisine: "dumpling",
+    }),
+    poi("osm:node:111", "越南小吃", "Pho House", "restaurant", [121.544, 25.03], {
+      cuisine: "vietnamese",
+    }),
+    // Also in the bakery file, under the same id: a dozen POIs in the real
+    // extract are tagged twice, and both queries have to find them.
+    poi("osm:node:112", "多那之", "Donutes", "restaurant", [121.5405, 25.0345], {
+      cuisine: "bakery;coffee_shop",
+    }),
+  ],
+};
+
+/** One shop, two files, one id — the double-tagging case, isolated. */
+export const TIER2_BAKERY_COLLECTION = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:112", "多那之", "Donutes", "bakery", [121.5405, 25.0345], {
+      cuisine: "bakery;coffee_shop",
+    }),
+  ],
+};
+
+/** More convenience stores than select_features will highlight in one call. */
+export const TIER2_CONVENIENCE_COUNT = 600;
+
+export const TIER2_CONVENIENCE_COLLECTION = {
+  type: "FeatureCollection",
+  features: Array.from({ length: TIER2_CONVENIENCE_COUNT }, (_, i) =>
+    poi(`osm:node:${2000 + i}`, "7-ELEVEN", "7-Eleven", "convenience", [
+      121.53 + (i % 25) * 0.0004,
+      25.028 + Math.floor(i / 25) * 0.0004,
+    ]),
+  ),
+};
+
+/**
+ * The index. `bakery` is listed but `TIER2_FILES` has no file for it: that is
+ * the failure an agent has to be told about in words, not served as an empty
+ * result. A test that wants the bakery to load adds
+ * `TIER2_BAKERY_COLLECTION` to the files it passes in.
+ */
+export const TIER2_INDEX = {
+  generated: "2026-08-30T00:00:00Z",
+  attribution: "© OpenStreetMap contributors",
+  categories: [
+    {
+      category: "cafe",
+      count: TIER2_CAFE_COLLECTION.features.length,
+      file: "/data/tier2/cafe.geojson",
+      bytes: 512,
+    },
+    {
+      category: "restaurant",
+      count: TIER2_RESTAURANT_COLLECTION.features.length,
+      file: "/data/tier2/restaurant.geojson",
+      bytes: 384,
+    },
+    {
+      category: "convenience",
+      count: TIER2_CONVENIENCE_COUNT,
+      file: "/data/tier2/convenience.geojson",
+      bytes: 60000,
+    },
+    {
+      category: "bakery",
+      count: TIER2_BAKERY_COLLECTION.features.length,
+      file: "/data/tier2/bakery.geojson",
+      bytes: 300,
+    },
+  ],
+};
+
+export const TIER2_FILES: Record<string, unknown> = {
+  "/data/tier2/cafe.geojson": TIER2_CAFE_COLLECTION,
+  "/data/tier2/restaurant.geojson": TIER2_RESTAURANT_COLLECTION,
+  "/data/tier2/convenience.geojson": TIER2_CONVENIENCE_COLLECTION,
+};
+
+/** The same server, plus the bakery file the index promises. */
+export const TIER2_FILES_WITH_BAKERY: Record<string, unknown> = {
+  ...TIER2_FILES,
+  "/data/tier2/bakery.geojson": TIER2_BAKERY_COLLECTION,
+};
+
+/**
+ * A tier-2 server with no network: the manifest, the files it can serve, and a
+ * log of every URL asked for — which is how a test proves a file was fetched
+ * once, or never fetched at all.
+ */
+export function createTier2Fetch(
+  files: Record<string, unknown> = TIER2_FILES,
+  /** `null` serves a 404 for the index itself — a page whose data never shipped. */
+  index: unknown = TIER2_INDEX,
+): { fetchJson: FetchJson; requests: string[] } {
+  const requests: string[] = [];
+  const fetchJson: FetchJson = async (url) => {
+    requests.push(url);
+    if (url === TIER2_INDEX_URL) {
+      if (index === null) throw new Error(`${url}: 404 Not Found`);
+      return index;
+    }
+    if (!(url in files)) throw new Error(`${url}: 404 Not Found`);
+    return files[url];
+  };
+  return { fetchJson, requests };
+}

@@ -9,7 +9,8 @@
  * would eventually disagree with find_features, and nobody listening to the
  * answer could tell which half was wrong.
  */
-import type { FeatureCategory, GlassMapFeature } from "@/lib/data/schema";
+import type { FeatureCategory } from "@/lib/data/schema";
+import { featureCategories, type MapCategory, type MapFeature } from "@/lib/store/tier2";
 import type { LngLat } from "@/lib/store/map-store";
 import { distanceMeters, featureCenter } from "./output";
 import { queryFeatures } from "./query";
@@ -51,10 +52,10 @@ export interface AreaSummary {
  * the answer aloud must be able to say "no supermarkets" with confidence.
  */
 export function summariseArea(
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   origin: LngLat,
   radius_m: number,
-  categories: readonly FeatureCategory[],
+  categories: readonly MapCategory[],
   name?: string,
 ): AreaSummary {
   const by_category: Record<string, CategoryCount> = {};
@@ -63,17 +64,22 @@ export function summariseArea(
   // Nearest first, so the first feature of a category is that category's nearest.
   const matched = queryFeatures(features, { origin, radius_m, categories: [...categories] });
   for (const feature of matched) {
-    const bucket = by_category[feature.properties.category];
-    if (!bucket) continue;
-    bucket.count += 1;
-    if (bucket.nearest) continue;
-    const center = featureCenter(feature);
-    if (!center) continue;
-    bucket.nearest = {
-      id: feature.properties.id,
-      name: feature.properties.name,
-      distance_m: distanceMeters(origin, center),
-    };
+    // A double-tagged POI counts in both of its categories, exactly as it is
+    // returned by both of their find_features queries. `total` counts features,
+    // so the per-category counts can add up to slightly more than it does.
+    for (const category of featureCategories(feature)) {
+      const bucket = by_category[category];
+      if (!bucket) continue;
+      bucket.count += 1;
+      if (bucket.nearest) continue;
+      const center = featureCenter(feature);
+      if (!center) continue;
+      bucket.nearest = {
+        id: feature.properties.id,
+        name: feature.properties.name,
+        distance_m: distanceMeters(origin, center),
+      };
+    }
   }
 
   return {
@@ -93,7 +99,7 @@ export function summariseArea(
 export function compareSummary(
   a: AreaSummary,
   b: AreaSummary,
-  categories: readonly FeatureCategory[],
+  categories: readonly MapCategory[],
 ): string[] {
   return categories.map(
     (c) => `${c}: a ${a.by_category[c]?.count ?? 0} vs b ${b.by_category[c]?.count ?? 0}`,

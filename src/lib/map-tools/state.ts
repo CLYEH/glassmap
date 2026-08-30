@@ -50,12 +50,26 @@ export interface AnnotationOutput {
   source: Annotation["source"];
 }
 
+/**
+ * Which point-of-interest categories are in memory. Absent until something has
+ * touched tier-2 at all: a page that never asks for a POI category reports the
+ * same state it always did.
+ */
+export interface Tier2StateOutput {
+  /** Sorted category names whose features are loaded, city-wide. */
+  loaded: string[];
+  /** How many categories the index offers in total. */
+  available: number;
+}
+
 /** Serialisable map state returned by get_map_state and every write tool. */
 export interface MapStateOutput extends ViewOutput {
   /** Visible extent; null until the map has rendered once. */
   bounds: BoundsOutput | null;
   selection: { count: number; ids: string[] };
+  /** Everything queryable: the bundled datasets plus every loaded category. */
   features_loaded: number;
+  tier2?: Tier2StateOutput;
   drawings: { count: number; items: DrawingOutput[] };
   annotations: { count: number; items: AnnotationOutput[] };
 }
@@ -105,11 +119,17 @@ export function describeState(store: MapToolStore): MapStateOutput {
   const selection = store.getSelection();
   const drawings = store.getDrawings();
   const annotations = store.getAnnotations();
+  // Read, never fetched: state is returned by every write tool and by the page,
+  // and a state read that went to the network would make tier-2 something a
+  // page pays for without ever asking for it.
+  const loaded = store.getLoadedCategories();
+  const available = store.getTier2Manifest()?.categories.length ?? 0;
   return {
     ...describeView(store.getView()),
     bounds: describeBounds(store.getBounds()),
     selection: { count: selection.length, ids: selection.slice(0, SELECTION_ID_LIMIT) },
     features_loaded: store.getFeatures().length,
+    ...(loaded.length || available ? { tier2: { loaded: [...loaded], available } } : {}),
     drawings: {
       count: drawings.length,
       items: drawings.slice(-STATE_ITEM_LIMIT).map(describeDrawing),

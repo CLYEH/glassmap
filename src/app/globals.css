@@ -1006,6 +1006,18 @@ html[data-chrome="awake"] .app .note-pop {
 .badge.offline .live-dot::after {
   animation: none;
 }
+/* Registered, and nobody calling: a restored link's own agent chrome, before
+   this page has seen a call. Hollow and still, the same vocabulary the
+   restored feed row and its held pulse use — the ring is teal because the
+   tools *are* declared, and empty because nothing is coming through them. */
+.badge.ready .live-dot {
+  background: transparent;
+  border: 1px solid var(--agent);
+}
+.badge.ready .live-dot::after {
+  animation: none;
+  opacity: 0;
+}
 .badge-label {
   font-size: 11px;
   font-weight: 650;
@@ -1754,12 +1766,15 @@ html[data-chrome="awake"] .app .otm-card {
    screen it still has.
 
    The attribute is on the root element, written before the first paint by
-   `app/boot-chrome.ts` and from hydration onwards by `useChromeAttribute`.
+   `app/boot-chrome.ts` and from hydration onwards by the awakening controller
+   (`components/awaken/controller.ts`, the one writer of all three states).
    Agent chrome is the exception and human chrome the absence of it
    (`:not([data-chrome="awake"])`, never `[data-chrome="idle"]`): a document
    whose script never ran — disabled JavaScript, a refused inline script, a
    throw — then lands on the human chrome, which is the one a page with no
-   agent is supposed to wear.
+   agent is supposed to wear. One rule names both agent states in that
+   negative form (`:not(waking):not(awake)`, the sheet tier's map container):
+   the law is the absence, not the count of states it excludes.
 
    During the first paint of a restored agent link these rules are ahead of
    the DOM: the lane, the feed and the badge are React's and arrive with
@@ -1824,8 +1839,28 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
   .map-wrap {
     bottom: 46vh;
   }
-  /* Human chrome has no sheet, so the map keeps the whole screen. */
-  html:not([data-chrome="awake"]) .app .map-wrap {
+  /* Human chrome has no sheet, so the map keeps the whole screen — and the
+     transition is not human chrome for this one property.
+
+     This is the container MapLibre measures. Kept at the human height through
+     the story it would hand the map its agent height in the single frame the
+     story lands, and MapLibre re-centres on resize: every point on the map
+     translated 194px in that frame (measured, 390x844), which is the largest
+     movement in the whole transition and the one nobody choreographed. So the
+     container takes its agent height at t=0 instead, under the flare — exactly
+     the t=0 flip the desktop tier already does with `inspectorLane()`, where
+     the first tool call re-pads the camera by the lane before anything has
+     moved. What the band below it shows until the sheet reaches it is the page
+     ground (`body`, --ink-0 #0a0d12), which is the colour the sheet itself
+     resolves to over it (rgba(13,17,23,.97) over that ground ≈ #0d1117): the
+     map yields the band at the start and the sheet rises into it.
+
+     Still written as the absence of the two agent states rather than as
+     `[data-chrome="idle"]`: the boot script writes the attribute only for a
+     link that carries a share hash, so a plain landing has no `data-chrome` at
+     all until hydration — and naming `idle` here would shorten that map for a
+     sheet that is not coming. */
+  html:not([data-chrome="waking"]):not([data-chrome="awake"]) .app .map-wrap {
     bottom: 0;
   }
   html:not([data-chrome="awake"]) .app .bottom-bar {
@@ -1838,6 +1873,15 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
      its east edge, so the whole width is visible again. */
   html[data-chrome="awake"] .app .otm-card {
     left: clamp(131px, var(--otm-x), calc(100vw - 131px));
+  }
+  /* Which is why the dock keeps the map's own centre in both chromes. The awake
+     rule offsets it by half a lane that is not on this tier — and the
+     choreography does not animate that offset here (there is nothing to make
+     room for), so the dock simply arrived 155px to the left in the frame the
+     story landed (measured, 768x1024). Between 641px and 920px only: below
+     that the dock is a full-width row and states its own left. */
+  html[data-chrome="awake"] .app .dock {
+    left: 50%;
   }
   .tray {
     width: calc(100vw - 24px);
@@ -2220,6 +2264,25 @@ html[data-chrome="waking"] .app .cam-chip {
   html[data-chrome="waking"] .app .inspector {
     transform: translateY(110%);
   }
+  /* The map's container gives up the sheet's band at t=0 (see the <=920 block),
+     so the bottom band — legend, attribution, badge, dock — would start the
+     story already at its agent position, one sheet-height (46vh; 388px at
+     390x844) above the foot of the screen, and the `sheet` beat would have
+     nothing left to carry. `fixed` puts it back
+     on the viewport for the length of the transition: at p=0 it is exactly
+     where the human rule had it, the choreography walks it up by the sheet's
+     own height, and at p=1 that lands on the container's bottom edge — which
+     is where the awake rule (`bottom: 12px` inside the shortened container)
+     puts it, so the handover moves nothing.
+
+     Fixed rather than a downward translate because `.map-wrap` clips its
+     overflow: pushed back down into the band, the whole bar would be clipped
+     away. A fixed box is laid out against the viewport, so no ancestor's
+     `overflow` can reach it. */
+  html[data-chrome="waking"] .app .bottom-bar,
+  html[data-chrome="waking"] .app .dock {
+    position: fixed;
+  }
 }
 /* The first-visit pill invites an agent that has now arrived. */
 html[data-chrome="waking"] .app .spark-callout {
@@ -2353,8 +2416,10 @@ body[data-fx="off"] .awaken-stage {
    Session chrome, not FX (r2 Ruling 1): it blooms in the last beat and then
    dwells ~3.2 s on its own clock. Dismissed by a tap anywhere on it, by the ×
    (the keyboard path — its click bubbles), or by Esc while it shows.
-   `role="status"` + `aria-live="polite"` are on the element, and it is `inert`
-   while hidden so Tab can never land on an invisible control. */
+   It is `inert` while hidden, so Tab can never land on an invisible control —
+   which is also why it is not the live region: the `role="status"` that
+   announces this arrival is its own empty, never-inert element off screen
+   (`AwakenStage`), written when the toast is raised. */
 .awaken-cap {
   position: absolute;
   top: 18px;

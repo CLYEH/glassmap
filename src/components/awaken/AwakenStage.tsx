@@ -3,7 +3,12 @@
 import { useEffect, useRef } from "react";
 import { useAwakenStore } from "./mode-store";
 import { awakenDevHandle, finalPositions, landAwake, takePendingFreeze } from "./controller";
-import { playAwakening, type AwakenPlayer, type AwakenStageNodes } from "./choreography";
+import {
+  AWAKEN_CAPTION,
+  playAwakening,
+  type AwakenPlayer,
+  type AwakenStageNodes,
+} from "./choreography";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -35,12 +40,17 @@ declare global {
  * renders grey mud, and light has to *emit*.
  *
  * The caption is not FX. It is a toast — session chrome that outlives the
- * transition by ~3.2 s — so it is a real element with `role="status"`, a
- * dismiss button and `inert` while hidden, rather than a painted string. Its
- * dwell, its Esc listener and its three dismiss paths live in the choreography
- * with the clock that raises it, which is what lets "which listeners are armed
- * at completion / after dismissal / after teardown" be one answer instead of
- * three modules' worth of guessing.
+ * transition by ~3.2 s — so it is a real element with a dismiss button and
+ * `inert` while hidden, rather than a painted string. Its dwell, its Esc
+ * listener and its three dismiss paths live in the choreography with the clock
+ * that raises it, which is what lets "which listeners are armed at completion /
+ * after dismissal / after teardown" be one answer instead of three modules'
+ * worth of guessing.
+ *
+ * Beside it, and separate from it, is the live region that says the same
+ * sentence to a screen reader. Separate because `inert` and `role="status"`
+ * cannot be the same element: inert content is out of the accessibility tree,
+ * so a region that is inert while hidden announces nothing when it is shown.
  */
 export function AwakenStage() {
   const mode = useAwakenStore((s) => s.mode);
@@ -51,6 +61,7 @@ export function AwakenStage() {
   const sheenRef = useRef<HTMLDivElement>(null);
   const laneEdgeRef = useRef<HTMLDivElement>(null);
   const captionRef = useRef<HTMLDivElement>(null);
+  const announceRef = useRef<HTMLSpanElement>(null);
 
   // Declared first so its cleanup runs first: React destroys effects in the
   // order they were created, so by the time the story's cleanup runs on an
@@ -74,7 +85,8 @@ export function AwakenStage() {
       bloomRef.current &&
       sheenRef.current &&
       laneEdgeRef.current &&
-      captionRef.current
+      captionRef.current &&
+      announceRef.current
         ? {
             stage: stageRef.current,
             flare: flareRef.current,
@@ -83,6 +95,7 @@ export function AwakenStage() {
             sheen: sheenRef.current,
             laneEdge: laneEdgeRef.current,
             caption: captionRef.current,
+            announce: announceRef.current,
           }
         : null;
     if (!nodes) return;
@@ -124,25 +137,42 @@ export function AwakenStage() {
         <div ref={flareRef} className="awaken-flare" />
       </div>
 
-      {/* The toast. `role="status"` + `aria-live="polite"` so the arrival is
-          announced rather than only drawn; `inert` while hidden so Tab can
-          never land on an invisible control. Tap anywhere on it dismisses (the
-          × is the keyboard path, and its click bubbles here), Esc while it
-          shows does the same. No `alert`/`confirm` anywhere near it: a modal
-          would freeze the very agent this is announcing. */}
+      {/* The arrival, said out loud. Mounted for the whole life of this
+          component, never `inert`, and EMPTY until the toast is raised: a live
+          region announces a change to its own contents, so it has to be on the
+          page — and in the accessibility tree — before the sentence lands in
+          it. The choreography writes it in `showToast()` and clears it on
+          dismissal.
+
+          This is a separate element from the toast below because the toast
+          cannot do it: it is `inert` while hidden, which takes it out of the
+          accessibility tree entirely, and it renders its sentence at mount, so
+          there would be no mutation left to announce when it appeared. */}
+      <span
+        ref={announceRef}
+        className="gm-machine"
+        data-testid="awaken-announce"
+        role="status"
+        aria-live="polite"
+      />
+
+      {/* The toast itself — the visible half, and a control rather than a
+          message: `inert` while hidden so Tab can never land on a button
+          nobody can see. Tap anywhere on it dismisses (the × is the keyboard
+          path, and its click bubbles here), Esc while it shows does the same.
+          No `alert`/`confirm` anywhere near it: a modal would freeze the very
+          agent this is announcing. */}
       <div
         ref={captionRef}
         className="awaken-cap lg"
         data-testid="awaken-caption"
         data-shown="false"
-        role="status"
-        aria-live="polite"
         inert
       >
         <svg className="cap-spark" width="13" height="13" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
           <path d="M7 0l1.6 5.4L14 7l-5.4 1.6L7 14 5.4 8.6 0 7l5.4-1.6z" />
         </svg>
-        An agent joined this map
+        {AWAKEN_CAPTION}
         <button type="button" className="cap-x" data-testid="awaken-caption-dismiss" aria-label="Dismiss">
           ×
         </button>

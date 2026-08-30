@@ -90,10 +90,6 @@
  *     named here as contracts and implemented by the UI. This module is
  *     store-only, which is what lets the eleven orderings be asserted in node
  *     rather than through a renderer.
- *  3. No `timeline.ts`. The schedule is the three constants above; the
- *     keyframes belong to the CSS that plays them, and a module that only
- *     re-exported numbers would be one more file to keep in sync with the
- *     stylesheet.
  */
 
 /**

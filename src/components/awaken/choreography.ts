@@ -38,8 +38,14 @@ import {
  *  - the bottom bar's corner: `right: 14px` → `calc(--lane + 14px)`, so −lane.
  *  - the Places dock: `left: 50%` (with a −50% of its own width) →
  *    `left: calc((100% − --lane − 10px) / 2)`, so −(lane + 10)/2.
- *  - mobile: the whole bottom band rides up by the sheet's height, which is
- *    what `.map-wrap { bottom: 46vh }` does to it in one step at the end.
+ *  - mobile: the whole bottom band rides up by the sheet's height, from the
+ *    foot of the screen to the map container's own bottom edge. Down here the
+ *    container has *already* given up the sheet's band — `.map-wrap { bottom:
+ *    46vh }` applies from the first frame of `waking`, because that container
+ *    is what MapLibre measures and a resize in the landing frame would
+ *    translate the whole map 194px. So the band is `position: fixed` for the
+ *    length of the story (globals.css), which puts p=0 back at the human rule
+ *    and p=1 exactly on the agent one.
  *
  * ## What it does not touch
  *
@@ -52,6 +58,16 @@ import {
 
 /** The caption's dwell as a toast once the story lands (owner sign-off, §8.4 item 3). */
 const TOAST_DWELL_MS = 3200;
+
+/**
+ * What the toast says, in one place because two surfaces say it: the visible
+ * caption `AwakenStage` renders, and the live region this module writes it into
+ * when the toast is raised. They must not be able to drift.
+ */
+export const AWAKEN_CAPTION = "An agent joined this map";
+
+/** The caption's resting transform — its own centring, and nothing else. */
+const CAPTION_REST = "translateX(-50%)";
 
 /** Below this the page has no lane and no floating feed: the 390px story runs. */
 const SHEET_QUERY = "(max-width: 920px)";
@@ -68,6 +84,16 @@ export interface AwakenStageNodes {
   sheen: HTMLElement;
   laneEdge: HTMLElement;
   caption: HTMLElement;
+  /**
+   * The toast's live region: always present, never `inert`, and **empty until
+   * the toast is raised**. A live region only announces a mutation of its own
+   * contents, so it has to exist — and be in the accessibility tree — before
+   * the sentence arrives. The visible caption cannot be that region: it is
+   * `inert` while hidden (so Tab can never reach a control nobody can see),
+   * and inert content is not in the tree at all, so a screen reader would
+   * never hear this transition happen.
+   */
+  announce: HTMLElement;
 }
 
 export interface AwakenPlayOptions {
@@ -377,8 +403,9 @@ export function playAwakening({
     write(ink, cast.tickerCount, { opacity: ph.type >= 1 ? "1" : "0" });
 
     // The sheet rises, and the bottom band rides its top edge: legend,
-    // attribution, badge and dock end exactly where `.map-wrap { bottom: 46vh }`
-    // will put them when the chrome lands.
+    // attribution, badge and dock start at the foot of the screen (the band is
+    // `fixed` while the story runs) and end exactly where the awake rule puts
+    // them — `bottom: 12px` inside a container that is already 46vh short.
     write(ink, cast.laneEl, {
       // Opaque from the first frame, unlike the desktop pane: this one rises
       // from under the screen, so it has nothing to fade in over — and the
@@ -405,10 +432,19 @@ export function playAwakening({
 
   /* ----------------------------------------------------------------- caption */
 
-  const paintCaption = (value: number) => {
+  /**
+   * The caption's own beat. `rise` is the 6px it blooms up through — the
+   * reduced-motion path passes `false` and gets the resting transform instead,
+   * because "one 220 ms opacity crossfade" has to mean opacity and nothing
+   * else: a caption that travelled 6.34px while everything around it held
+   * still would be the one thing on the page still moving.
+   */
+  const paintCaption = (value: number, rise = true) => {
     write(ink, nodes.caption, {
       opacity: (value * 0.97).toFixed(3),
-      transform: `translateX(-50%) translateY(${(6 * (1 - value)).toFixed(2)}px)`,
+      transform: rise
+        ? `${CAPTION_REST} translateY(${(6 * (1 - value)).toFixed(2)}px)`
+        : CAPTION_REST,
       "pointer-events": value > 0 ? "auto" : "none",
     });
     nodes.caption.inert = value <= 0;
@@ -436,7 +472,8 @@ export function playAwakening({
     for (const node of fading) write(ink, node, { opacity: p.toFixed(3) });
     write(ink, cast.sparkWrap, { opacity: (1 - p).toFixed(3) });
     write(ink, cast.hint, { opacity: (1 - p).toFixed(3) });
-    paintCaption(p);
+    // Still: the resting transform, not the 6px bloom (see `paintCaption`).
+    paintCaption(p, false);
   };
 
   /* -------------------------------------------------------------- the toast */
@@ -455,9 +492,16 @@ export function playAwakening({
     nodes.caption.style.pointerEvents = "none";
     nodes.caption.inert = true;
     nodes.caption.dataset.shown = "false";
+    // Emptied, so the region is back where it started and a replay announces
+    // again. A polite region says nothing about a removal, so this is silent.
+    nodes.announce.textContent = "";
   };
 
   const showToast = () => {
+    // The announcement, at the moment there is something to announce. The
+    // region has been on the page and in the accessibility tree since mount
+    // with nothing in it; this write is the mutation a screen reader hears.
+    nodes.announce.textContent = AWAKEN_CAPTION;
     nodes.caption.style.opacity = "0.97";
     nodes.caption.style.pointerEvents = "auto";
     nodes.caption.inert = false;
@@ -539,6 +583,13 @@ export function playAwakening({
 
   // Kill switch: the end state, instantly, nothing moves. The same law the FX
   // driver holds — a page with `data-fx="off"` is byte-identical to a calm one.
+  //
+  // `land(false)` also withholds the toast, and that is about screenshots
+  // rather than about bytes: the toast dismisses itself 3.2 s after it appears,
+  // so a page photographed with the transition off would show it or not
+  // depending on when the shutter fell. Reduced motion, which has no such
+  // clock to race, keeps the toast — the crossfade removes the motion, and the
+  // sentence is information.
   if (killed) {
     land(false);
     return player;
@@ -547,7 +598,12 @@ export function playAwakening({
   const started = performance.now();
   const duration = reduced ? AWAKEN_RM_MS : AWAKEN_MS;
   const step = (now: number) => {
-    const p = Math.min(1, (now - started) / duration);
+    // Clamped at both ends. The ceiling is the story's; the floor is real too —
+    // `performance.now()` inside the first callback can precede the reading
+    // taken just before `requestAnimationFrame` registered it, and a negative
+    // `p` is an opacity of "-0.018" on the reduced-motion path (which uses it
+    // raw) and a nonsense freeze marker on both.
+    const p = Math.min(1, Math.max(0, (now - started) / duration));
     if (reduced) renderReduced(p);
     else render(p);
     if (p < 1) frame = requestAnimationFrame(step);

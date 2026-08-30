@@ -45,8 +45,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           painted. First in the body and synchronous on purpose: nothing below
           it has been parsed yet, so there is no frame in which a restored agent
           link can show the human chrome. See `boot-chrome.ts` for what it reads
-          and where it can be wrong; `useChromeAttribute` owns the attribute
-          from hydration onwards.
+          and where it can be wrong; the awakening controller
+          (`components/awaken/controller.ts`) owns the attribute from hydration
+          onwards.
 
           A plain inline script rather than `next/script`: `beforeInteractive`
           is for fetched scripts (it preloads a `src` and does not block

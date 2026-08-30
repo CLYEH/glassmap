@@ -1031,8 +1031,8 @@ button {
 /* A point of interest: loaded and on the map, but with no colour in the
    legend's six. Neutral grey rather than a seventh hue, so the swatch never
    claims a category colour the canvas does not use. Filled, unlike .unknown —
-   the row does resolve to a real place. On the map the same dot is neutral ink
-   (POI_COLOR); the two grounds are opposite, the intent is the same. */
+   the row does resolve to a real place. On the map the same place is a glass
+   bead, whose ink centre is the neutral this swatch inverts. */
 .sel-dot.poi {
   background: var(--text-mid);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);

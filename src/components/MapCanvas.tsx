@@ -20,6 +20,25 @@ import {
   type MapView,
 } from "@/lib/store/map-store";
 import { createAnnotationElement } from "./annotation-marker";
+import { createBeadImages } from "./bead-sprite";
+import {
+  BEAD_LAYER_IDS,
+  BEAD_SOURCE,
+  BROWSE_BEAD_LAYER,
+  BROWSE_GRAIN_LAYER,
+  BROWSE_SOURCE,
+  beadAnchorsToGeoJson,
+  beadSourceSpec,
+  browseBeadFilter,
+  browseGrainFilter,
+  browsePointsToGeoJson,
+  browseSourceSpec,
+  browseTierMinimum,
+  buildBeadLayerSpecs,
+  countedClusterThreshold,
+  selectionProvenance,
+} from "./bead-style";
+import { useBrowseStore } from "./browse-store";
 import { useDrawStore, type DrawMode } from "./draw-store";
 import { setFxMap } from "./fx/map-handle";
 import {
@@ -33,7 +52,6 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
-  POI_SOURCE,
   SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
@@ -109,17 +127,6 @@ function inspectorLane(): number {
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;
-}
-
-/** Re-place the selection halo rings; see `selectionAnchorsToGeoJson`. */
-function applySelectionHalo(
-  map: MapLibreMap,
-  features: readonly GlassMapFeature[],
-  selection: readonly string[],
-  poi: readonly MapFeature[],
-) {
-  const source = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
-  source?.setData(selectionAnchorsToGeoJson(features, selection, poi));
 }
 
 /** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
@@ -202,6 +209,7 @@ export default function MapCanvas() {
 
     const store = useMapStore;
     const draw = useDrawStore;
+    const browse = useBrowseStore;
 
     /**
      * No map, so nothing will ever report a viewport. Compute one instead:
@@ -441,40 +449,109 @@ export default function MapCanvas() {
     };
 
     /**
-     * Materialise the selected POIs and ring them.
+     * The two marks a selection makes: a bead per selected point of interest,
+     * and a ring around every selected bundled feature.
      *
-     * One call does both because the two must never disagree: the halo is what
-     * says "this is the thing I meant", and a POI dot that appeared without one
-     * would read as map furniture rather than as an answer. Deselecting empties
-     * the source, which is how the calm map comes back — a category stays in
-     * memory for the tools, and off the screen.
+     * One call does both because the two are one statement — "these are the
+     * ones I meant" — made in the only two ways this map has. Deselecting
+     * empties both sources, which is how the calm map comes back: a category
+     * stays in memory for the tools, and off the screen.
      */
-    const applySelectedPoi = (
+    const applySelectionMarks = (
       tier2: readonly MapFeature[],
       features: readonly GlassMapFeature[],
       selection: readonly string[],
     ) => {
+      const sources = selectionProvenance(store.getState());
       const poi = selectedPoiFeatures(tier2, selection);
-      setSourceData(map, POI_SOURCE, { type: "FeatureCollection", features: poi });
-      applySelectionHalo(map, features, selection, poi);
+      setSourceData(map, BEAD_SOURCE, beadAnchorsToGeoJson(poi, selection, sources));
+      setSourceData(map, SELECTION_SOURCE, selectionAnchorsToGeoJson(features, selection, sources));
+    };
+
+    /**
+     * The browse layer: one category, painted because a human asked to look
+     * around in it. Selected places are left out — they are already beads, and
+     * a place carrying both marks would be counted twice.
+     */
+    const applyBrowse = () => {
+      const { tier2Features, selection } = store.getState();
+      const category = browse.getState().category;
+      setSourceData(map, BROWSE_SOURCE, browsePointsToGeoJson(tier2Features, category, selection));
+    };
+
+    /**
+     * The ink budget, recomputed for the clusters actually on screen.
+     *
+     * The two browse layers' filters are complementary, so querying both gives
+     * every browse feature in view whatever the current threshold is — the
+     * measurement cannot chase its own result. Clusters are addressed by
+     * `cluster_id` because one straddling a tile seam is returned twice.
+     *
+     * Queried over the corridor, not the canvas: "the twelve largest clusters
+     * in view" has to mean the same rectangle `bounds` reports and the camera
+     * is centred in, or the budget would be spent on clusters sitting under
+     * the inspector's glass, where nobody can read a numeral.
+     */
+    let inkThreshold = Number.POSITIVE_INFINITY;
+    const applyInkBudget = () => {
+      if (!ready) return;
+      const browsing = browse.getState().category !== null;
+      let next = Number.POSITIVE_INFINITY;
+      if (browsing) {
+        const counts = new Map<number, number>();
+        const container = map.getContainer();
+        const corridor: [[number, number], [number, number]] = [
+          [0, 0],
+          [Math.max(container.clientWidth - inspectorLane(), 0), container.clientHeight],
+        ];
+        for (const feature of map.queryRenderedFeatures(corridor, {
+          layers: [BROWSE_GRAIN_LAYER, BROWSE_BEAD_LAYER],
+        })) {
+          const { cluster_id: cluster, point_count: count } = feature.properties as {
+            cluster_id?: number;
+            point_count?: number;
+          };
+          if (typeof cluster === "number" && typeof count === "number") counts.set(cluster, count);
+        }
+        next = countedClusterThreshold(
+          [...counts.values()],
+          undefined,
+          browseTierMinimum(map.getZoom()),
+        );
+      }
+      // Guarded: setting the same filter would repaint, which fires `idle`,
+      // which lands back here. Only a real change is allowed to close the loop.
+      if (next === inkThreshold) return;
+      inkThreshold = next;
+      map.setFilter(BROWSE_GRAIN_LAYER, browseGrainFilter(next));
+      map.setFilter(BROWSE_BEAD_LAYER, browseBeadFilter(next));
+      browse.getState().setThreshold(next);
     };
 
     map.on("load", () => {
       for (const category of FEATURE_CATEGORIES) {
         map.addSource(sourceId(category), categorySourceSpec());
       }
-      // Empty, and empty is also its resting state: it only ever holds the
-      // selected tier-2 features. `buildLayerSpecs` puts its layer under the
-      // halo layers, which is what makes a ring land on top of its dot.
-      map.addSource(POI_SOURCE, { type: "geojson", data: EMPTY });
+      // The bead sprites have to exist before any layer names one, or MapLibre
+      // draws the symbol's text with no icon under it.
+      for (const { id, image, pixelRatio } of createBeadImages()) {
+        if (!map.hasImage(id)) map.addImage(id, image, { pixelRatio });
+      }
+      // All three start empty, and empty is their resting state: a bead means
+      // somebody acted on that place, a ring means a selected bundled feature,
+      // a browse grain means a human asked to look around.
+      map.addSource(BEAD_SOURCE, beadSourceSpec());
+      map.addSource(BROWSE_SOURCE, browseSourceSpec());
       map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
       const { features, selection, drawings, tier2Features } = store.getState();
       for (const layer of buildLayerSpecs()) map.addLayer(layer);
+      for (const layer of buildBeadLayerSpecs()) map.addLayer(layer);
       applyFeatureData(features, selection);
       // Read from the store rather than started empty: a category can already
       // be loaded and selected by the time the style finishes (the tools work
       // before the basemap does, and a remount re-runs this whole effect).
-      applySelectedPoi(tier2Features, features, selection);
+      applySelectionMarks(tier2Features, features, selection);
+      applyBrowse();
 
       // Drawings sit on top of the data layers: a shape is always about the
       // features under it.
@@ -486,23 +563,56 @@ export default function MapCanvas() {
       applyDraft(map, draw.getState().draft);
 
       const canvas = map.getCanvas();
+      const toggleSelection = (id: string) => {
+        const current = store.getState().selection;
+        store
+          .getState()
+          .setSelection(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+      };
       map.on("click", INTERACTIVE_LAYER_IDS, (event) => {
         // While drawing, a click is a vertex, not a selection.
         if (draw.getState().mode !== "none") return;
         const id = event.features
           ?.map((f) => f.properties?.id)
           .find((value): value is string => typeof value === "string");
-        if (!id) return;
-        const current = store.getState().selection;
-        store
-          .getState()
-          .setSelection(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+        if (id) toggleSelection(id);
       });
-      map.on("mouseenter", INTERACTIVE_LAYER_IDS, () => {
+
+      // A bead answers to two gestures, because it stands for two things. One
+      // place: click it to take it off the map again, the same gesture every
+      // other dot answers to. Several coalesced: click it to zoom to the point
+      // where they separate — the alternative is a mark you can see, can count
+      // and cannot reach.
+      const beadLayers = [...BEAD_LAYER_IDS];
+      map.on("click", beadLayers, (event) => {
+        if (draw.getState().mode !== "none") return;
+        const feature = event.features?.[0];
+        if (!feature) return;
+        const { id, cluster_id: cluster } = feature.properties as {
+          id?: string;
+          cluster_id?: number;
+        };
+        if (typeof cluster === "number") {
+          const source = map.getSource(feature.source) as GeoJSONSource | undefined;
+          const at = feature.geometry;
+          if (!source || at.type !== "Point") return;
+          void source
+            .getClusterExpansionZoom(cluster)
+            .then((zoom) => map.easeTo({ center: [at.coordinates[0], at.coordinates[1]], zoom }))
+            .catch(() => {
+              // The cluster left the source while the worker was answering.
+            });
+          return;
+        }
+        if (typeof id === "string") toggleSelection(id);
+      });
+
+      const pointerLayers = [...INTERACTIVE_LAYER_IDS, ...beadLayers];
+      map.on("mouseenter", pointerLayers, () => {
         if (draw.getState().mode !== "none") return;
         canvas.style.cursor = "pointer";
       });
-      map.on("mouseleave", INTERACTIVE_LAYER_IDS, () => {
+      map.on("mouseleave", pointerLayers, () => {
         if (draw.getState().mode !== "none") return;
         canvas.style.cursor = "";
       });
@@ -564,7 +674,10 @@ export default function MapCanvas() {
         state.features !== previous.features ||
         state.tier2Features !== previous.tier2Features
       ) {
-        applySelectedPoi(state.tier2Features, state.features, state.selection);
+        applySelectionMarks(state.tier2Features, state.features, state.selection);
+        // A place that just became a bead has to stop being a grain, and one
+        // that was deselected has to become a grain again.
+        if (browse.getState().category) applyBrowse();
       }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
@@ -574,6 +687,20 @@ export default function MapCanvas() {
       if (state.mode !== previous.mode) applyDrawCursor(state.mode);
     });
 
+    const unsubscribeBrowse = browse.subscribe((state, previous) => {
+      if (!ready || state.category === previous.category) return;
+      applyBrowse();
+      // Leaving browse takes the budget with it; entering re-measures on the
+      // `idle` the new data causes.
+      if (!state.category) applyInkBudget();
+    });
+
+    // `idle` rather than `moveend`: the budget is a fact about the clusters
+    // that are on screen, and after a pan those are still being clustered in
+    // the worker when `moveend` fires. `idle` is the first moment the answer
+    // is stable, and it also covers the pass right after new browse data.
+    map.on("idle", applyInkBudget);
+
     syncAnnotationMarkers(map, markers, store.getState().annotations);
     applyDrawCursor(draw.getState().mode);
 
@@ -582,6 +709,7 @@ export default function MapCanvas() {
       setFxMap(null);
       unsubscribe();
       unsubscribeDraw();
+      unsubscribeBrowse();
       for (const marker of markers.values()) marker.remove();
       markers.clear();
       try {

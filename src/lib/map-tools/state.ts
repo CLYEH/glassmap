@@ -60,6 +60,20 @@ export interface Tier2StateOutput {
   loaded: string[];
   /** How many categories the index offers in total. */
   available: number;
+  /**
+   * Categories a share link this page was opened with is still fetching. While
+   * this is non-empty the map is not yet the one that was shared: selected ids
+   * naming those features cannot be resolved yet, and nothing may treat them as
+   * gone. Absent when nothing is loading.
+   */
+  loading?: string[];
+  /**
+   * Categories a share link declared that this page could not load, with the
+   * reason. This is the loud half of the restore contract: it rides on every
+   * tool answer, so an agent finds out that the map in front of it is not the
+   * map it was sent without having to ask a second question.
+   */
+  failed?: { category: string; error: string }[];
 }
 
 /** Serialisable map state returned by get_map_state and every write tool. */
@@ -124,12 +138,23 @@ export function describeState(store: MapToolStore): MapStateOutput {
   // page pays for without ever asking for it.
   const loaded = store.getLoadedCategories();
   const available = store.getTier2Manifest()?.categories.length ?? 0;
+  const loading = store.getPendingCategories();
+  const failed = store.getRestoreFailures();
+  const tier2: Tier2StateOutput = {
+    loaded: [...loaded],
+    available,
+    ...(loading.length ? { loading: [...loading] } : {}),
+    ...(failed.length ? { failed: failed.map((f) => ({ ...f })) } : {}),
+  };
   return {
     ...describeView(store.getView()),
     bounds: describeBounds(store.getBounds()),
     selection: { count: selection.length, ids: selection.slice(0, SELECTION_ID_LIMIT) },
     features_loaded: store.getFeatures().length,
-    ...(loaded.length || available ? { tier2: { loaded: [...loaded], available } } : {}),
+    // A page that never touched tier-2 reports exactly the state it always did;
+    // a link still loading its categories, or one that failed to, is state in
+    // its own right and says so even before a single feature has arrived.
+    ...(loaded.length || available || loading.length || failed.length ? { tier2 } : {}),
     drawings: {
       count: drawings.length,
       items: drawings.slice(-STATE_ITEM_LIMIT).map(describeDrawing),

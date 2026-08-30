@@ -13,6 +13,8 @@ import {
   type Tier2LoadResult,
   type Tier2Manifest,
   type Tier2ManifestResult,
+  type Tier2RestoreFailure,
+  type Tier2RestoreResult,
 } from "./tier2";
 
 /** [lng, lat] */
@@ -71,6 +73,21 @@ export interface MapToolStore {
    * design (see `tier2.ts`).
    */
   loadCategory(category: Tier2Category): Promise<Tier2LoadResult>;
+  /**
+   * Categories an incoming share link declared whose files have not settled
+   * yet — neither loaded nor failed. Non-empty means the map is still becoming
+   * the one that was shared, which is why `select_features` must not treat an
+   * id it cannot resolve as a leftover to prune.
+   */
+  getPendingCategories(): readonly Tier2Category[];
+  /** Categories from the incoming link that failed, with the loader's reason. */
+  getRestoreFailures(): readonly Tier2RestoreFailure[];
+  /**
+   * Load the categories a share link declared. Marks them pending
+   * synchronously and resolves once every one of them has loaded or failed;
+   * never throws.
+   */
+  restoreCategories(categories: readonly Tier2Category[]): Promise<Tier2RestoreResult>;
   getSelection(): readonly string[];
   setSelection(ids: string[]): void;
   getDrawings(): readonly Drawing[];
@@ -198,6 +215,16 @@ interface MapStore {
   tier2Features: MapFeature[];
   /** Sorted; a category appears here only once its features are in the store. */
   tier2Loaded: Tier2Category[];
+  /**
+   * Categories a share link declared that are still being fetched. The page can
+   * show "still loading"; the tool layer uses it to keep the link's selection
+   * alive until the answer is known.
+   */
+  tier2Pending: Tier2Category[];
+  /** Non-empty means a shared link's map cannot be reproduced here, and why. */
+  tier2RestoreFailures: Tier2RestoreFailure[];
+  /** See `MapToolStore.restoreCategories`; this is the same call, for the page. */
+  restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
   tier2Manifest: Tier2Manifest | null;
   selection: string[];
   setSelection: (ids: string[]) => void;
@@ -225,6 +252,10 @@ export const useMapStore = create<MapStore>((set, get) => ({
   setFeatures: (features) => set({ features }),
   tier2Features: [],
   tier2Loaded: [],
+  tier2Pending: [],
+  tier2RestoreFailures: [],
+  // The loader is created below (it needs this store); read at call time.
+  restoreTier2Categories: (categories) => zustandTier2.restoreCategories(categories),
   tier2Manifest: null,
   selection: [],
   setSelection: (selection) => set({ selection }),
@@ -280,6 +311,10 @@ const zustandTier2 = createTier2Registry({
       tier2Features: appendTier2Features(s.features, s.tier2Features, features),
       tier2Loaded: sortedCategories([...s.tier2Loaded, category]),
     })),
+  getPendingCategories: () => useMapStore.getState().tier2Pending,
+  setPendingCategories: (tier2Pending) => useMapStore.setState({ tier2Pending }),
+  getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
+  setRestoreFailures: (tier2RestoreFailures) => useMapStore.setState({ tier2RestoreFailures }),
 });
 
 /** Adapter over the Zustand store for the tool layer. */
@@ -295,6 +330,9 @@ export const zustandToolStore: MapToolStore = {
   loadTier2Manifest: () => zustandTier2.loadManifest(),
   getLoadedCategories: () => useMapStore.getState().tier2Loaded,
   loadCategory: (category) => zustandTier2.loadCategory(category),
+  getPendingCategories: () => useMapStore.getState().tier2Pending,
+  getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
+  restoreCategories: (categories) => zustandTier2.restoreCategories(categories),
   getSelection: () => useMapStore.getState().selection,
   setSelection: (ids) => useMapStore.getState().setSelection(ids),
   getDrawings: () => useMapStore.getState().drawings,
@@ -337,6 +375,8 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
   const features = init.features ?? [];
   let tier2Features: MapFeature[] = [];
   let tier2Loaded: Tier2Category[] = [];
+  let tier2Pending: Tier2Category[] = [];
+  let tier2RestoreFailures: Tier2RestoreFailure[] = [];
   let tier2Manifest: Tier2Manifest | null = null;
   const featureView = makeFeatureView();
   const tier2 = createTier2Registry({
@@ -349,6 +389,14 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     addLoadedCategory: (category, loaded) => {
       tier2Features = appendTier2Features(features, tier2Features, loaded);
       tier2Loaded = sortedCategories([...tier2Loaded, category]);
+    },
+    getPendingCategories: () => tier2Pending,
+    setPendingCategories: (categories) => {
+      tier2Pending = categories;
+    },
+    getRestoreFailures: () => tier2RestoreFailures,
+    setRestoreFailures: (failures) => {
+      tier2RestoreFailures = failures;
     },
   });
   let selection = [...(init.selection ?? [])];
@@ -369,6 +417,9 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     loadTier2Manifest: () => tier2.loadManifest(),
     getLoadedCategories: () => tier2Loaded,
     loadCategory: (category) => tier2.loadCategory(category),
+    getPendingCategories: () => tier2Pending,
+    getRestoreFailures: () => tier2RestoreFailures,
+    restoreCategories: (categories) => tier2.restoreCategories(categories),
     getSelection: () => selection,
     setSelection: (ids) => {
       selection = [...ids];

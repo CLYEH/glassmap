@@ -578,6 +578,60 @@ button {
 .legend-zone {
   min-width: 0;
 }
+
+/* Loaded point-of-interest categories, above the legend. Present only when a
+   category is in memory, so the landing view is unchanged; block-level and
+   fit-content so it stacks over the legend without stretching it, and the
+   bottom bar's flex-end alignment makes it grow upward — the legend does not
+   move when it appears. Quieter than the legend by design: text-low, no
+   swatches, the data face for both the category and its count, since these are
+   the agent's own enum values and not names this map has coloured. */
+.poi-strip {
+  display: flex;
+  align-items: center;
+  /* Wraps rather than scrolls. A count is the whole content of this row, and a
+     horizontally scrolled chip cuts it mid-number — at 390px "cafe 2,297"
+     rendered as "cafe 2", which is not a smaller disclosure but a false one.
+     Wrapped, the strip grows upward over the map (the bottom bar is
+     bottom-aligned) and stays whole at every width. The cap is the viewport,
+     not the parent: below the legend's pill breakpoint the legend-zone parent
+     is pill-sized (~121px at 390px), and capping at 100% let long chips like
+     "place_of_worship 1,718" spill onto the basemap unread. */
+  flex-wrap: wrap;
+  gap: 1px 2px;
+  width: fit-content;
+  max-width: calc(100vw - 24px);
+  margin-bottom: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-s);
+}
+.poi-strip-label {
+  font-size: 10px;
+  font-weight: 620;
+  color: var(--text-mid);
+  white-space: nowrap;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--hairline-2);
+}
+.poi-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.poi-cat {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-mid);
+}
+.poi-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
 .legend-full {
   display: flex;
   align-items: center;
@@ -680,6 +734,29 @@ button {
   gap: 6px;
   flex-shrink: 0;
 }
+/* Categories a shared link declared that this page could not load. Glass and
+   text-mid rather than the amber above it: the map is still usable and there is
+   nothing to act on, so this is disclosure, not a warning. Right-aligned like
+   everything else in the corner, and capped at the warning's width so a long
+   category name wraps instead of pushing the attribution off the map. */
+.share-restore {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-mid);
+  text-align: right;
+}
+.share-restore-cat {
+  font-family: var(--font-mono);
+  color: var(--text-hi);
+}
+
 .share-warning {
   display: flex;
   align-items: center;
@@ -950,6 +1027,15 @@ button {
   background: transparent;
   border: 1.5px solid var(--text-low);
   box-shadow: none;
+}
+/* A point of interest: loaded and on the map, but with no colour in the
+   legend's six. Neutral grey rather than a seventh hue, so the swatch never
+   claims a category colour the canvas does not use. Filled, unlike .unknown —
+   the row does resolve to a real place. On the map the same dot is neutral ink
+   (POI_COLOR); the two grounds are opposite, the intent is the same. */
+.sel-dot.poi {
+  background: var(--text-mid);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 .sel-name {
   font-size: 12px;

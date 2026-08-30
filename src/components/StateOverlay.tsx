@@ -20,7 +20,14 @@ import { useMapStore } from "@/lib/store/map-store";
 export function StateOverlay() {
   const view = useMapStore((s) => s.view);
   const bounds = useMapStore((s) => s.bounds);
-  const featureCount = useMapStore((s) => s.features.length);
+  // Everything queryable, which is exactly what `get_map_state` reports as
+  // `features_loaded` (describeState -> store.getFeatures().length = the
+  // bundled datasets plus every loaded tier-2 category). Counting only
+  // `features` left the machine mirror and the agent's own answer disagreeing
+  // from the first POI load onwards — the one thing this block exists to make
+  // impossible. Ids never overlap: the store drops a tier-2 feature whose id a
+  // bundled dataset already has (`appendTier2Features`), so the sum is exact.
+  const featureCount = useMapStore((s) => s.features.length + s.tier2Features.length);
   const selectionCount = useMapStore((s) => s.selection.length);
   const drawingCount = useMapStore((s) => s.drawings.length);
   const annotationCount = useMapStore((s) => s.annotations.length);

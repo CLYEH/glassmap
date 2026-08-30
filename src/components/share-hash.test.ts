@@ -15,12 +15,37 @@
  *     hand out a URL over `MAX_SHARE_URL_BYTES`; if the address bar keeps
  *     filling up past that, the human copies out of it the exact link the tool
  *     declined to give them.
+ *  3. Downgrading a link by mirroring it. A `v2` link declares the sender's
+ *     point-of-interest categories; a page that applied it without fetching
+ *     them, or rewrote the bar from what had finished loading, would hand the
+ *     recipient back a `v1` link to a map missing everything the sender picked
+ *     out. Nothing throws, nothing looks wrong on screen, and the loss only
+ *     surfaces when the recipient shares it on. A category that failed to load
+ *     is the hard case, and it splits in two: a 5xx or a dropped connection is
+ *     a moment on this page and must not shrink the link for everyone
+ *     downstream, while a 4xx is the deployment saying the file does not
+ *     exist, and a link that kept promising it would only make the next reader
+ *     wait for the same 404. The last two tests pin one each.
  */
-import { describe, expect, it } from "vitest";
-import { decodeShareState, encodeShareState, MAX_SHARE_URL_BYTES } from "@/lib/map-tools/share";
+import { describe, expect, it, vi } from "vitest";
+import {
+  decodeShareState,
+  encodeShareState,
+  MAX_SHARE_URL_BYTES,
+  SHARE_VERSION_BASE,
+  SHARE_VERSION_TIER2,
+} from "@/lib/map-tools/share";
 import type { ShareState } from "@/lib/map-tools/share";
-import { DEFAULT_VIEW, type MapView } from "@/lib/store/map-store";
-import { planHashUpdate } from "./share-hash";
+import { DEFAULT_VIEW, useMapStore, type MapView } from "@/lib/store/map-store";
+import { TIER2_INDEX_URL, type Tier2Category } from "@/lib/store/tier2";
+import {
+  applyShareHash,
+  planHashUpdate,
+  shareStateChanged,
+  shareStateOf,
+  type ShareRestoreTarget,
+  type ShareStoreSlice,
+} from "./share-hash";
 
 const BASE = "http://localhost:3000/";
 
@@ -145,5 +170,249 @@ describe("planHashUpdate", () => {
     expect(exact.bytes).toBe(MAX_SHARE_URL_BYTES);
     expect(exact.tooLarge).toBe(false);
     expect(exact.hash).not.toBeNull();
+  });
+});
+
+const slice = (patch: Partial<ShareStoreSlice> = {}): ShareStoreSlice => ({
+  view: DEFAULT_VIEW,
+  selection: [],
+  drawings: [],
+  annotations: [],
+  tier2Loaded: [],
+  tier2Pending: [],
+  tier2RestoreFailures: [],
+  ...patch,
+});
+
+/**
+ * The store's writers, recording what a link did to them.
+ *
+ * One rule of the real store is mimicked rather than stubbed away:
+ * `restoreTier2Categories` marks the categories pending *before* it returns,
+ * because that is what the mirror reads a moment later. The real registry is
+ * held to it in src/lib/store/tier2.test.ts, over a trace of every write it
+ * makes; the last test in this file re-checks the seam against the real store.
+ */
+function recordingStore(initial: Partial<ShareStoreSlice> = {}) {
+  const state = slice(initial);
+  const restores: Tier2Category[][] = [];
+  const target: ShareRestoreTarget = {
+    setView: (view) => {
+      state.view = view;
+    },
+    setSelection: (ids) => {
+      state.selection = ids;
+    },
+    addDrawing: (drawing) => {
+      state.drawings = [...state.drawings, { ...drawing, id: `drawing:${state.drawings.length + 1}` }];
+    },
+    addAnnotation: (annotation) => {
+      state.annotations = [
+        ...state.annotations,
+        { ...annotation, id: `annotation:${state.annotations.length + 1}` },
+      ];
+    },
+    restoreTier2Categories: (categories) => {
+      restores.push([...categories]);
+      state.tier2Pending = [...new Set([...state.tier2Pending, ...categories])]
+        .filter((c) => !state.tier2Loaded.includes(c))
+        .sort();
+      return Promise.resolve();
+    },
+  };
+  return { state, restores, target };
+}
+
+describe("shareStateOf", () => {
+  it("declares the categories in memory and the ones still on their way", () => {
+    // The pending half is the whole point. A recipient's bar is rewritten 300ms
+    // after the link is applied, when a 500 KB category file is still in
+    // flight; writing only `tier2Loaded` would hand them a link to a map
+    // without the categories the sender shared - and without the selection that
+    // depends on them.
+    const shared = shareStateOf(slice({ tier2Loaded: ["cafe"], tier2Pending: ["bakery"] }));
+    expect(shared.categories).toEqual(["bakery", "cafe"]);
+    expect(encodeShareState(shared).startsWith(`${SHARE_VERSION_TIER2}.`)).toBe(true);
+  });
+
+  it("says a category once when it is both loaded and pending", () => {
+    // A second restore can re-declare a category that has already arrived, and
+    // two links describing the same map have to be the same bytes or the
+    // no-change guard above rewrites the bar forever.
+    const shared = shareStateOf(slice({ tier2Loaded: ["cafe"], tier2Pending: ["cafe"] }));
+    expect(shared.categories).toEqual(["cafe"]);
+  });
+
+  it("leaves a map that never touched tier-2 encoding to the bytes it always did", () => {
+    // v1, byte for byte: every link already in a chat window stays readable by
+    // both sides, and a build that only ever loads the six bundled datasets
+    // produces exactly what it did before this field existed.
+    const plain = slice({ selection: ["mrt:zhongshan"] });
+    expect(shareStateOf(plain).categories).toEqual([]);
+    expect(encodeShareState(shareStateOf(plain))).toBe(
+      encodeShareState(state({ selection: ["mrt:zhongshan"] })),
+    );
+    expect(encodeShareState(shareStateOf(plain)).startsWith(`${SHARE_VERSION_BASE}.`)).toBe(true);
+  });
+});
+
+describe("shareStateChanged", () => {
+  it("notices a category being asked for, and arriving", () => {
+    // Both edges matter and neither moves the camera or the selection, so
+    // without them the bar keeps whatever it last wrote: the sender's own link
+    // would never mention the cafes they just loaded, and the recipient's would
+    // keep promising a category this page has since given up on.
+    const before = slice();
+    const asked = slice({ tier2Pending: ["cafe"] });
+    const arrived = slice({ tier2Loaded: ["cafe"] });
+    expect(shareStateChanged(asked, before)).toBe(true);
+    expect(shareStateChanged(arrived, asked)).toBe(true);
+  });
+
+  it("ignores a store write that changes nothing a link carries", () => {
+    // This runs on every write the store takes - activity entries, WebMCP
+    // registration, bounds after each pan - and scheduling an encode for each
+    // one is the cost the reference comparison exists to avoid.
+    const settled = slice({ tier2Loaded: ["cafe"] });
+    expect(shareStateChanged({ ...settled }, settled)).toBe(false);
+  });
+});
+
+describe("applyShareHash", () => {
+  it("fetches the categories a v2 link declares, once, and exactly those", () => {
+    const link = encodeShareState(
+      state({ selection: ["node/1", "node/2"], categories: ["cafe", "bakery"] }),
+    );
+    const { state: restored, restores, target } = recordingStore();
+
+    expect(applyShareHash(link, target)).toEqual({ ok: true });
+
+    // Once: this is a fetch of up to 2.5 MB per category, and a second identical
+    // restore would re-declare categories a first one had already settled.
+    expect(restores).toEqual([["bakery", "cafe"]]);
+    // Synchronously pending, before anything else on the page can look: the
+    // selection names features nobody has fetched yet, and until the store says
+    // those categories are coming, the mirror and `select_features` are both
+    // entitled to treat the ids as dead.
+    expect(restored.tier2Pending).toEqual(["bakery", "cafe"]);
+    expect(restored.selection).toEqual(["node/1", "node/2"]);
+  });
+
+  it("asks for nothing tier-2 on a v1 link, and restores it as it always did", () => {
+    const link = encodeShareState(
+      state({ view: view({ center: [121.6, 25.1], zoom: 15.5 }), selection: ["mrt:1"] }),
+    );
+    const { state: restored, restores, target } = recordingStore();
+
+    expect(applyShareHash(link, target)).toEqual({ ok: true });
+
+    expect(restores).toEqual([]);
+    expect(restored.tier2Pending).toEqual([]);
+    expect(restored.view.center).toEqual([121.6, 25.1]);
+    expect(restored.selection).toEqual(["mrt:1"]);
+    // And the bar this page writes back is the same link, to the byte: an old
+    // link opened on this build is not quietly upgraded either.
+    expect(encodeShareState(shareStateOf(restored))).toBe(link);
+  });
+
+  it("hands back the reason a link was refused instead of half-applying it", () => {
+    const { state: restored, restores, target } = recordingStore();
+    const result = applyShareHash("#v9.nonsense", target);
+
+    expect(result.ok).toBe(false);
+    expect(restores).toEqual([]);
+    // The map keeps its default view rather than a camera read out of a
+    // fragment this build could not parse.
+    expect(restored.view).toBe(DEFAULT_VIEW);
+    expect(restored.selection).toEqual([]);
+  });
+});
+
+describe("a v2 link, applied and mirrored back", () => {
+  it("leaves the recipient's address bar on the link they were sent", async () => {
+    // The real store, because this is the seam the release gate is about: the
+    // page hands `useMapStore.getState()` to both halves, so a category has to
+    // be pending the instant the mirror looks - not when the file lands.
+    // Nothing is fetched here; a relative URL does not resolve under node, so
+    // the load fails immediately - with a TypeError, which is the same shape of
+    // failure as an offline browser or a 5xx: transient. What matters is what is
+    // true before it fails, and what is still true after.
+    const sent = encodeShareState(state({ selection: ["node/1"], categories: ["cafe"] }));
+    try {
+      expect(applyShareHash(sent, useMapStore.getState())).toEqual({ ok: true });
+
+      // No change to write: the v2 hash the recipient opened stays in their bar,
+      // still carrying the sender's categories. This is the silent downgrade.
+      expect(planHashUpdate(shareStateOf(useMapStore.getState()), BASE, `#${sent}`).hash).toBeNull();
+
+      await vi.waitFor(() =>
+        expect(useMapStore.getState().tier2RestoreFailures).toHaveLength(1),
+      );
+      // What the page tells the human, named by category (ShareRestoreNotice).
+      expect(useMapStore.getState().tier2RestoreFailures[0].category).toBe("cafe");
+      expect(useMapStore.getState().tier2RestoreFailures[0].permanent).toBe(false);
+
+      // And the bar still says v2 once the failure has settled, because this
+      // failure was a moment on this page and not a fact about the data. The
+      // link keeps declaring "cafe", so the next page to open it fetches the
+      // file again. Dropping it here would hand the next reader a link whose
+      // `node/1` belongs to no declared category - an id nothing downstream
+      // will ever fetch - on the strength of one bad second here.
+      const settled = planHashUpdate(shareStateOf(useMapStore.getState()), BASE, `#${sent}`);
+      expect(settled.hash).toBeNull();
+    } finally {
+      useMapStore.setState({
+        view: DEFAULT_VIEW,
+        selection: [],
+        tier2Pending: [],
+        tier2RestoreFailures: [],
+      });
+    }
+  });
+
+  it("falls back to v1 once a category is known not to be coming", async () => {
+    // The other half of the same rule, and the reason the assertion above is
+    // not enough on its own: a permanent failure *must* shrink the link. The
+    // index is served and lists the category, and the category file itself
+    // 404s - the deployment saying this file does not exist. A link that kept
+    // declaring it would make every reader downstream wait for the same 404.
+    //
+    // The 404 is on the file rather than on the index on purpose: a missing
+    // index latches "this deployment has no tier-2 data" inside the registry
+    // for the life of the module, which would decide the outcome of any test
+    // that ran after this one.
+    const sent = encodeShareState(state({ selection: ["node/1"], categories: ["cafe"] }));
+    const index = JSON.stringify({
+      categories: [{ category: "cafe", file: "cafe.geojson", count: 1 }],
+    });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input) === TIER2_INDEX_URL
+          ? new Response(index, { status: 200 })
+          : new Response("", { status: 404, statusText: "Not Found" }),
+      ),
+    );
+    try {
+      expect(applyShareHash(sent, useMapStore.getState())).toEqual({ ok: true });
+
+      await vi.waitFor(() => expect(useMapStore.getState().tier2RestoreFailures).toHaveLength(1));
+      expect(useMapStore.getState().tier2RestoreFailures[0].category).toBe("cafe");
+      expect(useMapStore.getState().tier2RestoreFailures[0].permanent).toBe(true);
+
+      const settled = planHashUpdate(shareStateOf(useMapStore.getState()), BASE, `#${sent}`);
+      // A write, and a shorter link than the one that arrived: the categories
+      // are gone and with them the version marker.
+      expect(settled.hash).not.toBeNull();
+      expect(settled.hash!.startsWith(`${SHARE_VERSION_BASE}.`)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      useMapStore.setState({
+        view: DEFAULT_VIEW,
+        selection: [],
+        tier2Pending: [],
+        tier2RestoreFailures: [],
+        tier2Manifest: null,
+      });
+    }
   });
 });

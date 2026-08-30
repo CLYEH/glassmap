@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { decodeShareState } from "@/lib/map-tools/share";
 import { useMapStore } from "@/lib/store/map-store";
-import { SHARE_WRITE_DEBOUNCE_MS, planHashUpdate } from "./share-hash";
+import {
+  SHARE_WRITE_DEBOUNCE_MS,
+  applyShareHash,
+  planHashUpdate,
+  shareStateChanged,
+  shareStateOf,
+} from "./share-hash";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -16,24 +21,16 @@ const isDev = process.env.NODE_ENV !== "production";
 let applied = false;
 
 /**
- * Restore the map from a link. `setView`/`setSelection` replace, `addDrawing`/
- * `addAnnotation` append and mint the ids the wire format deliberately does not
- * carry — which is exactly the shape `decodeShareState` returns.
+ * `applyShareHash` against the real store, plus the one thing a pure function
+ * cannot do: say out loud, in development, why a link was refused.
+ *
+ * Whatever is after the "#" is not ours to police — it may be an anchor, a
+ * paste that lost its tail, or a link from a build that knows more than this
+ * one. The map opens on its default view and the page carries on.
  */
-function applyShareHash(hash: string): void {
-  const decoded = decodeShareState(hash);
-  if ("error" in decoded) {
-    // Whatever is after the "#" is not ours to police: it may be an anchor, a
-    // paste that lost its tail, or a link from a build that knows more than
-    // this one. The map opens on its default view and the page carries on.
-    if (isDev) console.warn(`[GlassMap] ignoring share link: ${decoded.error}`);
-    return;
-  }
-  const store = useMapStore.getState();
-  store.setView(decoded.view);
-  store.setSelection(decoded.selection);
-  for (const drawing of decoded.drawings) store.addDrawing(drawing);
-  for (const annotation of decoded.annotations) store.addAnnotation(annotation);
+function applyShareHashToStore(hash: string): void {
+  const result = applyShareHash(hash, useMapStore.getState());
+  if (!result.ok && isDev) console.warn(`[GlassMap] ignoring share link: ${result.error}`);
 }
 
 /**
@@ -55,6 +52,13 @@ function applyShareHash(hash: string): void {
  * anyone shares a map, and listening would mean every write we make is an
  * event we have to recognise as our own.
  *
+ * Both directions carry the sender's point-of-interest categories, and they
+ * have to move together: applying a link starts fetching them, and the bar this
+ * page writes back keeps declaring them from the first moment (see
+ * `applyShareHash` and `shareStateOf`). A build that did one without the other
+ * would quietly downgrade a `v2` link to `v1` in the recipient's own address
+ * bar — the failure `map-tools/share.ts` calls the dangerous half.
+ *
  * @returns whether the map has outgrown a URL, for `ShareStatus` to say so.
  */
 export function useShareHash(): { tooLarge: boolean } {
@@ -67,9 +71,11 @@ export function useShareHash(): { tooLarge: boolean } {
 
     const write = () => {
       timer = null;
-      const { view, selection, drawings, annotations } = store.getState();
       const plan = planHashUpdate(
-        { view, selection, drawings, annotations },
+        // Including the tier-2 categories, loaded and still loading both; see
+        // `shareStateOf` for why a bar written from the loaded ones alone
+        // downgrades the link a recipient was sent.
+        shareStateOf(store.getState()),
         // Everything before the "#": the query survives, so `?shim=1` is still
         // there after a pan, and it counts against the byte budget because it
         // is part of the URL someone would copy.
@@ -99,14 +105,7 @@ export function useShareHash(): { tooLarge: boolean } {
     };
 
     const unsubscribe = store.subscribe((state, previous) => {
-      if (
-        state.view !== previous.view ||
-        state.selection !== previous.selection ||
-        state.drawings !== previous.drawings ||
-        state.annotations !== previous.annotations
-      ) {
-        schedule();
-      }
+      if (shareStateChanged(state, previous)) schedule();
     });
 
     // Subscribed first so this ordering is not load-bearing; `applying` is what
@@ -115,7 +114,7 @@ export function useShareHash(): { tooLarge: boolean } {
       applied = true;
       applying = true;
       try {
-        applyShareHash(window.location.hash);
+        applyShareHashToStore(window.location.hash);
       } finally {
         applying = false;
       }

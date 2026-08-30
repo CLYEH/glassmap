@@ -16,6 +16,7 @@
 import type { ActivityEntry, MapToolStore } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { DATASETS, isFeatureCategory } from "@/lib/data/schema";
+import { isMapCategory } from "@/lib/store/tier2";
 import { DEFAULT_CIRCLE_RADIUS_M, truncate } from "./shapes";
 import { DEFAULT_SURROUNDINGS_RADIUS_M } from "./surroundings";
 import { round5 } from "./state";
@@ -76,10 +77,20 @@ function placeLabel(value: unknown, resolved?: unknown): string | undefined {
   return pointOf(value);
 }
 
+/**
+ * "Fast food", "Place of worship" — a POI category as a person would read it.
+ * Not pluralised: the English plural of an OSM key is not mechanical, and a
+ * wrong plural in the feed is worse than a bare noun.
+ */
+const poiLabel = (category: string) =>
+  capitalise(category.replace(/_/g, " "));
+
 /** "Parks", "Parks, Schools" — the same words the legend uses for the same data. */
 function categoryLabel(value: unknown): string | undefined {
   if (!Array.isArray(value)) return undefined;
-  const labels = value.filter(isFeatureCategory).map((c) => DATASETS[c].label);
+  const labels = value
+    .filter(isMapCategory)
+    .map((c) => (isFeatureCategory(c) ? DATASETS[c].label : poiLabel(c)));
   return labels.length ? labels.join(", ") : undefined;
 }
 

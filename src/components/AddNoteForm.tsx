@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ACTIVITY_NOTE_CHARS } from "@/lib/map-tools/activity";
 import { truncate } from "@/lib/map-tools/shapes";
 import { useMapStore } from "@/lib/store/map-store";
+import { emitHumanFx } from "./fx/human-events";
 
 /** ~1 m, the same precision the tools report coordinates in. */
 const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
@@ -59,6 +60,11 @@ export function AddNoteForm() {
         ok: true,
         refIds: [stored.id],
       });
+    } else {
+      // A person pinned this one: the rose half of the same grammar. An
+      // agent-submitted note is already a feed row, and the row is what
+      // drives its (teal) effect.
+      emitHumanFx({ type: "note", annotation: stored });
     }
     setStatus(
       `Pinned ${stored.id} at ${round5(view.center[0])}, ${round5(view.center[1])}.`,

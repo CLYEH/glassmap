@@ -1463,6 +1463,102 @@ button {
   }
 }
 
+/* ============================================================
+   Agent presence FX (fx-spec-v3).
+
+   Two surfaces, both pointer-events: none, both empty at rest. Every
+   effect is built and torn down by the driver in src/components/fx —
+   no CSS keyframe drives an effect, because the driver has to be able
+   to freeze any frame for a still. The classes below are only the
+   stage: position, stacking, and the three viewport-space looks
+   (vignette, scan band, pack rect) that are cheaper as box-shadows and
+   gradients than as SVG.
+
+   The colours are the token teal ramp, value for value: --agent
+   (#2dd4bf) and --agent-deep (#0b7285) for the agent, --human
+   (#f48fb1) and --human-deep (#c2255c) for the person. FX introduces
+   no colour of its own. They are written out rather than referenced
+   because these are rgba() ramps of the same hues, and a box-shadow
+   cannot take an alpha off a hex custom property.
+
+   Kill switch: body[data-fx="off"] takes both surfaces off the page.
+   The driver already short-circuits to the final state, so this is the
+   belt to that pair of braces — a screenshot taken with FX off is the
+   calm map, byte for byte.
+   ============================================================ */
+.fx-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  /* Under the scrims (z 5): map-space marks belong with the map
+     furniture they comment on, not over the chrome. */
+  z-index: 4;
+}
+
+.fx-viewport {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Above the scrims, below the feed (15), the brand cluster and the
+     bottom bar (20): the frame is about the map, never about the glass. */
+  z-index: 14;
+}
+
+.fx-holder {
+  position: absolute;
+  inset: 0;
+}
+.fx-holder > * {
+  position: absolute;
+}
+
+.fx-frame {
+  left: 0;
+  top: 0;
+  overflow: visible;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.fx-vignette {
+  inset: 0;
+  box-shadow: inset 0 0 80px 14px rgba(45, 212, 191, 0.45);
+  opacity: 0;
+  will-change: opacity;
+}
+
+.fx-scanband {
+  top: 0;
+  bottom: 0;
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(45, 212, 191, 0),
+    rgba(45, 212, 191, 0.09) 55%,
+    rgba(45, 212, 191, 0.16) 96%,
+    rgba(45, 212, 191, 0.55) 100%
+  );
+  will-change: transform, opacity;
+}
+
+.fx-packrect {
+  border: 2px solid rgba(45, 212, 191, 0.95);
+  border-radius: 14px;
+  opacity: 0;
+  box-shadow:
+    0 0 12px rgba(45, 212, 191, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    inset 0 0 22px rgba(45, 212, 191, 0.15);
+}
+
+body[data-fx="off"] .fx-overlay,
+body[data-fx="off"] .fx-viewport {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pulse::after,
   .badge .live-dot::after,

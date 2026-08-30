@@ -21,6 +21,7 @@ import {
 } from "@/lib/store/map-store";
 import { createAnnotationElement } from "./annotation-marker";
 import { useDrawStore, type DrawMode } from "./draw-store";
+import { setFxMap } from "./fx/map-handle";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
@@ -262,6 +263,11 @@ export default function MapCanvas() {
     }
 
     if (isDev) window.__glassmapMap = map;
+    // The FX layer projects lng/lat through this map every frame. Published in
+    // every build, not just dev: agent-presence effects are product, not
+    // tooling. A page with no map leaves the slot null and the map-space
+    // effects degrade to their feed-row glow.
+    setFxMap(map);
 
     /** One MapLibre marker per annotation id, kept in step with the store. */
     const markers = new Map<string, Marker>();
@@ -573,6 +579,7 @@ export default function MapCanvas() {
 
     return () => {
       window.removeEventListener("resize", applyPadding);
+      setFxMap(null);
       unsubscribe();
       unsubscribeDraw();
       for (const marker of markers.values()) marker.remove();

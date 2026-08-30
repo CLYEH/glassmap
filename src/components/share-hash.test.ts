@@ -20,7 +20,12 @@
  *     them, or rewrote the bar from what had finished loading, would hand the
  *     recipient back a `v1` link to a map missing everything the sender picked
  *     out. Nothing throws, nothing looks wrong on screen, and the loss only
- *     surfaces when the recipient shares it on.
+ *     surfaces when the recipient shares it on. A category that failed to load
+ *     is the hard case, and it splits in two: a 5xx or a dropped connection is
+ *     a moment on this page and must not shrink the link for everyone
+ *     downstream, while a 4xx is the deployment saying the file does not
+ *     exist, and a link that kept promising it would only make the next reader
+ *     wait for the same 404. The last two tests pin one each.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -32,7 +37,7 @@ import {
 } from "@/lib/map-tools/share";
 import type { ShareState } from "@/lib/map-tools/share";
 import { DEFAULT_VIEW, useMapStore, type MapView } from "@/lib/store/map-store";
-import type { Tier2Category } from "@/lib/store/tier2";
+import { TIER2_INDEX_URL, type Tier2Category } from "@/lib/store/tier2";
 import {
   applyShareHash,
   planHashUpdate,
@@ -175,6 +180,7 @@ const slice = (patch: Partial<ShareStoreSlice> = {}): ShareStoreSlice => ({
   annotations: [],
   tier2Loaded: [],
   tier2Pending: [],
+  tier2RestoreFailures: [],
   ...patch,
 });
 
@@ -328,7 +334,9 @@ describe("a v2 link, applied and mirrored back", () => {
     // page hands `useMapStore.getState()` to both halves, so a category has to
     // be pending the instant the mirror looks - not when the file lands.
     // Nothing is fetched here; a relative URL does not resolve under node, so
-    // the load fails immediately. What matters is what is true before it does.
+    // the load fails immediately - with a TypeError, which is the same shape of
+    // failure as an offline browser or a 5xx: transient. What matters is what is
+    // true before it fails, and what is still true after.
     const sent = encodeShareState(state({ selection: ["node/1"], categories: ["cafe"] }));
     try {
       expect(applyShareHash(sent, useMapStore.getState())).toEqual({ ok: true });
@@ -342,18 +350,68 @@ describe("a v2 link, applied and mirrored back", () => {
       );
       // What the page tells the human, named by category (ShareRestoreNotice).
       expect(useMapStore.getState().tier2RestoreFailures[0].category).toBe("cafe");
+      expect(useMapStore.getState().tier2RestoreFailures[0].permanent).toBe(false);
 
-      // And once the category is known not to be coming, the link stops
-      // promising it: the bar falls back to v1 rather than handing the next
-      // reader a link to a map this page could not build.
+      // And the bar still says v2 once the failure has settled, because this
+      // failure was a moment on this page and not a fact about the data. The
+      // link keeps declaring "cafe", so the next page to open it fetches the
+      // file again. Dropping it here would hand the next reader a link whose
+      // `node/1` belongs to no declared category - an id nothing downstream
+      // will ever fetch - on the strength of one bad second here.
       const settled = planHashUpdate(shareStateOf(useMapStore.getState()), BASE, `#${sent}`);
-      expect(settled.hash?.startsWith(`${SHARE_VERSION_BASE}.`)).toBe(true);
+      expect(settled.hash).toBeNull();
     } finally {
       useMapStore.setState({
         view: DEFAULT_VIEW,
         selection: [],
         tier2Pending: [],
         tier2RestoreFailures: [],
+      });
+    }
+  });
+
+  it("falls back to v1 once a category is known not to be coming", async () => {
+    // The other half of the same rule, and the reason the assertion above is
+    // not enough on its own: a permanent failure *must* shrink the link. The
+    // index is served and lists the category, and the category file itself
+    // 404s - the deployment saying this file does not exist. A link that kept
+    // declaring it would make every reader downstream wait for the same 404.
+    //
+    // The 404 is on the file rather than on the index on purpose: a missing
+    // index latches "this deployment has no tier-2 data" inside the registry
+    // for the life of the module, which would decide the outcome of any test
+    // that ran after this one.
+    const sent = encodeShareState(state({ selection: ["node/1"], categories: ["cafe"] }));
+    const index = JSON.stringify({
+      categories: [{ category: "cafe", file: "cafe.geojson", count: 1 }],
+    });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input) === TIER2_INDEX_URL
+          ? new Response(index, { status: 200 })
+          : new Response("", { status: 404, statusText: "Not Found" }),
+      ),
+    );
+    try {
+      expect(applyShareHash(sent, useMapStore.getState())).toEqual({ ok: true });
+
+      await vi.waitFor(() => expect(useMapStore.getState().tier2RestoreFailures).toHaveLength(1));
+      expect(useMapStore.getState().tier2RestoreFailures[0].category).toBe("cafe");
+      expect(useMapStore.getState().tier2RestoreFailures[0].permanent).toBe(true);
+
+      const settled = planHashUpdate(shareStateOf(useMapStore.getState()), BASE, `#${sent}`);
+      // A write, and a shorter link than the one that arrived: the categories
+      // are gone and with them the version marker.
+      expect(settled.hash).not.toBeNull();
+      expect(settled.hash!.startsWith(`${SHARE_VERSION_BASE}.`)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      useMapStore.setState({
+        view: DEFAULT_VIEW,
+        selection: [],
+        tier2Pending: [],
+        tier2RestoreFailures: [],
+        tier2Manifest: null,
       });
     }
   });

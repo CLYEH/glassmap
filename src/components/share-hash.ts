@@ -8,7 +8,11 @@ import {
   type ShareState,
 } from "@/lib/map-tools/share";
 import type { Annotation, Drawing, MapView } from "@/lib/store/map-store";
-import { shareCategories, type Tier2Category } from "@/lib/store/tier2";
+import {
+  shareCategories,
+  type Tier2Category,
+  type Tier2RestoreFailure,
+} from "@/lib/store/tier2";
 
 /**
  * How long the map has to stand still before its state goes into the address
@@ -87,18 +91,29 @@ export interface ShareStoreSlice {
   annotations: readonly Annotation[];
   tier2Loaded: readonly Tier2Category[];
   tier2Pending: readonly Tier2Category[];
+  /**
+   * Categories a restore gave up on, each one saying whether it is coming back.
+   * Part of the link, not only of the notice on screen: a transient failure
+   * still belongs in the bar (see `shareCategories`).
+   */
+  tier2RestoreFailures: readonly Tier2RestoreFailure[];
 }
 
 /**
  * The map as a link would carry it.
  *
- * `categories` is what is loaded **plus** what is still loading, which is the
- * whole reason `shareCategories` exists (see its doc in `store/tier2.ts`): the
- * mirror rewrites the address bar 300 ms after a link is applied, long before a
+ * `categories` is what is loaded **plus** what is still loading **plus** what
+ * failed for a reason that may not hold next time, which is the whole reason
+ * `shareCategories` exists (see its doc in `store/tier2.ts`): the mirror
+ * rewrites the address bar 300 ms after a link is applied, long before a
  * half-megabyte category file has arrived, and a bar written from `tier2Loaded`
  * alone would hand the recipient a link to a map without the categories the
- * sender declared - and without the selection that depends on them. The same
- * union is what `get_share_link` hands out, so the bar and the tool cannot
+ * sender declared - and without the selection that depends on them. A category
+ * that failed on a 5xx or a dropped connection stays declared for the same
+ * reason one step later: the next page to open the link asks for the file
+ * again. Only a permanent failure - a 4xx, or a category this build's index
+ * does not list - drops out, because no page downstream can load it either. The
+ * same union is what `get_share_link` hands out, so the bar and the tool cannot
  * disagree about what this map is.
  */
 export function shareStateOf(state: ShareStoreSlice): ShareState {
@@ -107,7 +122,7 @@ export function shareStateOf(state: ShareStoreSlice): ShareState {
     selection: state.selection,
     drawings: state.drawings,
     annotations: state.annotations,
-    categories: shareCategories(state.tier2Loaded, state.tier2Pending),
+    categories: shareCategories(state.tier2Loaded, state.tier2Pending, state.tier2RestoreFailures),
   };
 }
 
@@ -116,10 +131,18 @@ export function shareStateOf(state: ShareStoreSlice): ShareState {
  * of these is replaced wholesale by the store rather than mutated, and this
  * runs on every store write there is.
  *
- * The two tier-2 lists are here for the same reason they are in
+ * The three tier-2 lists are here for the same reason they are in
  * `shareStateOf`: starting to load a category, and finishing or failing to load
  * one, both change what the link says while the camera and the selection stand
  * still. Without them the bar keeps whatever version it last wrote.
+ *
+ * The failures buy no wake-up the bar would otherwise miss today: every store
+ * write that records or clears one sits next to a write of `tier2Pending` or
+ * inside the same write as `tier2Loaded` (`restoreCategories` and
+ * `addLoadedCategory`, via the backing in `store/map-store.ts`), and the debounce
+ * coalesces the pair into one encode. They are listed because they are an input
+ * of `shareStateOf`, and a guard that watches only some of what the link encodes
+ * is one refactor away from a bar that silently stops following the map.
  */
 export function shareStateChanged(state: ShareStoreSlice, previous: ShareStoreSlice): boolean {
   return (
@@ -128,7 +151,8 @@ export function shareStateChanged(state: ShareStoreSlice, previous: ShareStoreSl
     state.drawings !== previous.drawings ||
     state.annotations !== previous.annotations ||
     state.tier2Loaded !== previous.tier2Loaded ||
-    state.tier2Pending !== previous.tier2Pending
+    state.tier2Pending !== previous.tier2Pending ||
+    state.tier2RestoreFailures !== previous.tier2RestoreFailures
   );
 }
 

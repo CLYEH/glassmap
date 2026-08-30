@@ -17,7 +17,12 @@ import {
 } from "@/lib/store/map-store";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import { FIXTURE_FEATURES, VIEW, VIEW_BOUNDS } from "./test-fixtures";
+import {
+  createGatedTier2Fetch,
+  FIXTURE_FEATURES,
+  VIEW,
+  VIEW_BOUNDS,
+} from "./test-fixtures";
 
 const signal = new AbortController().signal;
 const BASE_URL = "https://glassmap.example/app";
@@ -202,8 +207,11 @@ describe("feed cap", () => {
 });
 
 describe("summary copy", () => {
-  it("draw_shape names the shape, its size, its label and the id it created", async () => {
-    // The mockup's row, verbatim: this is the line the feed was designed for.
+  it("draw_shape says it drew, then the shape, its size, its label and the id", async () => {
+    // The design's row, verbatim (`mockup2-v5.html`: "Drew a circle, 800 m —
+    // “10-min walk”" plus the id as a code chip). The verb is the whole point
+    // of the re-voicing: a feed of noun phrases reads as an inventory of the
+    // map, and this feed's claim is that an agent *did* something to it.
     const { store, byName } = setup();
     await call(byName.draw_shape, {
       type: "circle",
@@ -213,7 +221,7 @@ describe("summary copy", () => {
     });
     expect(last(store)).toMatchObject({
       tool: "draw_shape",
-      summary: "Circle, 800 m — “10-min walk” → drawing:2",
+      summary: "Drew a circle, 800 m — “10-min walk” → drawing:2",
       refIds: ["drawing:2"],
       readOnly: false,
       ok: true,
@@ -229,7 +237,7 @@ describe("summary copy", () => {
         [121.54, 25.03],
       ],
     });
-    expect(last(store).summary).toMatch(/^Line, [\d,]+ m → drawing:2$/);
+    expect(last(store).summary).toMatch(/^Drew a line, [\d,]+ m → drawing:2$/);
   });
 
   it("draw_shape reports the default radius the tool actually used", async () => {
@@ -237,7 +245,7 @@ describe("summary copy", () => {
     // with no radius_m is still an 800 m circle on the map.
     const { store, byName } = setup();
     await call(byName.draw_shape, { type: "circle", center: "osm:node:2" });
-    expect(last(store).summary).toBe("Circle, 800 m → drawing:2");
+    expect(last(store).summary).toBe("Drew a circle, 800 m → drawing:2");
   });
 
   it("find_features says what was asked for and how many matched", async () => {
@@ -308,16 +316,50 @@ describe("summary copy", () => {
     });
   });
 
-  it("select_features counts the whole selection and calls an empty one a clear", async () => {
+  it("select_features says 'all' only when nothing was left out, and calls an empty one a clear", async () => {
+    // "Highlighted all 42 on the map" is the design's row, and the word "all"
+    // is a claim, not decoration: it says the map is now showing everything
+    // the call asked for. The moment one id was rejected it stops being true,
+    // and the row that reports the rejection must not also assert it.
     const { store, byName } = setup();
     await call(byName.select_features, { categories: ["park"] });
-    expect(last(store).summary).toBe("Highlighted 2 on the map");
+    expect(last(store).summary).toBe("Highlighted all 2 on the map");
 
     await call(byName.select_features, { ids: ["osm:way:10", "no:such:thing"] });
     expect(last(store).summary).toBe("Highlighted 1 on the map · 1 unknown id");
 
     await call(byName.select_features, { ids: [] });
     expect(last(store).summary).toBe("Cleared the selection");
+  });
+
+  it("select_features never says 'all' of one thing", async () => {
+    // "Highlighted all 1 on the map" is not a sentence anyone writes.
+    const { store, byName } = setup();
+    await call(byName.select_features, { ids: ["osm:way:10"] });
+    expect(last(store).summary).toBe("Highlighted 1 on the map");
+  });
+
+  it("select_features drops 'all' while a share link's features are still arriving", async () => {
+    // The window this exists for: a link named two cafes and the cafe file has
+    // not landed, so the ids are selected (they are not lost) but nothing is
+    // drawn at them yet. The count is the selection's; "all ... on the map" of
+    // it would be the feed claiming three beads a human can only see one of.
+    const { fetchJson, release } = createGatedTier2Fetch();
+    const { store, byName } = setup({ tier2FetchJson: fetchJson });
+    const settled = store.restoreCategories(["cafe"]);
+    expect(store.getPendingCategories()).toEqual(["cafe"]);
+
+    const out = await call(byName.select_features, {
+      ids: ["osm:node:100", "osm:node:101", "osm:way:10"],
+    });
+    expect(out.pending_ids).toEqual(["osm:node:100", "osm:node:101"]);
+    expect(last(store).summary).toBe("Highlighted 3 on the map");
+
+    release();
+    await settled;
+    // Once they arrive the same call earns the word.
+    await call(byName.select_features, { ids: ["osm:node:100", "osm:node:101", "osm:way:10"] });
+    expect(last(store).summary).toBe("Highlighted all 3 on the map");
   });
 
   it("get_map_state reads out the loaded count with thousands separated", async () => {
@@ -343,7 +385,7 @@ describe("summary copy", () => {
     // labels that station in its own words, and the row must match the label.
     const { store, byName } = setup();
     await call(byName.describe_surroundings, { from: "Daan Station" });
-    expect(last(store).summary).toMatch(/^Around 大安 — \d+ features within 500 m$/);
+    expect(last(store).summary).toMatch(/^Around 大安 — \d+ places within 500 m$/);
   });
 
   it("describe_surroundings turns an id into the name the tool resolved it to", async () => {
@@ -353,7 +395,7 @@ describe("summary copy", () => {
     // compare_areas' row is written from.
     const { store, byName } = setup();
     await call(byName.describe_surroundings, { from: "osm:node:2" });
-    expect(last(store).summary).toMatch(/^Around 大安 — \d+ features within 500 m$/);
+    expect(last(store).summary).toMatch(/^Around 大安 — \d+ places within 500 m$/);
   });
 
   it("describe_surroundings falls back to the district when the call named nowhere", async () => {
@@ -362,9 +404,33 @@ describe("summary copy", () => {
     // coordinate or a bare view-centre call has no better word for where it is.
     const { store, byName } = setup();
     await call(byName.describe_surroundings, { from: { lng: 121.5436, lat: 25.0334 } });
-    expect(last(store).summary).toMatch(/^Around 大安區 — \d+ features within 500 m$/);
+    expect(last(store).summary).toMatch(/^Around 大安區 — \d+ places within 500 m$/);
     await call(byName.describe_surroundings, {});
-    expect(last(store).summary).toMatch(/^Around 大安區 — \d+ features within 500 m$/);
+    expect(last(store).summary).toMatch(/^Around 大安區 — \d+ places within 500 m$/);
+  });
+
+  it("describe_surroundings counts places, and inflects the count", async () => {
+    // "places", not "features": the design's row (`mockup2-v5.html`: "Around
+    // 大安森林公園 — 25 places within 500 m") says what the tool actually
+    // counts — everything inside the radius except the district the point is
+    // standing in, which is the answer's own separate field. And a feed that
+    // says "1 places" beside a map with one dot on it reads as a broken map,
+    // not as a rounding of English.
+    const { store, byName } = setup();
+    await call(byName.describe_surroundings, { from: "osm:node:2", radius_m: 20 });
+    expect(last(store).summary).toBe("Around 大安 — 1 place within 20 m");
+  });
+
+  it("list_features_in_view names what is on screen and how many of it there is", async () => {
+    // The one row a human can check without touching anything: what the panel
+    // says is in view against what they can see in view.
+    const { store, byName } = setup();
+    await call(byName.list_features_in_view, { categories: ["park"] });
+    expect(last(store)).toMatchObject({
+      summary: "Parks in view — found 1",
+      readOnly: true,
+      ok: true,
+    });
   });
 
   it("compare_areas names both places as the tool resolved them, not as they were typed", async () => {

@@ -296,6 +296,19 @@ describe("get_map_state", () => {
     const written = await call(byName.set_map_view, { zoom: 16 });
     expect(Object.keys(written).sort()).toEqual(Object.keys(read).sort());
   });
+
+  it("warns that the first call of a session can report the pre-chrome corridor", () => {
+    // The page opens without its agent chrome and grows the inspector lane the
+    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`), so
+    // the first call's answer is computed against a viewport that is about to
+    // shrink. The tool cannot fix that - the chrome appears *because* of this
+    // call - and an agent that is not told will read the difference between
+    // call one and call two as the human having moved the map. The description
+    // is the only place it can learn otherwise.
+    expect(toolsFor().byName.get_map_state.description).toMatch(
+      /first call of a session can report a slightly wider corridor/,
+    );
+  });
 });
 
 describe("set_map_view", () => {

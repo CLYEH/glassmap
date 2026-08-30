@@ -6,12 +6,31 @@
  * only — it never changes a tool's input, its return value or its errors.
  *
  * Three rules the copy follows:
- *  - one short line, in the product's voice: `Circle, 800 m — “10-min walk” → drawing:1`;
+ *  - one short line, in the product's voice: `Drew a circle, 800 m — “10-min walk” → drawing:1`;
  *  - no geometry, no URLs, no result objects: sizes, counts, ids and names only;
  *  - echoing human and OSM text (labels, notes, place names) is the point —
  *    that text is what makes a row recognisable — but it is truncated, and the
  *    untrustedContentHint on the tool's own return is what still governs the
  *    agent-facing answer.
+ *
+ * ## The sentence is born here (design2-v5 §8.1 row 11, §8.5 (c))
+ *
+ * The round-2 r4 finding that feed summaries should keep a machine voice is
+ * **superseded** by the human-first repositioning: the page opens as a map for
+ * a person, so the row a person reads first is a sentence, and the feed/ticker
+ * voice split dies with it. One template per tool, written and tested in this
+ * file rather than assembled in a component — a summary the UI could rewrite
+ * is a summary two surfaces can disagree about, and the ticker and the feed
+ * show the same string.
+ *
+ * What the sentence does **not** replace is the transparency spine: the feed
+ * renders the mono tool name and the timestamp on every call row, and the
+ * ids a row names stay inside the summary (`refIds`, typeset as code by
+ * `ActivityFeed`). A reader who wants to check the row against the map still
+ * has the tool that ran, when it ran, and the id it touched.
+ *
+ * Tool *results* are untouched by any of this. The agent reads JSON; this is
+ * the page's own account, and the two must never be one string.
  */
 import {
   ACTIVITY_FX_HIT_LIMIT,
@@ -130,6 +149,15 @@ function placeLabel(value: unknown, resolved?: unknown): string | undefined {
  * "Fast food", "Place of worship" — a POI category as a person would read it.
  * Not pluralised: the English plural of an OSM key is not mechanical, and a
  * wrong plural in the feed is worse than a bare noun.
+ *
+ * This is why the search rows keep their subject first — "Cafe near Daan
+ * Station — found 42" — where the design mockup writes "Found 42 cafés inside
+ * the circle" (design2-v5, `mockup2-v5.html`). Reaching that sentence needs a
+ * noun inflected by the count for all 24 categories, in two numbers, and a
+ * union form for a multi-category filter; the chrome has such a vocabulary
+ * (`components/category-labels.ts`, `TIER2_PLURAL`) but it belongs to the UI
+ * and the tool layer must not import upwards to reach it. Same words, same
+ * order, one clause rearranged — declined here on purpose, not overlooked.
  */
 const poiLabel = (category: string) =>
   capitalise(category.replace(/_/g, " "));
@@ -223,8 +251,19 @@ const SUMMARISERS: Record<string, Summariser> = {
     const selection = rec(rec(result.state)?.selection);
     const count = fin(selection?.count) ?? 0;
     const unknown = fin(result.unknown_count) ?? 0;
+    // Ids the call kept but this page cannot resolve yet: a share link's
+    // categories are still arriving. They are in the count, and they are not
+    // on the map.
+    const pending = Array.isArray(result.pending_ids) ? result.pending_ids.length : 0;
     // Selecting nothing is a real instruction ("clear it"), not an empty result.
-    const head = count === 0 ? "Cleared the selection" : `Highlighted ${group(count)} on the map`;
+    if (count === 0) return { summary: "Cleared the selection" };
+    // "all" is the mockup's word for this row, and it is a claim: nothing the
+    // call asked for was left off. It holds only when no id was rejected and
+    // none is still loading — and "all 1" is not English, so a single match
+    // keeps the bare count.
+    const head = `Highlighted ${count > 1 && !unknown && !pending ? "all " : ""}${group(
+      count,
+    )} on the map`;
     return {
       summary: unknown ? `${head} · ${group(unknown)} unknown ${unknown === 1 ? "id" : "ids"}` : head,
     };
@@ -242,7 +281,10 @@ const SUMMARISERS: Record<string, Summariser> = {
     const id = str(result.drawing_id);
     return {
       summary: [
-        `${capitalise(kind)}, ${size}`,
+        // The verb, then what it made: "Drew a circle, 800 m" is the row the
+        // design writes, and it is what tells a reader the map changed —
+        // "Circle, 800 m" could as easily be a measurement of one.
+        `Drew a ${kind}, ${size}`,
         label ? ` — ${quote(label)}` : "",
         id ? ` → ${id}` : "",
       ].join(""),
@@ -278,8 +320,15 @@ const SUMMARISERS: Record<string, Summariser> = {
       pointOf(result.origin) ??
       "the view";
     const radius = fin(input.radius_m) ?? DEFAULT_SURROUNDINGS_RADIUS_M;
+    // "places", not "features": every one of them is somewhere a person could
+    // walk to — the district this call is standing in is the one thing that is
+    // not counted here (it is the tool's own `district` field). The count is
+    // inflected because "1 places within 500 m" reads as a bug in the map.
+    const total = fin(result.total) ?? 0;
     return {
-      summary: `Around ${where} — ${group(fin(result.total) ?? 0)} features within ${metres(radius)}`,
+      summary: `Around ${where} — ${group(total)} ${
+        total === 1 ? "place" : "places"
+      } within ${metres(radius)}`,
       // The result echoes the point but not the radius, so the radius is the
       // one the tool would have used for this input — the same default the
       // schema documents, never a guess at a number the call did not have.

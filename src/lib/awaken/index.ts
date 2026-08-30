@@ -39,9 +39,15 @@
  *    exactly the case the trigger below refuses. Flag-first is what keeps that
  *    argument true of a *future* restore path as well, instead of true by
  *    luck.
- *  - A restored map must never be shown in human chrome. Written last, the
- *    camera, the selection and every shape would land while this module still
- *    reported "idle", and the agent chrome would snap in afterwards.
+ *  - No subscriber may see restored content while this module still reports
+ *    idle. Written last, the camera, the selection and every shape would land
+ *    in front of a page whose chrome still says no agent has ever touched it,
+ *    and the flip would follow the content instead of leading it. It says
+ *    nothing about the first paint: the restore runs in an effect, which React
+ *    reaches only after the document has been painted once — dressing that
+ *    paint is the inline probe's job (`src/app/boot-chrome.ts`), and this
+ *    ordering is what keeps the probe's answer and this module's from
+ *    disagreeing a frame later.
  *
  * The same block carries a second bit this module never reads —
  * `setSelectionAttributionExplicit(selectionAttributionExplicit(decoded))`,

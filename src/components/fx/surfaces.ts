@@ -86,8 +86,15 @@ const metresPerDegreeLng = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 
 
 /**
  * The inspector's lane, read from the same custom property the stylesheet lays
- * it out with — the identical rule `MapCanvas.inspectorLane()` follows, so the
- * FX corridor and the camera's padding can never describe different rectangles.
+ * it out with — the same rule `MapCanvas.inspectorLane()` follows, so the FX
+ * corridor and the camera's padding can never describe different rectangles.
+ *
+ * One clause of that rule is deliberately missing here: `inspectorLane()` also
+ * answers 0 in human chrome, where no lane is mounted (T-82). Every effect
+ * that consumes this — the viewfinder, the scan band, the pack-to-chip rect —
+ * is a *tool* effect, and a tool call is exactly the write that puts the page
+ * into agent chrome, so this is never read in a state where the two answers
+ * differ. Human-gesture effects are drawn in map space and never ask.
  */
 function laneWidth(): number {
   if (window.matchMedia("(max-width: 920px)").matches) return 0;

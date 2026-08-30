@@ -32,17 +32,6 @@ export const CATEGORY_PLURAL: Record<FeatureCategory, string> = {
   district: "Districts",
 };
 
-/**
- * Abbreviation used only when the legend strip runs out of room (≤1360px).
- * Undefined means the full word always fits. The popover keeps the full label,
- * so dropping "(sample)" here loses nothing: the strip collapses into that
- * popover below 1241px.
- */
-export const CATEGORY_PLURAL_SHORT: Partial<Record<FeatureCategory, string>> = {
-  supermarket: "Markets",
-  listing: "Listings",
-};
-
 /** One selected feature is a "Park", not "Parks". */
 export const CATEGORY_SINGULAR: Record<FeatureCategory, string> = {
   park: "Park",

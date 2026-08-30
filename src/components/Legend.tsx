@@ -8,6 +8,7 @@ import {
   CATEGORY_PLURAL_SHORT,
   LEGEND_ORDER,
 } from "./category-labels";
+import { LoadedCategories } from "./LoadedCategories";
 import { CATEGORY_COLOR } from "./map-style";
 
 const number = (n: number) => n.toLocaleString("en-US");
@@ -56,6 +57,15 @@ function Chip({
  * counted from the store, so it can never advertise data the map is not
  * holding. "Places" is the human word for what the tools call features.
  *
+ * The total stays the six bundled datasets even when point-of-interest
+ * categories are loaded. This legend is a key to what is painted: its six
+ * chips have to add up to the number beside them, and POIs are not painted
+ * (only the selected ones are — see POI_SOURCE). Folding 31k unpainted
+ * features into "places" would name a legend entry that has no colour and no
+ * dots on the map. What is loaded but unpainted is disclosed one row above by
+ * `LoadedCategories`; the exact machine total, matching `get_map_state`'s
+ * `features_loaded`, is in the state overlay.
+ *
  * Below 1241px there is no room for six labelled chips beside the badge, so it
  * collapses to the total plus a popover with the same rows (which is also the
  * only way the numbers stay readable on a phone).
@@ -77,6 +87,11 @@ export function Legend() {
 
   return (
     <div className="legend-zone" data-testid="legend">
+      {/* Above the legend, and only once a category loads: the bottom bar is
+          bottom-aligned, so this grows upward and the legend itself never
+          moves. */}
+      <LoadedCategories />
+
       <div className="legend-full glass">
         <span className="legend-total" data-testid="legend-total">
           {number(total)} places

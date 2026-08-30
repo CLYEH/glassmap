@@ -1,9 +1,18 @@
 import {
   MAX_SHARE_URL_BYTES,
+  decodeShareState,
   encodeShareState,
   utf8Bytes,
+  type ShareAnnotation,
+  type ShareDrawing,
   type ShareState,
 } from "@/lib/map-tools/share";
+import type { Annotation, Drawing, MapView } from "@/lib/store/map-store";
+import {
+  shareCategories,
+  type Tier2Category,
+  type Tier2RestoreFailure,
+} from "@/lib/store/tier2";
 
 /**
  * How long the map has to stand still before its state goes into the address
@@ -66,4 +75,123 @@ export function planHashUpdate(
   if (bytes > MAX_SHARE_URL_BYTES) return { hash: null, tooLarge: true, bytes };
   const unchanged = currentHash.replace(/^#/, "") === hash;
   return { hash: unchanged ? null : hash, tooLarge: false, bytes };
+}
+
+// ------------------------------------------------------- store <-> link
+
+/**
+ * The store fields the address bar is a mirror of. Structural on purpose: the
+ * hook hands it the Zustand state, a test hands it an object literal, and
+ * neither this module nor the test needs to know the rest of the store exists.
+ */
+export interface ShareStoreSlice {
+  view: MapView;
+  selection: readonly string[];
+  drawings: readonly Drawing[];
+  annotations: readonly Annotation[];
+  tier2Loaded: readonly Tier2Category[];
+  tier2Pending: readonly Tier2Category[];
+  /**
+   * Categories a restore gave up on, each one saying whether it is coming back.
+   * Part of the link, not only of the notice on screen: a transient failure
+   * still belongs in the bar (see `shareCategories`).
+   */
+  tier2RestoreFailures: readonly Tier2RestoreFailure[];
+}
+
+/**
+ * The map as a link would carry it.
+ *
+ * `categories` is what is loaded **plus** what is still loading **plus** what
+ * failed for a reason that may not hold next time, which is the whole reason
+ * `shareCategories` exists (see its doc in `store/tier2.ts`): the mirror
+ * rewrites the address bar 300 ms after a link is applied, long before a
+ * half-megabyte category file has arrived, and a bar written from `tier2Loaded`
+ * alone would hand the recipient a link to a map without the categories the
+ * sender declared - and without the selection that depends on them. A category
+ * that failed on a 5xx or a dropped connection stays declared for the same
+ * reason one step later: the next page to open the link asks for the file
+ * again. Only a permanent failure - a 4xx, or a category this build's index
+ * does not list - drops out, because no page downstream can load it either. The
+ * same union is what `get_share_link` hands out, so the bar and the tool cannot
+ * disagree about what this map is.
+ */
+export function shareStateOf(state: ShareStoreSlice): ShareState {
+  return {
+    view: state.view,
+    selection: state.selection,
+    drawings: state.drawings,
+    annotations: state.annotations,
+    categories: shareCategories(state.tier2Loaded, state.tier2Pending, state.tier2RestoreFailures),
+  };
+}
+
+/**
+ * Whether anything a link carries has changed. Reference equality, because each
+ * of these is replaced wholesale by the store rather than mutated, and this
+ * runs on every store write there is.
+ *
+ * The three tier-2 lists are here for the same reason they are in
+ * `shareStateOf`: starting to load a category, and finishing or failing to load
+ * one, both change what the link says while the camera and the selection stand
+ * still. Without them the bar keeps whatever version it last wrote.
+ *
+ * The failures buy no wake-up the bar would otherwise miss today: every store
+ * write that records or clears one sits next to a write of `tier2Pending` or
+ * inside the same write as `tier2Loaded` (`restoreCategories` and
+ * `addLoadedCategory`, via the backing in `store/map-store.ts`), and the debounce
+ * coalesces the pair into one encode. They are listed because they are an input
+ * of `shareStateOf`, and a guard that watches only some of what the link encodes
+ * is one refactor away from a bar that silently stops following the map.
+ */
+export function shareStateChanged(state: ShareStoreSlice, previous: ShareStoreSlice): boolean {
+  return (
+    state.view !== previous.view ||
+    state.selection !== previous.selection ||
+    state.drawings !== previous.drawings ||
+    state.annotations !== previous.annotations ||
+    state.tier2Loaded !== previous.tier2Loaded ||
+    state.tier2Pending !== previous.tier2Pending ||
+    state.tier2RestoreFailures !== previous.tier2RestoreFailures
+  );
+}
+
+/** What a link is restored into: the store's own writers, narrowed to these. */
+export interface ShareRestoreTarget {
+  setView(view: MapView): void;
+  setSelection(ids: string[]): void;
+  addDrawing(drawing: ShareDrawing): void;
+  addAnnotation(annotation: ShareAnnotation): void;
+  /** `MapStore.restoreTier2Categories`; the result is deliberately not awaited. */
+  restoreTier2Categories(categories: readonly Tier2Category[]): Promise<unknown>;
+}
+
+/** Applied, or refused with the codec's own sentence for the caller to log. */
+export type ShareApplyResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Restore the map from a link. `setView`/`setSelection` replace, `addDrawing`/
+ * `addAnnotation` append and mint the ids the wire format deliberately does not
+ * carry - which is exactly the shape `decodeShareState` returns.
+ *
+ * Free of the browser, so the ordering below is a testable fact rather than
+ * something only a real page can show.
+ */
+export function applyShareHash(hash: string, store: ShareRestoreTarget): ShareApplyResult {
+  const decoded = decodeShareState(hash);
+  if ("error" in decoded) return { ok: false, error: decoded.error };
+  store.setView(decoded.view);
+  store.setSelection(decoded.selection);
+  // Started, never awaited, and started here - before the drawings, before this
+  // function returns, before anything else on the page can read the store.
+  // `restoreCategories` marks the categories pending synchronously (see its doc
+  // in `store/tier2.ts`), and that flag is what keeps the mirror above and
+  // `select_features` from treating the link's not-yet-fetched ids as dead
+  // during the seconds it takes the files to arrive. Awaiting instead would
+  // hold the camera and the shapes hostage to a 2.5 MB download: the map is
+  // restored now, and the POIs land when they land.
+  if (decoded.categories.length) void store.restoreTier2Categories(decoded.categories);
+  for (const drawing of decoded.drawings) store.addDrawing(drawing);
+  for (const annotation of decoded.annotations) store.addAnnotation(annotation);
+  return { ok: true };
 }

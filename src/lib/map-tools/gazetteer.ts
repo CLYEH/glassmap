@@ -6,12 +6,23 @@
  * Ranking is deliberately coarse — exact beats prefix beats substring — because
  * the caller only has to decide "one confident answer" vs "ask the human".
  */
-import type { GazetteerEntry, GlassMapFeature } from "@/lib/data/schema";
+import type { GazetteerEntry } from "@/lib/data/schema";
+import type { MapCategory, MapFeature } from "@/lib/store/tier2";
 import type { LngLat } from "@/lib/store/map-store";
 import { distanceMeters, featureCenter } from "./output";
 import { round5 } from "./state";
 
-export interface GazetteerMatch extends GazetteerEntry {
+/**
+ * A gazetteer entry over everything currently in the store. Same fields as the
+ * schema's `GazetteerEntry`, with the wider category: once a tier-2 category is
+ * loaded its names are places too, so "the Starbucks on Xinyi Road" resolves
+ * exactly like a station does.
+ */
+export interface MapGazetteerEntry extends Omit<GazetteerEntry, "category"> {
+  category: MapCategory;
+}
+
+export interface GazetteerMatch extends MapGazetteerEntry {
   /** See SCORE: 4 exact name, 3 exact after station wording is stripped, 2 prefix, 1 substring. */
   score: number;
 }
@@ -32,7 +43,7 @@ export interface PlaceCandidate {
   id: string;
   name: string;
   name_en?: string;
-  category: GazetteerEntry["category"];
+  category: MapCategory;
   /** Metres from the current view centre, when the caller supplied one. */
   distance_m?: number;
 }
@@ -87,7 +98,7 @@ function pairScore(query: string, candidate: string, exact: number): number {
   return 0;
 }
 
-function toEntry(feature: GlassMapFeature): GazetteerEntry | null {
+function toEntry(feature: MapFeature): MapGazetteerEntry | null {
   const p = feature?.properties;
   if (!p?.id || !p.name) return null;
   const center = featureCenter(feature);
@@ -102,12 +113,12 @@ function toEntry(feature: GlassMapFeature): GazetteerEntry | null {
 }
 
 /** Every named, locatable feature, usable as a place. */
-export function buildGazetteer(features: readonly GlassMapFeature[]): GazetteerEntry[] {
-  return features.map(toEntry).filter((e): e is GazetteerEntry => e !== null);
+export function buildGazetteer(features: readonly MapFeature[]): MapGazetteerEntry[] {
+  return features.map(toEntry).filter((e): e is MapGazetteerEntry => e !== null);
 }
 
 /** Ranked matches, best first. Empty when the query is blank or matches nothing. */
-export function resolvePlace(query: string, features: readonly GlassMapFeature[]): GazetteerMatch[] {
+export function resolvePlace(query: string, features: readonly MapFeature[]): GazetteerMatch[] {
   if (typeof query !== "string") return [];
   const qRaw = normaliseName(query);
   if (!qRaw) return [];
@@ -136,7 +147,7 @@ export function resolvePlace(query: string, features: readonly GlassMapFeature[]
   );
 }
 
-export function toPlaceCandidate(entry: GazetteerEntry, from?: LngLat | null): PlaceCandidate {
+export function toPlaceCandidate(entry: MapGazetteerEntry, from?: LngLat | null): PlaceCandidate {
   const c: PlaceCandidate = { id: entry.id, name: entry.name, category: entry.category };
   if (entry.nameEn) c.name_en = entry.nameEn;
   if (from) c.distance_m = distanceMeters(from, entry.center);
@@ -150,7 +161,7 @@ export function toPlaceCandidate(entry: GazetteerEntry, from?: LngLat | null): P
  */
 export function resolvePlaceOne(
   query: string,
-  features: readonly GlassMapFeature[],
+  features: readonly MapFeature[],
   from?: LngLat | null,
 ): PlaceResolution {
   const matches = resolvePlace(query, features);

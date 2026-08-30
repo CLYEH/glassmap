@@ -28,6 +28,10 @@ function Call({ row }: { row: ActivityRow }) {
       className={`call ${kind}`}
       data-testid="activity-call"
       data-tool={entry.tool}
+      // The FX driver lights this row on its call's own clock and finds it by
+      // seq, never by position: folding rewrites the list, and an index would
+      // put the glow on somebody else's call.
+      data-seq={entry.seq}
       data-folded={folded > 1 ? folded : undefined}
     >
       <span aria-hidden className="dot" />

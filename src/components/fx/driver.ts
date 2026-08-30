@@ -130,8 +130,9 @@ export function createFxDriver<C>(host: FxHost<C>): FxDriver {
 
   const announce = () => host.onChange?.(live());
 
+  /** Law 2 made structural: the first caller wins, so cleanup runs exactly once. */
   const finish = (h: Handle<C>) => {
-    handles.delete(h.id);
+    if (!handles.delete(h.id)) return;
     if (h.plan.seq !== null) host.glow(h.plan.seq, 1);
     h.effect.cleanup(h.nodes, host.context);
   };
@@ -140,29 +141,40 @@ export function createFxDriver<C>(host: FxHost<C>): FxDriver {
     frame = null;
     let ended = false;
     for (const h of [...handles.values()]) {
-      if (h.frozen && h.fadingSince === null) continue;
-      if (h.fadingSince !== null) {
-        const q = clamp01((now - h.fadingSince) / PREEMPT_FADE_MS);
-        const root = h.nodes.root;
-        if (root) root.style.opacity = (1 - q).toFixed(3);
-        if (q >= 1) {
+      try {
+        if (h.frozen && h.fadingSince === null) continue;
+        if (h.fadingSince !== null) {
+          const q = clamp01((now - h.fadingSince) / PREEMPT_FADE_MS);
+          const root = h.nodes.root;
+          if (root) root.style.opacity = (1 - q).toFixed(3);
+          if (q >= 1) {
+            finish(h);
+            ended = true;
+          }
+          continue;
+        }
+        const p = clamp01((now - h.start) / h.dur);
+        const render = h.reduced ? h.effect.rm : h.effect.render;
+        render.call(h.effect, p, h.nodes, host.context);
+        if (h.plan.seq !== null) host.glow(h.plan.seq, p);
+        if (p >= 1) {
           finish(h);
           ended = true;
         }
-        continue;
-      }
-      const p = clamp01((now - h.start) / h.dur);
-      const render = h.reduced ? h.effect.rm : h.effect.render;
-      render.call(h.effect, p, h.nodes, host.context);
-      if (h.plan.seq !== null) host.glow(h.plan.seq, p);
-      if (p >= 1) {
+      } catch {
+        // One effect must not take the frame down with it: the survivors would
+        // stop mid-animation with their DOM stranded on the map. A thrower
+        // leaves the way every other path leaves — through `finish`, once.
         finish(h);
         ended = true;
       }
     }
+    // Announced on every step where something ended, survivors or not: while a
+    // long effect keeps the loop alive, `data-fx-playing` would otherwise still
+    // name the effect that finished several hundred milliseconds ago.
+    if (ended) announce();
     const running = [...handles.values()].some((h) => !h.frozen || h.fadingSince !== null);
     if (running) frame = host.requestFrame(step);
-    else if (ended) announce();
   };
 
   const schedule = () => {

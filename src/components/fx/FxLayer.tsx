@@ -101,8 +101,9 @@ function makeGlow() {
  *
  * The kill switch is `body[data-fx="off"]`. This layer WRITES that attribute on
  * mount — `"off"` for `?fx=off`, `"on"` otherwise, and never over a value that
- * is already there — so "is FX running on this page" is one attribute to read
- * and one attribute to set, for e2e and for a judge's console alike.
+ * is already there unless `?fx=off` says otherwise — so "is FX running on this
+ * page" is one attribute to read and one attribute to set, for e2e and for a
+ * judge's console alike.
  */
 export function FxLayer() {
   const viewportRef = useRef<HTMLDivElement>(null);

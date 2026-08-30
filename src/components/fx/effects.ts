@@ -820,7 +820,8 @@ const ruler: Effect<RulerNodes> = {
  * with a bloom behind it — and then gets out of the way entirely.
  *
  * The N-scaling law bounds both axes: the stagger fits inside 35% of the
- * timeline however large the selection, and only the 30 nearest bloom.
+ * timeline however large the selection, and only the 30 nearest ON-SCREEN
+ * anchors bloom.
  */
 interface SelectNodes extends FxNodes {
   root: SVGGElement;
@@ -832,7 +833,9 @@ const selectDropIn: Effect<SelectNodes> = {
   dur: 1400,
   setup(ctx, geom) {
     if (geom.kind !== "select" || geom.points.length === 0) return null;
-    const visible = geom.points.slice(0, SELECT_BLOOM_CAP).filter((at) => ctx.project(at));
+    // Project first, then cap: capping first lets 30 anchors the human cannot
+    // see spend the whole budget and leave the visible ones with no landing.
+    const visible = geom.points.filter((at) => ctx.project(at)).slice(0, SELECT_BLOOM_CAP);
     if (visible.length === 0) return null;
     const root = mapGroup(ctx, "select_features");
     const items = visible.map((at) => {

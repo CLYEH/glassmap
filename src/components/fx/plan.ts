@@ -116,7 +116,13 @@ export interface FxSource {
   anchorOf(id: string): LngLat | null;
 }
 
-/** Blooms are capped: past this many, the rest land as one group (spec v2). */
+/**
+ * How many anchors get a landing ring. Past this many the rest get none: the
+ * shipped selection halo is already under every selected feature, so a 31st is
+ * selected on screen, just without the drop-in. The cap counts anchors the
+ * camera can actually see — the effect projects before it slices — so a wide
+ * selection cannot spend its whole budget off screen.
+ */
 export const SELECT_BLOOM_CAP = 30;
 
 /**

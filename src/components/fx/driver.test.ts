@@ -8,6 +8,7 @@ import {
   type FxEffect,
   type FxHost,
   type FxNodes,
+  type LiveFx,
 } from "./driver";
 import type { FxGeom, FxName, FxPlan } from "./plan";
 
@@ -38,14 +39,28 @@ function fakeEffect(name: string, dur: number, log: string[]): FxEffect<Ctx, Rec
   };
 }
 
+/** An effect whose every frame throws — the "one bad effect on the page" case. */
+function explodingEffect(log: string[]): FxEffect<Ctx, Recorded> {
+  const base = fakeEffect("boom", 1000, log);
+  return {
+    ...base,
+    render: (p, nodes, ctx) => {
+      base.render(p, nodes, ctx);
+      throw new Error("render exploded");
+    },
+  };
+}
+
 function harness(options: { killed?: boolean; reduced?: boolean } = {}) {
   const log: string[] = [];
   const glows: [number, number][] = [];
+  const changes: LiveFx[][] = [];
   const queue: ((now: number) => void)[] = [];
   const effects = new Map<string, FxEffect<Ctx>>([
     ["get_map_state", fakeEffect("get_map_state", 1100, log) as FxEffect<Ctx>],
     ["set_map_view", fakeEffect("set_map_view", 1300, log) as FxEffect<Ctx>],
     ["draw_shape", fakeEffect("draw_shape", 9000, log) as FxEffect<Ctx>],
+    ["boom", explodingEffect(log) as FxEffect<Ctx>],
   ]);
   let clock = 1000;
   const host: FxHost<Ctx> = {
@@ -55,6 +70,7 @@ function harness(options: { killed?: boolean; reduced?: boolean } = {}) {
     killed: () => options.killed === true,
     reduced: () => options.reduced === true,
     glow: (seq, p) => glows.push([seq, p]),
+    onChange: (live) => changes.push([...live]),
     effect: (name) => effects.get(name),
     context: { log },
   };
@@ -65,7 +81,7 @@ function harness(options: { killed?: boolean; reduced?: boolean } = {}) {
     const pending = queue.splice(0, queue.length);
     for (const cb of pending) cb(to);
   };
-  return { driver, log, glows, tick, queue };
+  return { driver, log, glows, changes, tick, queue };
 }
 
 const plan = (
@@ -154,6 +170,26 @@ describe("zero residue", () => {
     expect(driver.live()).toEqual([]);
   });
 
+  it("cleans up an effect whose render throws, and keeps the frame for the rest", () => {
+    // FX is commentary; the map is the product. A single effect that throws
+    // mid-flight would otherwise escape the rAF callback, freeze every other
+    // effect at the frame it died on and strand their nodes on the map — the
+    // exact residue law 2 exists to prevent. It leaves through cleanup, once,
+    // and its feed row stops glowing like any other ending.
+    const { driver, log, glows, tick } = harness();
+    driver.play(plan("boom", ["drawing:1"], 1));
+    driver.play(plan("get_map_state", ["viewport"], 2));
+    tick(1550);
+    expect(log.filter((l) => l === "cleanup:boom")).toHaveLength(1);
+    expect(glows).toContainEqual([1, 1]);
+    expect(log).toContain("render:get_map_state:0.50");
+    expect(driver.live().map((fx) => fx.name)).toEqual(["get_map_state"]);
+    tick(2100);
+    // Still exactly once: the thrower is gone, not retried and not re-cleaned.
+    expect(log.filter((l) => l === "cleanup:boom")).toHaveLength(1);
+    expect(driver.live()).toEqual([]);
+  });
+
   it("clears the feed-row glow whenever an effect ends, however it ended", () => {
     const { driver, glows, tick } = harness();
     driver.play(plan("get_map_state", ["viewport"], 5));
@@ -193,6 +229,25 @@ describe("concurrency", () => {
     tick(1100 + PREEMPT_FADE_MS);
     expect(log.filter((l) => l === "cleanup:set_map_view")).toHaveLength(1);
     expect(driver.live()).toHaveLength(1);
+  });
+});
+
+describe("what the surface is told", () => {
+  it("announces the survivors as soon as one effect ends, not when the last does", () => {
+    // `onChange` is the driver's only output: FxLayer turns it into
+    // `data-fx-playing` / `data-fx-count`, which is how QA and a judge's
+    // console learn what the map is doing. Announcing only once the loop runs
+    // dry means a short effect keeps being claimed as live for as long as a
+    // longer neighbour survives it — the badge lies, and an e2e that waits for
+    // it to clear passes on stale text.
+    const { driver, changes, tick } = harness();
+    driver.play(plan("get_map_state", ["viewport"], 1)); // 1100 ms
+    driver.play(plan("set_map_view", ["camera"], 2)); // 1300 ms, independent key
+    tick(2100); // the short one is done; the long one has 200 ms left
+    const announced = changes.at(-1) ?? [];
+    expect(announced.map((fx) => fx.name)).toEqual(["set_map_view"]);
+    // And it is never allowed to disagree with the driver's own answer.
+    expect(announced).toEqual(driver.live());
   });
 });
 

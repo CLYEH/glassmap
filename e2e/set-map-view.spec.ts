@@ -10,19 +10,27 @@ test.describe("set_map_view", () => {
     await page.goto("/");
     await waitForTools(page);
     // The race this test exercises (MapCanvas's toMap guard against a
-    // synchronous, re-entrant moveend from flyTo's own stop()) only exists
-    // once a real MapLibre map has been constructed. MapCanvas is a
-    // next/dynamic import, so window.__glassmap existing does not mean it
-    // has mounted yet -- without this wait the two set_map_view calls below
-    // just write straight to the zustand store with no flyTo in the loop at
-    // all, and the test passes whether or not the guard exists.
+    // synchronous, re-entrant moveend) only exists once a real MapLibre map
+    // has been constructed. MapCanvas is a next/dynamic import, so
+    // window.__glassmap existing does not mean it has mounted yet -- without
+    // this wait the two set_map_view calls below just write straight to the
+    // zustand store with nothing commanding a real camera at all, and the
+    // test passes whether or not the guard exists.
     await waitForLiveMap(page);
 
     // Both calls are issued without awaiting the first -- the re-entrancy
-    // the map-ui-dev -> qa handoff asked for. Before the guard in
-    // MapCanvas.tsx (toMap), the second flyTo's synchronous stop() could
-    // fire a moveend for the FIRST, still mid-flight, camera and clobber
-    // the state the second call is about to read back.
+    // the map-ui-dev -> qa handoff asked for. This suite is network-isolated
+    // by default (fixtures.ts blocks the basemap CDN), so the style JSON
+    // never arrives, styleLoaded never flips true, and applyView always
+    // calls map.jumpTo, never map.flyTo (MapCanvas.tsx) -- jumpTo fires its
+    // own moveend SYNCHRONOUSLY, inside the toMap guard, which is the
+    // re-entrant event under test here. flyTo's own stop()-induced
+    // re-entrant moveend (the race this guard was first written for) only
+    // fires once the style has actually loaded, which needs a reachable
+    // basemap: it is exercised only by the E2E_LIVE_BASEMAP=1 variant. Either
+    // way, without the toMap guard the first call's own synchronous moveend
+    // could clobber the state the second, still-in-flight call is about to
+    // read back.
     const { first, second, get, mapExists } = await page.evaluate<{
       first: ToolResult;
       second: ToolResult;

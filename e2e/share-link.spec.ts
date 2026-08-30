@@ -269,6 +269,13 @@ test.describe("share link (T-31)", () => {
 
     const historyAfter = await page.evaluate(() => history.length);
     expect(historyAfter).toBe(historyBefore);
+
+    // Flat history alone would also be true of a bar that never wrote at all
+    // (e.g. a broken subscription that silently drops every schedule()) --
+    // proving the fragment actually changed from its pre-move value is what
+    // makes "updates the hash" in this test's title a real assertion.
+    const hashAfter = await page.evaluate(() => location.hash);
+    expect(hashAfter).not.toBe(hashBefore);
   });
 
   test("a link with one valid and one impossible drawing keeps the valid one and canonicalises the bar", async ({

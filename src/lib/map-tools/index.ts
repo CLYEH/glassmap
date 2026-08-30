@@ -650,7 +650,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           type: "array",
           items: { type: "string" },
           maxItems: MAX_IDS,
-          description: `Feature ids to select, as returned by find_features or list_features_in_view (at most ${MAX_IDS}; use the filter instead for larger sets). An empty array clears the selection. Ids that are not loaded are reported in unknown_ids instead of failing the call.`,
+          description: `Feature ids to select, as returned by find_features or list_features_in_view (at most ${MAX_IDS}; use the filter instead for larger sets). An empty array clears the selection. Ids that are not loaded are reported in unknown_ids instead of failing the call - except while a share link's categories are still loading, where an id they may contain is kept, selected and reported in pending_ids.`,
         },
         query: {
           type: "string",
@@ -732,45 +732,58 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const byId = new Map<string, MapFeature>();
       for (const f of store.getFeatures()) if (f?.properties?.id) byId.set(f.properties.id, f);
 
+      // While a share link's categories are still arriving, an id nothing can
+      // resolve is not a bad id, it is an early one: this page was opened with
+      // a link that named both the features and the files they live in. A
+      // category settles either way — loaded, or failed and reported in
+      // state.tier2.failed — so the exemption cannot outlive the answer. Which
+      // ids belong to which category cannot be known before the file arrives (a
+      // POI id is "osm:node:<n>", it names no category), so the exemption is by
+      // time, not by id.
+      const restoring = store.getPendingCategories().length > 0;
+
       const unknown_ids: string[] = [];
-      const targets: MapFeature[] = [];
+      // The caller's ids, in the order they were given, whether or not this
+      // page can resolve them yet. Calling an id unknown *and* dropping it is
+      // how an agent asked to "select just the cafe we were sent" loses it:
+      // mid-window there is nothing to look the name up in, and replace:true
+      // would leave the map holding neither the link's selection nor the id the
+      // agent was given.
+      const requestedIds: string[] = [];
       if (hasIds) {
         for (const raw of inp.ids as string[]) {
-          const feature = byId.get(raw.trim());
-          if (feature) targets.push(feature);
+          const id = raw.trim();
+          if (byId.has(id) || (restoring && id.length > 0)) requestedIds.push(id);
           else unknown_ids.push(raw);
         }
       }
-      targets.push(...matched);
 
       // Keeping only ids we can still resolve drops leftovers from a previous
-      // dataset instead of carrying dead ids into the UI — except while a
-      // share link's categories are still arriving. Those ids are not dead,
-      // they are early: this page was opened with a link that named both the
-      // features and the files they live in, and pruning them here is exactly
-      // how a recipient's map used to lose the selection it was sent (the
-      // address bar is rewritten from the store, so the loss propagates into
-      // the recipient's own link). A category settles either way — loaded, or
-      // failed and reported in state.tier2.failed — so the exemption cannot
-      // outlive the answer. Which ids belong to which category cannot be known
-      // before the file arrives (a POI id is "osm:node:<n>", it names no
-      // category), so the exemption is by time, not by id.
-      const restoring = store.getPendingCategories().length > 0;
+      // dataset instead of carrying dead ids into the UI — with the same
+      // exemption, for the same reason: pruning here is exactly how a
+      // recipient's map used to lose the selection it was sent (the address bar
+      // is rewritten from the store, so the loss propagates into the
+      // recipient's own link).
       const nextIds = replace
         ? []
         : store.getSelection().filter((id) => byId.has(id) || restoring);
-      for (const f of targets) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
+      for (const id of requestedIds) if (!nextIds.includes(id)) nextIds.push(id);
+      for (const f of matched) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
       store.setSelection(nextIds);
 
-      const kept = nextIds.slice(0, SELECTION_ID_LIMIT);
+      // Split before capping, never after. During a restore the retained ids of
+      // the link come first and cannot be described yet; one shared cap would
+      // spend all 20 slots on them and answer `selected: []` to a call that did
+      // match features — the agent would be told its own selection failed.
+      const resolvable = nextIds.filter((id) => byId.has(id));
       // An id kept for a category still in flight has nothing to describe yet;
       // pending_ids is where it is accounted for, so `selected` never claims a
       // feature this page cannot name.
-      const pending_ids = kept.filter((id) => !byId.has(id));
+      const pending_ids = nextIds.filter((id) => !byId.has(id)).slice(0, SELECTION_ID_LIMIT);
 
       return {
-        selected: kept
-          .filter((id) => byId.has(id))
+        selected: resolvable
+          .slice(0, SELECTION_ID_LIMIT)
           .map((id) => describeFeature(byId.get(id)!, origin)),
         ...(pending_ids.length ? { pending_ids } : {}),
         ...disclosure,
@@ -1209,7 +1222,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // "remove drawings" when the selection is what overflowed will delete
         // the human's shapes and still not get a link. The loaded categories
         // are deliberately not among the suspects: the whole vocabulary costs
-        // 267 of 8192 bytes (measured in share.test.ts, "the whole
+        // 268 of 8192 bytes (measured in share.test.ts, "the whole
         // vocabulary") - about nine selected features - so an answer blaming
         // them would send the agent to unload data that cannot be the reason.
         const advice = drawings.length

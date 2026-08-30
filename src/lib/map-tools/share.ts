@@ -41,11 +41,24 @@
  * absence a reader cannot shrug off — a build that ignored it would restore the
  * camera and the shapes, silently drop every selected POI because nothing had
  * fetched it, and then rewrite the recipient's own address bar without them.
- * So a link that carries `t` is `v2` and a build that only knows `v1` refuses
- * it out loud, while a link with no tier-2 is still written as `v1`, byte for
- * byte what this codec has always produced. Versioning by *content* rather than
- * by build date is what keeps every existing link, and every link a map with no
- * POIs produces tomorrow, readable by both sides.
+ * So a link that carries `t` is `v2`, while a link with no tier-2 is still
+ * written as `v1`, byte for byte what this codec has always produced:
+ * versioning by *content* rather than by build date keeps every existing link,
+ * and every link a map with no POIs produces tomorrow, readable by both sides.
+ *
+ * What a `v1`-only build does with a `v2` link is refuse it — quietly. It gets
+ * `{ error }` from here, opens its own default map, and its address-bar mirror
+ * then overwrites the fragment with that map's state; the human is told nothing
+ * (the app logs the reason in development only). That is still the better of
+ * the two failures: the link is lost whole rather than half-applied, and no
+ * build claims to have restored a map it could not.
+ *
+ * The dangerous half is on this side, and it is a release gate rather than a
+ * property of the codec: until the page that applies a link also restores `t`
+ * and writes it back, a `v2` link opened here is applied without its categories
+ * and mirrored back as `v1` — the map quietly downgraded, and the recipient's
+ * own link now promising less than the one they were sent. Both sides converge
+ * the moment the mirror carries categories in both directions.
  *
  * Decoding is tolerant on purpose — links get pasted, truncated and hand-edited.
  * A payload whose version is unknown, not base64url, not JSON, or has no camera
@@ -57,12 +70,7 @@
  */
 import type { Position } from "geojson";
 import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
-import {
-  isTier2Category,
-  sortedCategories,
-  TIER2_CATEGORIES,
-  type Tier2Category,
-} from "@/lib/store/tier2";
+import { isTier2Category, sortedCategories, type Tier2Category } from "@/lib/store/tier2";
 import { round5 } from "./state";
 import {
   circleGeometry,
@@ -104,14 +112,6 @@ export const MAX_SHARE_HASH_CHARS = 16_384;
 
 /** A feature id is an id, not a payload; anything longer is not one of ours. */
 const MAX_ID_CHARS = 128;
-
-/**
- * A link can declare at most the whole vocabulary — there is nothing else to
- * load. Measured: all of them cost 267 bytes of a 8192-byte URL (see
- * `share.test.ts`, "the whole vocabulary"), so the ceiling is about bounding
- * what a hostile link can make a recipient fetch, not about the budget.
- */
-const MAX_SHARE_CATEGORIES = TIER2_CATEGORIES.length;
 
 /** Drawings and annotations travel without their store-assigned ids. */
 export type ShareDrawing = Omit<Drawing, "id">;
@@ -343,10 +343,7 @@ export function encodeShareState(input: ShareState): string {
   // Sorted and deduped, like everywhere else tier-2 categories are listed: two
   // maps holding the same categories must produce the same link, or the hash
   // mirror would rewrite the address bar over a difference nobody can see.
-  const categories = sortedCategories((input.categories ?? []).filter(isTier2Category)).slice(
-    0,
-    MAX_SHARE_CATEGORIES,
-  );
+  const categories = sortedCategories((input.categories ?? []).filter(isTier2Category));
   if (categories.length) payload.t = categories;
 
   // Content decides the version: a map with no tier-2 still encodes to the
@@ -481,10 +478,11 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
   // here. The features it would have brought are simply missing, which is what
   // the restore path reports as unresolved ids.
   const rawCategories = Array.isArray(payload.t) ? payload.t : [];
-  const categories = sortedCategories(rawCategories.filter(isTier2Category)).slice(
-    0,
-    MAX_SHARE_CATEGORIES,
-  );
+  // No ceiling beyond the vocabulary itself: `isTier2Category` and the dedupe
+  // in `sortedCategories` already bound this at the 18 names that exist, and
+  // all 18 cost 268 bytes of the 8192 a URL has (share.test.ts, "the whole
+  // vocabulary"). A count limit on top of that could only ever be dead code.
+  const categories = sortedCategories(rawCategories.filter(isTier2Category));
 
   return { view, selection, drawings, annotations, categories };
 }

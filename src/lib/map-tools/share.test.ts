@@ -31,11 +31,12 @@ import {
   type MapView,
   type MemoryToolStore,
 } from "@/lib/store/map-store";
-import type { MapStateOutput } from "./state";
-import { TIER2_CATEGORIES, TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
+import { SELECTION_ID_LIMIT, type MapStateOutput } from "./state";
+import { TIER2_CATEGORIES, type FetchJson } from "@/lib/store/tier2";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { circleGeometry, MAX_SHAPE_POINTS } from "./shapes";
 import {
+  createGatedTier2Fetch,
   createTier2Fetch,
   FIXTURE_FEATURES,
   USER_DRAWN_AREA,
@@ -450,12 +451,14 @@ describe("share codec: the categories a link declares", () => {
     );
   });
 
-  it("marks a link that needs categories as v2, so an older build refuses it out loud", () => {
+  it("marks a link that needs categories as v2, so an older build cannot half-apply it", () => {
     // A build that read this as v1 would ignore `t`, restore the camera and the
     // shapes, and then quietly resolve none of the selected cafes - and, being
     // the same build that rewrites the address bar from the store, hand the
-    // recipient a link without them. Refusing by version prefix is the only
-    // failure the person holding the link can see.
+    // recipient a link without them. The prefix does not make that loud - a v1
+    // build discards an unreadable link in silence and overwrites the fragment
+    // with its own state (see the Versioning note in share.ts) - but it does
+    // make it total: no half-restored map that both sides believe in.
     expect(encodeShareState(WITH_CATEGORIES).startsWith("v2.")).toBe(true);
     expect(encodeShareState(DEMO).startsWith("v1.")).toBe(true);
   });
@@ -509,7 +512,10 @@ describe("share codec: the categories a link declares", () => {
     const bare: ShareState = { ...DEMO, selection: [], drawings: [], annotations: [] };
     const everything = utf8Bytes(encodeShareState({ ...bare, categories: TIER2_CATEGORIES }));
     const cost = everything - utf8Bytes(encodeShareState(bare));
-    expect(cost).toBeLessThan(300);
+    // Pinned rather than bounded: get_share_link's too-large answer quotes this
+    // number to the agent, so a 19th category (one name is about 16 bytes) has
+    // to update that copy instead of quietly making it wrong.
+    expect(cost).toBe(268);
     expect(cost).toBeLessThan(MAX_SHARE_URL_BYTES / 20);
     // Nine selected POIs — ids the length the shipped extract actually uses —
     // cost more than naming all 18 categories, and select_features will
@@ -548,24 +554,6 @@ function page(tier2FetchJson: FetchJson) {
       (await select.execute(input, { signal })) as SelectResult,
     share: async () => (await share.execute({}, { signal })) as ShareResult,
   };
-}
-
-/**
- * A tier-2 server whose category files can be held open, so a test can stand
- * inside the window a recipient's page really has: the link is applied, the
- * agent is already asking questions, and not one feature has arrived.
- */
-function gatedTier2(files?: Record<string, unknown>) {
-  const { fetchJson } = createTier2Fetch(files);
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const gated: FetchJson = async (url) => {
-    if (url !== TIER2_INDEX_URL) await gate;
-    return fetchJson(url);
-  };
-  return { fetchJson: gated, release: () => release() };
 }
 
 /**
@@ -619,7 +607,7 @@ describe("get_share_link: the categories the map has loaded", () => {
     // thing that makes the selection resolvable, and the map would degrade one
     // forward at a time.
     const url = await cafeLink();
-    const { fetchJson, release } = gatedTier2();
+    const { fetchJson, release } = createGatedTier2Fetch();
     const recipient = page(fetchJson);
     const { settled } = applyLink(recipient.store, url);
 
@@ -638,7 +626,7 @@ describe("opening a shared map on a page with no categories loaded", () => {
     // agent's next tool call - has to be able to tell "not loaded yet" from
     // "not real". Only a synchronous declaration can tell it.
     const url = await cafeLink();
-    const { fetchJson, release } = gatedTier2();
+    const { fetchJson, release } = createGatedTier2Fetch();
     const recipient = page(fetchJson);
     const { settled } = applyLink(recipient.store, url);
 
@@ -657,7 +645,7 @@ describe("opening a shared map on a page with no categories loaded", () => {
     // selection, and the recipient's own URL came to promise less than the one
     // they were sent - while the sender watched the map they shared.
     const url = await cafeLink();
-    const { fetchJson, release } = gatedTier2();
+    const { fetchJson, release } = createGatedTier2Fetch();
     const recipient = page(fetchJson);
     const { settled } = applyLink(recipient.store, url);
 
@@ -681,6 +669,68 @@ describe("opening a shared map on a page with no categories loaded", () => {
       "osm:way:10",
     ]);
     expect(after.state.tier2?.loading).toBeUndefined();
+  });
+
+  it("selects an id the link's categories will contain, without calling it unknown", async () => {
+    // "Just show me the Daan cafe" is a normal thing to say about a link that
+    // has only just been opened, and replace:true means nothing else retains
+    // the id. Reporting it as unknown *and* dropping it would leave the map
+    // holding neither the link's selection nor the one feature the agent was
+    // asked for - and the address bar, written from the store, carries that
+    // loss on to the next person.
+    const url = await cafeLink();
+    const { fetchJson, release } = createGatedTier2Fetch();
+    const recipient = page(fetchJson);
+    const { settled } = applyLink(recipient.store, url);
+
+    const narrowed = await recipient.select({
+      ids: ["osm:node:101", "osm:way:10", "gone:404"],
+      replace: true,
+    });
+    // The split: what this page can name, and what it is still waiting for.
+    expect(narrowed.selected?.map((f) => f.id)).toEqual(["osm:way:10"]);
+    expect(narrowed.pending_ids).toEqual(["osm:node:101", "gone:404"]);
+    // Nothing is unknown while a category is in flight: a POI id names no
+    // category ("osm:node:<n>"), so this page cannot yet tell an id the cafe
+    // file will contain from one nothing will. It keeps both, and the window
+    // closes on its own - "gone:404" is pruned by the first call after that.
+    expect(narrowed.unknown_ids).toEqual([]);
+    expect(narrowed.state.selection.ids).toEqual(["osm:node:101", "osm:way:10", "gone:404"]);
+
+    release();
+    await settled;
+
+    const after = await recipient.select({ ids: [], replace: false });
+    expect(after.pending_ids).toBeUndefined();
+    expect(after.selected?.map((f) => f.id)).toEqual(["osm:node:101", "osm:way:10"]);
+  });
+
+  it("still names what it matched when more pending ids than the cap come first", async () => {
+    // The cap is on the answer, not on the map: a link can carry a selection
+    // far larger than the 20 ids an answer lists. Capping before splitting
+    // pending off would spend every slot on ids this page cannot name yet and
+    // answer "selected: []" to a call that did match a feature - and an agent
+    // reading that reports the human's selection as having failed.
+    const many = Array.from({ length: SELECTION_ID_LIMIT + 5 }, (_, i) => `osm:node:9${i}`);
+    const hash = encodeShareState({
+      view: VIEW,
+      selection: many,
+      drawings: [],
+      annotations: [],
+      categories: ["cafe"],
+    });
+    const { fetchJson, release } = createGatedTier2Fetch();
+    const recipient = page(fetchJson);
+    const { settled } = applyLink(recipient.store, `${BASE_URL}#${hash}`);
+
+    const out = await recipient.select({ ids: ["osm:way:10"], replace: false });
+    expect(out.selected?.map((f) => f.id)).toEqual(["osm:way:10"]);
+    expect(out.pending_ids).toHaveLength(SELECTION_ID_LIMIT);
+    // Nothing was dropped from the map itself, only from the answer.
+    expect(out.state.selection.count).toBe(many.length + 1);
+
+    release();
+    await settled;
   });
 
   it("prunes the ids only once the failure has surfaced, and says which file failed", async () => {

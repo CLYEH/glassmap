@@ -338,9 +338,15 @@ export interface Tier2Backing {
   getLoadedCategories(): readonly Tier2Category[];
   /** Appends the features (minus ids already present) and marks the category loaded. */
   addLoadedCategory(category: Tier2Category, features: MapFeature[]): void;
-  /** Declared by a share link, not settled yet. Replaced whole, never appended to. */
+  /**
+   * Categories declared by a share link that have not settled yet. Read as well
+   * as written because a restore adds to this list rather than owning it; see
+   * `restoreCategories`.
+   */
+  getPendingCategories(): readonly Tier2Category[];
   setPendingCategories(categories: Tier2Category[]): void;
-  /** Everything a restore has failed to load so far, replaced whole. */
+  /** Everything a restore has failed to load so far, likewise added to, not owned. */
+  getRestoreFailures(): readonly Tier2RestoreFailure[];
   setRestoreFailures(failures: Tier2RestoreFailure[]): void;
 }
 
@@ -453,7 +459,18 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
    *    is no instant in which a category is neither still coming nor known to
    *    have failed. Pruning is allowed exactly in the second state, and a tool
    *    call landing in a gap between the two would delete the ids the link is
-   *    about while the page could still have said why.
+   *    about while the page could still have said why. The test that holds this
+   *    line asserts over a trace of every write, not over the state afterwards:
+   *    a gap only exists between two assignments, so a test that looks once the
+   *    call has settled cannot see it.
+   *  - **Pending is added to, never replaced**, and only the categories this
+   *    call asked for get their earlier failure cleared. A second restore that
+   *    starts while the first one's files are in flight would otherwise
+   *    un-declare them, and every id waiting on those files is pruned as dead
+   *    by the next tool call — the exact damage the first rule exists to
+   *    prevent, re-introduced by the caller. One caller applies one link per
+   *    page load today, so this costs a filter and buys not having to keep that
+   *    true forever.
    *
    * Sequential and sorted, like `planCategories`: the store then holds the same
    * features in the same order as the map that produced the link, which is what
@@ -466,21 +483,30 @@ export function createTier2Registry(backing: Tier2Backing): Tier2Registry {
     const wanted = sortedCategories(requested.filter(isTier2Category));
     const alreadyLoaded = backing.getLoadedCategories();
     const loaded = wanted.filter((c) => alreadyLoaded.includes(c));
-    let pending = wanted.filter((c) => !alreadyLoaded.includes(c));
-    backing.setPendingCategories(pending);
-    backing.setRestoreFailures([]);
+    const pending = wanted.filter((c) => !alreadyLoaded.includes(c));
+    backing.setPendingCategories(
+      sortedCategories([...backing.getPendingCategories(), ...pending]),
+    );
+    // A retry clears its own category's failure, and nobody else's: another
+    // restore's 404 is still the reason its ids were pruned.
+    backing.setRestoreFailures(
+      backing.getRestoreFailures().filter((f) => !wanted.includes(f.category)),
+    );
     if (!pending.length) return { ok: true, loaded, failed: [] };
 
     const failed: Tier2RestoreFailure[] = [];
-    for (const category of [...pending]) {
+    for (const category of pending) {
       const result = await loadCategory(category);
       if (result.ok) loaded.push(category);
       else {
-        failed.push({ category, error: result.error });
-        backing.setRestoreFailures([...failed]);
+        const failure = { category, error: result.error };
+        failed.push(failure);
+        backing.setRestoreFailures([
+          ...backing.getRestoreFailures().filter((f) => f.category !== category),
+          failure,
+        ]);
       }
-      pending = pending.filter((c) => c !== category);
-      backing.setPendingCategories(pending);
+      backing.setPendingCategories(backing.getPendingCategories().filter((c) => c !== category));
     }
     return { ok: failed.length === 0, loaded: sortedCategories(loaded), failed };
   }

@@ -401,3 +401,35 @@ export function createTier2Fetch(
   };
   return { fetchJson, requests };
 }
+
+/**
+ * The same server with its category files held open until `release()`.
+ *
+ * Everything share links promise about tier-2 is about the window between a
+ * link being applied and its files arriving: the selection is made of ids
+ * nothing can resolve yet, the address-bar mirror is about to run, and the
+ * agent is already asking questions. A test that awaits the restore first is
+ * standing after that window and cannot see anything that happens inside it.
+ * The index is never gated, so the loader gets far enough to ask for a file.
+ */
+export function createGatedTier2Fetch(files?: Record<string, unknown>): {
+  fetchJson: FetchJson;
+  requests: string[];
+  release: () => void;
+} {
+  const server = createTier2Fetch(files);
+  const requests: string[] = [];
+  let open = () => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const gated: FetchJson = async (url) => {
+    // Logged where the request is issued rather than where it is served: what a
+    // gated test asks is whether a second file was requested before the first
+    // one came back, and the server only sees the ones that got through.
+    requests.push(url);
+    if (url !== TIER2_INDEX_URL) await gate;
+    return server.fetchJson(url);
+  };
+  return { fetchJson: gated, requests, release: () => open() };
+}

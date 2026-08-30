@@ -32,6 +32,7 @@ import {
   type Tier2RestoreFailure,
 } from "./tier2";
 import {
+  createGatedTier2Fetch,
   createTier2Fetch,
   TIER2_CAFE_COLLECTION,
   TIER2_FILES,
@@ -50,6 +51,20 @@ function backingFor(fetchJson: FetchJson) {
   let features: MapFeature[] = [];
   let pending: Tier2Category[] = [];
   let failures: Tier2RestoreFailure[] = [];
+  /**
+   * Every write the registry makes to pending or failures, in order, each with
+   * the whole picture at that instant. A timing rule lives *between* two
+   * assignments, so a test that reads the state once the call has settled
+   * cannot fail on one; this is what makes the window observable.
+   */
+  const trace: { pending: Tier2Category[]; failures: Tier2Category[]; loaded: Tier2Category[] }[] =
+    [];
+  const snapshot = () =>
+    trace.push({
+      pending: [...pending],
+      failures: failures.map((f) => f.category),
+      loaded: [...loaded],
+    });
   const backing: Tier2Backing = {
     fetchJson,
     getManifest: () => manifest,
@@ -61,11 +76,15 @@ function backingFor(fetchJson: FetchJson) {
       loaded = [...loaded, category].sort();
       features = [...features, ...incoming];
     },
+    getPendingCategories: () => pending,
     setPendingCategories: (categories) => {
       pending = categories;
+      snapshot();
     },
+    getRestoreFailures: () => failures,
     setRestoreFailures: (f) => {
       failures = f;
+      snapshot();
     },
   };
   return {
@@ -74,6 +93,7 @@ function backingFor(fetchJson: FetchJson) {
     features: () => features,
     pending: () => pending,
     failures: () => failures,
+    trace: () => trace,
   };
 }
 
@@ -367,6 +387,91 @@ describe("restoring the categories a share link declared", () => {
     ]);
     expect(result).toEqual({ ok: true, loaded: ["cafe"], failed: [] });
     expect(pending()).toEqual([]);
+  });
+
+  it("never lets a category be unaccounted for, not even between two writes", async () => {
+    // Timing rule 2, asserted where it can fail. `select_features` prunes the
+    // link's ids exactly when nothing is pending, so an instant in which a
+    // failing category has left pending before its failure was written is an
+    // instant in which those ids are deleted with nothing on the page to say
+    // why - and the page never says it afterwards either, because the failure
+    // arrives once the ids are already gone. Asserting over the state once the
+    // restore has settled cannot see that instant; asserting over every write
+    // can. The bakery is in the index with no file behind it, so this restore
+    // walks through the instant if it exists.
+    const wanted: Tier2Category[] = ["bakery", "cafe"];
+    const { registry, trace } = backingFor(createTier2Fetch().fetchJson);
+    await registry.restoreCategories(wanted);
+
+    const unaccounted = trace()
+      .map((snap) => ({
+        ...snap,
+        unaccounted: wanted.filter(
+          (c) =>
+            !snap.pending.includes(c) && !snap.failures.includes(c) && !snap.loaded.includes(c),
+        ),
+      }))
+      .filter((snap) => snap.unaccounted.length > 0);
+    expect(unaccounted).toEqual([]);
+    // ... and the walk really did pass through a failure, so the invariant
+    // above was not satisfied by a restore that never had anything to record.
+    expect(trace().some((snap) => snap.failures.includes("bakery"))).toBe(true);
+  });
+
+  it("adds to what another restore is still waiting for instead of replacing it", async () => {
+    // Two restores overlapping - a second link applied while the first one's
+    // files are still on the wire. Replacing pending would take cafe and
+    // restaurant out of "still coming" while they are still coming, and the
+    // next select_features would prune every id the first link carried: the
+    // damage the pending list exists to prevent, caused by the caller.
+    const { fetchJson, release } = createGatedTier2Fetch();
+    const { registry, pending } = backingFor(fetchJson);
+
+    const first = registry.restoreCategories(["cafe", "restaurant"]);
+    const second = registry.restoreCategories(["convenience"]);
+    expect(pending()).toEqual(["cafe", "convenience", "restaurant"]);
+
+    release();
+    expect(await first).toMatchObject({ ok: true, loaded: ["cafe", "restaurant"] });
+    expect(await second).toMatchObject({ ok: true, loaded: ["convenience"] });
+    expect(pending()).toEqual([]);
+  });
+
+  it("clears the failures of the categories it is retrying, and nobody else's", async () => {
+    // state.tier2.failed is the only place a recipient is told why the ids a
+    // link carried are gone. A later restore of some other category must not
+    // erase that answer, and retrying the same category must leave one entry,
+    // not two.
+    const { registry, failures } = backingFor(createTier2Fetch().fetchJson);
+    await registry.restoreCategories(["bakery"]);
+    expect(failures().map((f) => f.category)).toEqual(["bakery"]);
+
+    await registry.restoreCategories(["cafe"]);
+    expect(failures().map((f) => f.category)).toEqual(["bakery"]);
+
+    await registry.restoreCategories(["bakery"]);
+    expect(failures().map((f) => f.category)).toEqual(["bakery"]);
+  });
+
+  it("asks for one file at a time, so the recipient's store is built in link order", async () => {
+    // The sorted order is only reproducible if the fetches are sequential:
+    // started together, the files land in whatever order the network returns
+    // them, and two browsers holding the same categories would answer a query
+    // whose results tie differently. The gate is what makes "one at a time"
+    // observable - after it, the request log looks the same either way.
+    const { fetchJson, requests, release } = createGatedTier2Fetch();
+    const { registry } = backingFor(fetchJson);
+    const settled = registry.restoreCategories(["restaurant", "cafe"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests.filter((u) => u !== TIER2_INDEX_URL)).toEqual(["/data/tier2/cafe.geojson"]);
+
+    release();
+    await settled;
+    expect(requests.filter((u) => u !== TIER2_INDEX_URL)).toEqual([
+      "/data/tier2/cafe.geojson",
+      "/data/tier2/restaurant.geojson",
+    ]);
   });
 });
 

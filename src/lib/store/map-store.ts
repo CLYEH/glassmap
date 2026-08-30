@@ -311,7 +311,9 @@ const zustandTier2 = createTier2Registry({
       tier2Features: appendTier2Features(s.features, s.tier2Features, features),
       tier2Loaded: sortedCategories([...s.tier2Loaded, category]),
     })),
+  getPendingCategories: () => useMapStore.getState().tier2Pending,
   setPendingCategories: (tier2Pending) => useMapStore.setState({ tier2Pending }),
+  getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
   setRestoreFailures: (tier2RestoreFailures) => useMapStore.setState({ tier2RestoreFailures }),
 });
 
@@ -388,9 +390,11 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
       tier2Features = appendTier2Features(features, tier2Features, loaded);
       tier2Loaded = sortedCategories([...tier2Loaded, category]);
     },
+    getPendingCategories: () => tier2Pending,
     setPendingCategories: (categories) => {
       tier2Pending = categories;
     },
+    getRestoreFailures: () => tier2RestoreFailures,
     setRestoreFailures: (failures) => {
       tier2RestoreFailures = failures;
     },

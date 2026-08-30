@@ -27,8 +27,21 @@ const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
  * the note is stored as `source: "user"` - the honest default for a form a
  * human typed into, and the one that keeps the sidebar's "pinned by" line and
  * the pin colour truthful.
+ *
+ * @param focusable whether a person can reach the fields with Tab. The popover
+ *   that holds this form is never unmounted - a WebMCP client discovers the
+ *   tool by finding `form[toolname]` in the document, and a closed popover that
+ *   removed it would delete a tool the badge is still counting (`Tools.tsx`) -
+ *   so when it is closed the form is transparent and untouchable by pointer but
+ *   still in the tab order. Two invisible tab stops in front of the map is a
+ *   keyboard user pressing Tab into nowhere, which is why the controls leave
+ *   the order with `tabIndex={-1}` while the popover is shut. They stay
+ *   *focusable* (`-1`, not `inert`): the toggle focuses the input itself on
+ *   open, and `inert` is the one thing that might also hide the form from a
+ *   WebMCP client, which is the worse failure of the two (design2-v5 §8.4
+ *   item 4).
  */
-export function AddNoteForm() {
+export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
   const [status, setStatus] = useState("");
 
   const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -93,8 +106,9 @@ export function AddNoteForm() {
           placeholder="e.g. quiet street, good light"
           toolparamdescription="Text of the note to pin at the current map centre"
           data-testid="add-note-input"
+          tabIndex={focusable ? undefined : -1}
         />
-        <button type="submit" data-testid="add-note-submit">
+        <button type="submit" data-testid="add-note-submit" tabIndex={focusable ? undefined : -1}>
           Pin note
         </button>
       </div>

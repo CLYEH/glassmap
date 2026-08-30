@@ -138,11 +138,20 @@ describe("selectionProvenance", () => {
     expect(selectionProvenance({ selectionSources: { a: "user" } })).toEqual({ a: "user" });
   });
 
-  it("is empty — not wrong — while the field does not exist yet", () => {
-    // `selectionSources` lands in a parallel task. Until it does every bead is
-    // teal, which is the safe direction; what must never happen is the UI
-    // inventing a provenance the store never recorded.
-    expect(selectionProvenance({})).toEqual({});
+  it("hands back the store's own object, not a copy of it", () => {
+    // This is a zustand selector (`MarkerStatus`, and the map's own read): a
+    // fresh object per read compares unequal to the last one on every store
+    // write, and the subscriber re-renders forever. The identity IS the
+    // "nothing changed" signal.
+    const sources = { a: "user" } as const;
+    expect(selectionProvenance({ selectionSources: sources })).toBe(sources);
+  });
+
+  it("says nothing about an id nobody claimed", () => {
+    // What must never happen is the UI inventing a provenance the store never
+    // recorded: an unrecorded id has no entry, and the bead layer's own
+    // default (teal) is what decides how it is painted.
+    expect(selectionProvenance({ selectionSources: {} })).toEqual({});
   });
 });
 

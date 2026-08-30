@@ -353,26 +353,21 @@ export function buildBeadLayerSpecs(threshold = Number.POSITIVE_INFINITY): AddLa
 /**
  * The store's record of who selected each id — "as recorded", never guessed.
  *
- * Read through a widening cast because `selectionSources` landed in a parallel
- * task (T-80) that merges first. Where it is absent every selection reads as
- * the agent's, which is the direction Ruling 3 made safe: a false teal
- * under-credits the human, a false rose would hide the agent's involvement
- * entirely.
+ * A one-field projection of the store rather than a direct `s.selectionSources`
+ * read at each call site, because it is also the zustand *selector* two
+ * components subscribe with: the identity it returns is the store's own object,
+ * which changes only when a selection is written, so nothing re-renders on an
+ * unrelated store write.
  *
- * TODO(T-82): T-80 has shipped `selectionSources: Record<string, "agent" |
- * "user">` on the store root, so delete the cast and the `?? NOTHING` fallback
- * and take `state: Pick<MapStore, "selectionSources">` — the shim only exists
- * for the window in which the two branches were unmerged.
+ * An id with no entry is one nobody claimed, and `beadAnchorsToGeoJson` paints
+ * it teal: the direction Ruling 3 made safe, since a false teal under-credits
+ * the human while a false rose would hide the agent's involvement entirely.
  */
-export function selectionProvenance(state: object): Readonly<Record<string, Provenance>> {
-  return (state as { selectionSources?: Record<string, Provenance> }).selectionSources ?? NOTHING;
+export function selectionProvenance(state: {
+  selectionSources: Readonly<Record<string, Provenance>>;
+}): Readonly<Record<string, Provenance>> {
+  return state.selectionSources;
 }
-
-/**
- * One frozen object, not a fresh `{}` per call: this is read through a zustand
- * selector, and a new identity on every read is an infinite render loop.
- */
-const NOTHING: Readonly<Record<string, Provenance>> = Object.freeze({});
 
 /** All a bead needs from a feature: an id to act on and a geometry to sit on. */
 export type AnchorFeature = { geometry: Geometry | null; properties: { id: string } };

@@ -22,6 +22,9 @@
   --panel: #10141b;
   --panel-2: #131822;
   --glass: rgba(12, 16, 22, 0.88);
+  /* The liquid-glass body, as channels so the material can vary its own alpha
+     (chip, panel, sheet) without three near-identical colours. */
+  --glass-tint: 13, 17, 24;
   --glass-strong: rgba(8, 12, 17, 0.92);
   --sheet: rgba(9, 13, 19, 0.9);
   --hairline: rgba(255, 255, 255, 0.1);
@@ -99,15 +102,157 @@ button {
   white-space: nowrap;
 }
 
-.glass {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
-    var(--glass);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid var(--hairline);
+/* ============================================================
+   LIQUID GLASS — the material (redesign round 2, design2-v5 §8.1 row 14).
+
+   Four layers, and each one is doing a different job:
+
+     1. the tint + two lit gradients      — the body of the glass
+     2. `backdrop-filter: blur + saturate + brightness`  — what is behind it
+     3. `::before`, a masked 1px ring     — the lit border, brighter where
+                                            the light would catch an edge
+     4. `.lens::after`, a masked 7px ring — the EDGE LENS: the rim re-samples
+                                            the backdrop brighter and barely
+                                            blurred, which is the whole
+                                            "refraction" read
+
+   Feasibility ledger, tested and binding: the masked-ring backdrop-filter
+   (4) is real and ships. `backdrop-filter: url(#filter)` is NOT — Chrome
+   answers `CSS.supports("backdrop-filter","url(#x)")` with `true` and then
+   corrupts the composite, so an SVG displacement map may never be used
+   here whatever support queries claim.
+
+   `.deep` is the same material at panel opacity (a lane or a tray has text
+   over it, not a two-word label). `.wake` adds the teal inner rim the agent
+   chrome wears. `.caustic` is the slow light drift for large surfaces, and
+   it stops entirely under `prefers-reduced-motion`.
+   ============================================================ */
+.lg {
+  position: relative;
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background:
+    linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.12),
+      rgba(255, 255, 255, 0.02) 34%,
+      rgba(255, 255, 255, 0) 58%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0) 34%,
+      rgba(0, 0, 0, 0.09) 100%
+    ),
+    rgba(var(--glass-tint), 0.78);
+  backdrop-filter: blur(22px) saturate(175%) brightness(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(175%) brightness(1.12);
+  box-shadow:
+    0 18px 44px rgba(3, 7, 13, 0.46),
+    0 1px 2px rgba(3, 7, 13, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+    inset 1px 0 0 rgba(255, 255, 255, 0.06),
+    inset -1px 0 0 rgba(255, 255, 255, 0.03);
+}
+/* the lit border: a gradient painted into a 1px ring, masked out in the middle */
+.lg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.42),
+    rgba(255, 255, 255, 0.11) 36%,
+    rgba(255, 255, 255, 0.03) 60%,
+    rgba(255, 255, 255, 0.2) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* the edge lens (see the ledger above) */
+.lg.lens::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 7px;
+  backdrop-filter: blur(2px) brightness(1.34) saturate(1.5);
+  -webkit-backdrop-filter: blur(2px) brightness(1.34) saturate(1.5);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.72;
+  pointer-events: none;
+}
+.lg.deep {
+  background:
+    linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.015) 36%,
+      rgba(255, 255, 255, 0) 60%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0) 30%,
+      rgba(0, 0, 0, 0.1) 100%
+    ),
+    rgba(10, 14, 20, 0.86);
+}
+/* agent chrome only: the teal the map's own provenance grammar uses, at the
+   lowest alpha that still reads as "this pane belongs to the agent". */
+html[data-chrome="awake"] .app .lg.wake {
+  box-shadow:
+    0 18px 44px rgba(3, 7, 13, 0.46),
+    0 1px 2px rgba(3, 7, 13, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(45, 212, 191, 0.07),
+    0 0 24px rgba(45, 212, 191, 0.05);
+}
+/* Slow light over a large pane. Inside `overflow: hidden` parents only — it
+   is deliberately larger than its box so the drift never exposes an edge. */
+.caustic {
+  position: absolute;
+  inset: -40%;
+  pointer-events: none;
+  opacity: 0.4;
+  background:
+    radial-gradient(42% 30% at 30% 22%, rgba(255, 255, 255, 0.07), transparent 70%),
+    radial-gradient(36% 26% at 72% 70%, rgba(255, 255, 255, 0.05), transparent 70%);
+  mix-blend-mode: screen;
+  animation: caustic-drift 52s ease-in-out infinite alternate;
+}
+@keyframes caustic-drift {
+  0% {
+    transform: translate(-2%, -1%) rotate(0deg);
+  }
+  100% {
+    transform: translate(3%, 2%) rotate(4deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caustic {
+    animation: none;
+  }
+}
+body[data-fx="off"] .caustic {
+  animation: none;
 }
 
 /* ---------------------------------------------------- layout
@@ -127,6 +272,13 @@ button {
   background: #e9e5dd;
 }
 
+/* The lane, in the same material as everything else — the deep tint, because
+   it carries lists rather than a two-word label, plus the rim light down its
+   own edge. Its geometry is deliberately unchanged: `--lane`, flush to the
+   right edge, full height, because `inspectorLane()` measures this exact
+   rectangle to place the camera centre and to publish `bounds`. Floating it
+   off the edge (design2-v5 §8.1 row 14) is a geometry change and belongs with
+   whoever re-derives that maths, not with the material. */
 .inspector {
   position: absolute;
   top: 0;
@@ -134,12 +286,23 @@ button {
   bottom: 0;
   width: var(--lane);
   z-index: 30;
+  overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 140px),
-    var(--sheet);
-  backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
+    linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.015) 36%,
+      rgba(255, 255, 255, 0) 60%
+    ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0) 140px),
+    rgba(10, 14, 20, 0.86);
+  backdrop-filter: blur(22px) saturate(175%) brightness(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(175%) brightness(1.12);
   border-left: 1px solid var(--hairline);
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 0 1px rgba(45, 212, 191, 0.05),
+    -18px 0 44px rgba(3, 7, 13, 0.36);
   display: flex;
   flex-direction: column;
 }
@@ -219,26 +382,42 @@ button {
   opacity: 0.6;
   flex-shrink: 0;
 }
-.share-chip {
+/* ---------------------------------------------------- tools (top right)
+   Draw, Note, Share: the three things a person can do to this map. On screen
+   in both chromes — an agent arriving does not take the map away from the
+   human — and stepping aside for the inspector lane when one is here. */
+.tools {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  gap: 8px;
+}
+html[data-chrome="awake"] .app .tools {
+  right: calc(var(--lane) + 22px);
+}
+.tool-chip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 13px;
-  font-size: 11.5px;
-  font-weight: 550;
-  color: var(--text-mid);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
-    var(--glass);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  gap: 7px;
+  padding: 9px 14px 9px 12px;
+  font-size: 12px;
+  font-weight: 570;
+  color: var(--text-hi);
   white-space: nowrap;
 }
-.share-chip:hover {
-  color: var(--text-hi);
+.tool-chip:hover {
+  color: #fff;
+}
+.tool-chip svg {
+  flex-shrink: 0;
+}
+.tool-chip .rose {
+  color: var(--human);
+}
+.tool-chip[aria-pressed="true"] {
+  color: var(--human);
 }
 
 /* ---------------------------------------------------- agent activity feed */
@@ -251,6 +430,9 @@ button {
   max-height: calc(100% - 150px);
   display: flex;
   flex-direction: column;
+  /* The lit ring and the lens are painted into the box; a panel that scrolls
+     its own body must not let either escape it. */
+  overflow: hidden;
 }
 .feed-head {
   display: flex;
@@ -509,51 +691,61 @@ button {
   padding: 3px 6px;
 }
 
-/* ---------------------------------------------------- draw chip */
-.draw-zone {
+/* --- under the tools row: the draw hint and the note popover --------------
+   Both hang from the same corner the pill that opens them sits in, and both
+   follow it past the lane when the agent chrome is up. */
+.draw-hint,
+.note-pop {
   position: absolute;
-  top: 14px;
-  right: calc(var(--lane) + 14px);
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  max-width: 260px;
+  top: 58px;
+  right: 14px;
+  z-index: 21;
 }
-.draw-chip {
+html[data-chrome="awake"] .app .draw-hint,
+html[data-chrome="awake"] .app .note-pop {
+  right: calc(var(--lane) + 22px);
+}
+.draw-hint {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 14px 8px 12px;
-  font-size: 12px;
-  font-weight: 570;
-  color: var(--text-hi);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
-    var(--glass);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  white-space: nowrap;
-}
-.draw-chip svg {
-  flex-shrink: 0;
-}
-.draw-chip:hover {
-  border-color: rgba(242, 123, 163, 0.45);
-}
-.draw-chip[aria-pressed="true"] {
-  border-color: rgba(242, 123, 163, 0.55);
-}
-.draw-hint {
-  padding: 7px 11px;
-  font-size: 11px;
+  max-width: 260px;
+  padding: 8px 13px;
+  font-size: 11.5px;
   line-height: 1.4;
-  color: var(--text-mid);
-  text-align: right;
+  color: var(--text-hi);
+}
+.draw-hint .sw {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  border: 1.6px dashed var(--human);
+}
+
+/* The declarative `add_note` tool. Closed is transparent and untouchable —
+   never `display: none`, never unmounted, never `hidden`: a WebMCP client
+   finds this tool by looking for `form[toolname]` in the document, and a
+   popover that took the form out of the DOM would delete a tool the badge is
+   still counting. See the comment in `Tools.tsx` for the `inert` question. */
+.note-pop {
+  width: 268px;
+  padding: 4px;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.note-pop[data-open="true"] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.note-pop .note-form {
+  border-top: none;
+  padding: 10px 11px 11px;
 }
 
 /* ---------------------------------------------------- bottom bar
@@ -584,19 +776,20 @@ button {
    fit-content so it stacks over the legend without stretching it, and the
    bottom bar's flex-end alignment makes it grow upward — the legend does not
    move when it appears. Quieter than the legend by design: text-low, no
-   swatches, the data face for both the category and its count, since these are
-   the agent's own enum values and not names this map has coloured. */
+   swatches. The count keeps the data face; the category is a word a person
+   reads ("Cafés", TIER2_PLURAL) rather than the OSM tag it stands for, so it
+   is set in the UI face like every other name on screen. */
 .poi-strip {
   display: flex;
   align-items: center;
   /* Wraps rather than scrolls. A count is the whole content of this row, and a
-     horizontally scrolled chip cuts it mid-number — at 390px "cafe 2,297"
-     rendered as "cafe 2", which is not a smaller disclosure but a false one.
+     horizontally scrolled chip cuts it mid-number — at 390px "Cafés 2,297"
+     rendered as "Cafés 2", which is not a smaller disclosure but a false one.
      Wrapped, the strip grows upward over the map (the bottom bar is
      bottom-aligned) and stays whole at every width. The cap is the viewport,
      not the parent: below the legend's pill breakpoint the legend-zone parent
      is pill-sized (~121px at 390px), and capping at 100% let long chips like
-     "place_of_worship 1,718" spill onto the basemap unread. */
+     "Worship 1,718" spill onto the basemap unread. */
   flex-wrap: wrap;
   gap: 1px 2px;
   width: fit-content;
@@ -622,7 +815,6 @@ button {
   white-space: nowrap;
 }
 .poi-cat {
-  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-mid);
 }
@@ -632,26 +824,11 @@ button {
   color: var(--text-low);
 }
 
-.legend-full {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 7px 12px;
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.legend-full::-webkit-scrollbar {
-  display: none;
-}
 .legend-total {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 620;
   color: var(--text-hi);
   white-space: nowrap;
-  padding-right: 10px;
-  margin-right: 6px;
-  border-right: 1px solid var(--hairline);
 }
 .lg-chip {
   display: flex;
@@ -674,11 +851,8 @@ button {
   border: 1.5px solid var(--c-district);
 }
 .lg-name {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-mid);
-}
-.lg-name-short {
-  display: none;
 }
 .lg-n {
   font-family: var(--font-mono);
@@ -686,20 +860,33 @@ button {
   color: var(--text-low);
 }
 
-/* collapsed legend (mid + sheet tiers): count + expand affordance, no dots */
+/* The legend, at every width: a pill stating the scale, with the six rows
+   behind it. The always-open strip that used to run along the bottom went
+   with the rest of the dashboard — a landing map says how much is on it and
+   unfolds the key when asked. */
 .legend-pillbox {
   position: relative;
-  display: none;
+  display: flex;
 }
 .legend-pill {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  font-size: 11px;
+  gap: 8px;
+  padding: 9px 13px;
+  font-size: 11.5px;
   font-weight: 620;
   color: var(--text-hi);
   white-space: nowrap;
+}
+.legend-dots {
+  display: flex;
+  gap: 3.5px;
+}
+.legend-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
 .legend-pill svg {
   color: var(--text-low);
@@ -710,8 +897,8 @@ button {
   left: 0;
   bottom: calc(100% + 8px);
   display: none;
-  padding: 9px 12px;
-  min-width: 168px;
+  padding: 10px 13px;
+  min-width: 196px;
 }
 .legend-pillbox.open .legend-pop {
   display: block;
@@ -1202,6 +1389,400 @@ button {
   margin-top: 0;
 }
 
+/* ============================================================
+   Human chrome — the landing map's own furniture.
+
+   Places dock and tray (browse without an agent), the hint, the "On the
+   map" card a tap gets, and the corner whisper. All of it is centred on
+   the visible corridor, so it steps aside when the inspector lane arrives
+   for the same reason the tools row does.
+   ============================================================ */
+
+/* --- Places dock (bottom centre) ---------------------------------------- */
+.dock {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+html[data-chrome="awake"] .app .dock {
+  left: calc((100% - var(--lane) - 10px) / 2);
+}
+.dock-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 10px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-hi);
+  white-space: nowrap;
+}
+.dock-pill svg {
+  color: var(--text-mid);
+  flex-shrink: 0;
+}
+.dock-pill .caret {
+  transition: transform 0.2s ease;
+}
+.dock[data-tray-open="true"] .dock-pill .caret {
+  transform: rotate(180deg);
+}
+/* The browsed category, named and counted. Rose, because a person asked for
+   it — the same grammar the grains on the map are painted in. */
+.dock-active {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-hi);
+  white-space: nowrap;
+}
+.dock-active .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #fcedf2 65%, #ecc9d6);
+  box-shadow:
+    0 0 0 1.5px var(--human-deep),
+    0 0 5px 1px rgba(244, 143, 177, 0.5);
+  flex-shrink: 0;
+}
+.dock-active b {
+  font-weight: 600;
+}
+.dock-active .n {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-low);
+}
+.dock-active .x,
+.spark-callout .x {
+  color: var(--text-low);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  background: none;
+  border: none;
+}
+.dock-active .x:hover,
+.spark-callout .x:hover {
+  color: var(--text-hi);
+}
+
+/* --- the tray ----------------------------------------------------------- */
+.tray {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  width: 560px;
+  max-width: calc(100vw - 24px);
+  padding: 14px 14px 12px;
+  overflow: hidden;
+}
+.tray-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 2px 10px;
+  position: relative;
+}
+.tray-head h3 {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.tray-head span {
+  font-size: 10.5px;
+  color: var(--text-low);
+}
+.tray-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.place-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline-2);
+  text-align: left;
+}
+.place-chip:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.place-chip .pl {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-hi);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.place-chip .pn {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-low);
+}
+.place-chip.active {
+  background: rgba(194, 37, 92, 0.16);
+  border-color: rgba(244, 143, 177, 0.35);
+}
+.place-chip.active .pl {
+  color: #fff;
+}
+.place-chip[data-loading] .pn {
+  color: var(--human);
+}
+.tray-foot {
+  position: relative;
+  margin-top: 10px;
+  padding: 0 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-low);
+}
+
+/* --- the landing hint --------------------------------------------------- */
+.hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.hint b {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+
+/* --- "On the map" card -------------------------------------------------- */
+.otm-card {
+  position: absolute;
+  z-index: 24;
+  width: 238px;
+  padding: 12px 14px 11px;
+  /* Anchored to the tap the component reported, clamped so a place at the
+     edge of the map still gets a card that is entirely on it. 131px is half
+     the card plus a margin. */
+  left: clamp(131px, var(--otm-x), calc(100vw - 131px));
+  top: var(--otm-y);
+  transform: translate(-50%, calc(-100% - 16px));
+}
+/* In agent chrome the visible map ends at the inspector's lane, not at the
+   viewport: a card about a place near the east edge would otherwise be clamped
+   to a position that is entirely behind the glass. The same corridor the camera
+   is padded into and `bounds` reports (MapCanvas's `inspectorLane`). Below
+   921px the inspector is a bottom sheet and there is no lane, so the clamp goes
+   back to the viewport — see the tier below. */
+html[data-chrome="awake"] .app .otm-card {
+  left: clamp(131px, var(--otm-x), calc(100vw - var(--lane) - 131px));
+}
+.otm-card[data-place="below"] {
+  transform: translate(-50%, 16px);
+}
+.otm-name {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.otm-cat {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.otm-cat i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+.otm-prov {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-2);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--text-low);
+}
+.otm-prov .prov {
+  margin-left: auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--agent);
+}
+.otm-prov .prov.rose {
+  color: var(--human);
+}
+.bead-mini {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: radial-gradient(circle at 35% 30%, #fff, #fcedf2 62%, #ecc9d6);
+  box-shadow:
+    0 0 0 1.5px var(--human-deep),
+    0 0 5px 1px rgba(244, 143, 177, 0.5);
+}
+.bead-mini.teal {
+  background: radial-gradient(circle at 35% 30%, #fff, #e9f7f5 62%, #bfe0dc);
+  box-shadow:
+    0 0 0 1.5px var(--agent-deep),
+    0 0 5px 1px rgba(45, 212, 191, 0.45);
+}
+.otm-actions {
+  margin-top: 9px;
+  display: flex;
+  gap: 6px;
+}
+.otm-btn {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline-2);
+  color: var(--text-mid);
+}
+.otm-btn:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* --- the corner whisper ------------------------------------------------- */
+.spark-wrap {
+  position: relative;
+}
+.spark {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(45, 212, 191, 0.85);
+}
+.spark:hover {
+  color: var(--agent);
+}
+.spark-callout {
+  position: absolute;
+  right: 44px;
+  bottom: 3px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-hi);
+}
+.spark-card {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 284px;
+  padding: 13px 15px 14px;
+  text-align: left;
+}
+.spark-card h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.spark-card h4 svg {
+  color: var(--agent);
+  flex-shrink: 0;
+}
+.spark-card p {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-mid);
+}
+.spark-try {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--hairline-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-hi);
+}
+.spark-try b {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 400;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-low);
+}
+
+/* ---------------------------------------------------- chrome gating
+   What the two states change about the layout. Everything that is only
+   agent chrome is not rendered at all in human chrome (`page.tsx`); these
+   are the pieces that stay in the DOM either way — because a headless run
+   reads them, or because the map underneath has to know how much of the
+   screen it still has.
+
+   The attribute is on the root element, written before the first paint by
+   `app/boot-chrome.ts` and from hydration onwards by `useChromeAttribute`.
+   Agent chrome is the exception and human chrome the absence of it
+   (`:not([data-chrome="awake"])`, never `[data-chrome="idle"]`): a document
+   whose script never ran — disabled JavaScript, a refused inline script, a
+   throw — then lands on the human chrome, which is the one a page with no
+   agent is supposed to wear.
+
+   During the first paint of a restored agent link these rules are ahead of
+   the DOM: the lane, the feed and the badge are React's and arrive with
+   hydration, so the map is already dressed for them a moment before they
+   exist. That is the trade — the chrome that would be *wrong* is never
+   painted, and the chrome that is merely *missing* fades in. */
+
+/* The corner whisper is the one human-only surface the server renders, so it
+   is the one that has to be told. Unmounted a moment later (`page.tsx`); this
+   only covers the frames before hydration. */
+html[data-chrome="awake"] .app .spark-wrap {
+  display: none;
+}
+html:not([data-chrome="awake"]) .app .cam-chip {
+  display: none;
+}
+/* No lane to leave room for: the bottom bar spans the whole map, and the
+   corridor `bounds` describes is the whole canvas (MapCanvas's
+   `inspectorLane`, which reads the same store the chrome does). */
+html:not([data-chrome="awake"]) .app .bottom-bar {
+  right: 14px;
+}
+
 /* ---------------------------------------------------- sheet-tier ticker */
 .ticker {
   display: none;
@@ -1212,26 +1793,6 @@ button {
   .badge-surface {
     display: none;
   }
-  .legend-full {
-    padding: 6px 10px;
-  }
-  .legend-full .lg-chip {
-    padding: 3px 5px;
-  }
-  .legend-full .lg-name {
-    font-size: 10.5px;
-  }
-  .legend-full .legend-total {
-    padding-right: 8px;
-    margin-right: 4px;
-  }
-  /* narrow-tier abbreviation only; the category label stays "Supermarkets" */
-  .legend-full .lg-name-full {
-    display: none;
-  }
-  .legend-full .lg-name-short {
-    display: inline;
-  }
 }
 
 /* ==================================================== tier: 921-1240 (mid) */
@@ -1239,28 +1800,11 @@ button {
   .brand-city {
     display: none;
   }
-  .share-chip span {
-    display: none;
-  }
-  .share-chip {
-    padding: 8px 10px;
-  }
-  .legend-full {
-    display: none;
-  }
-  .legend-pillbox {
-    display: flex;
-  }
   .insp-head h2 {
     font-size: 12.5px;
   }
   .insp-sub {
     font-size: 10px;
-  }
-}
-@media (min-width: 1241px) {
-  .legend-pillbox {
-    display: none;
   }
 }
 /* mid tier, busy: an expanded feed ends above the note-pin card, so the
@@ -1279,6 +1823,36 @@ button {
 @media (max-width: 920px) {
   .map-wrap {
     bottom: 46vh;
+  }
+  /* Human chrome has no sheet, so the map keeps the whole screen. */
+  html:not([data-chrome="awake"]) .app .map-wrap {
+    bottom: 0;
+  }
+  html:not([data-chrome="awake"]) .app .bottom-bar {
+    right: 12px;
+  }
+  .dock {
+    bottom: 12px;
+  }
+  /* No lane down here: the inspector is a sheet under the map, not a pane over
+     its east edge, so the whole width is visible again. */
+  html[data-chrome="awake"] .app .otm-card {
+    left: clamp(131px, var(--otm-x), calc(100vw - 131px));
+  }
+  .tray {
+    width: calc(100vw - 24px);
+    padding: 12px 12px 10px;
+  }
+  .tray-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .tray-head span {
+    display: none;
+  }
+  /* One line that cannot wrap, in the width where nothing else fits: the
+     dock beneath it says the same thing by being there. */
+  .hint {
+    display: none;
   }
   .inspector {
     top: auto;
@@ -1314,7 +1888,12 @@ button {
   .brand-name {
     font-size: 13.5px;
   }
-  .draw-zone {
+  .tools,
+  html[data-chrome="awake"] .app .tools,
+  .draw-hint,
+  html[data-chrome="awake"] .app .draw-hint,
+  .note-pop,
+  html[data-chrome="awake"] .app .note-pop {
     right: 12px;
   }
   .brand-cluster {
@@ -1447,16 +2026,48 @@ button {
   }
 }
 
-/* phone: no room for the camera chip or the Draw label */
+/* A card pinned to a fingertip lands under the finger, so on a phone it docks
+   above the Places dock instead. `!important` because the anchor it overrides
+   is the inline left/top `OnTheMapCard` computes from the tap — the component
+   states where the tap was, this states that a phone does not use it. */
+@media (max-width: 640px) {
+  /* One band per row: the dock spans the bottom (the design's own phone
+     arrangement) and the legend/attribution row sits above it. Centred over
+     366px, the Places pill and the browsed-category chip would otherwise land
+     on top of the attribution, which is a licence condition and may never be
+     covered. */
+  .dock,
+  html[data-chrome="awake"] .app .dock {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    transform: none;
+    justify-content: center;
+  }
+  .bottom-bar {
+    bottom: 62px;
+  }
+  .otm-card {
+    position: fixed;
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: 76px;
+    width: auto;
+    transform: none;
+  }
+}
+
+/* phone: no room for the camera chip or the pill labels */
 @media (max-width: 600px) {
   .cam-chip {
     display: none;
   }
-  .draw-chip span {
+  .tool-chip .lbl {
     display: none;
   }
-  .draw-chip {
-    padding: 9px 10px;
+  .tool-chip {
+    padding: 9px 11px;
   }
   .draw-hint {
     display: none;

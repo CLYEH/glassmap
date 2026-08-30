@@ -86,6 +86,10 @@ test.describe("share-link provenance gate (T-54)", () => {
     // A human note goes through the real AddNoteForm submit path with no
     // `agentInvoked` flag -- the honest default for a form a human typed
     // into (AddNoteForm.tsx).
+    // T-82 chrome flip: the note form now lives in a closed popover
+    // (opacity:0, pointer-events:none) until note-toggle opens it.
+    await page.getByTestId("note-toggle").click();
+    await expect(page.getByTestId("note-popover")).toHaveAttribute("data-open", "true");
     await page.getByTestId("add-note-input").fill("human pinned this note");
     await page.getByTestId("add-note-submit").click();
     await expect(page.getByTestId("add-note-status")).not.toHaveText("");

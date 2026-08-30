@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { FEATURE_CATEGORIES } from "@/lib/data/schema";
 import { TIER2_CATEGORIES } from "@/lib/store/tier2";
-import { CATEGORY_SINGULAR, TIER2_SINGULAR, categorySingular } from "./category-labels";
+import {
+  CATEGORY_SINGULAR,
+  TIER2_PLURAL,
+  TIER2_SINGULAR,
+  categorySingular,
+} from "./category-labels";
 
 /**
  * A selected row's one job is to say what kind of place it names. The two
@@ -30,5 +35,35 @@ describe("categorySingular", () => {
       expect(label).not.toContain("_");
       if (category.includes("_")) expect(label).not.toBe(category);
     }
+  });
+});
+
+/**
+ * The Places tray's own vocabulary. It is a menu of kinds of place, so its
+ * rows are plural — and, like the singular map, it must never put an OSM tag
+ * in front of a person.
+ */
+describe("TIER2_PLURAL", () => {
+  it("has a word for every category the tray can offer", () => {
+    for (const category of TIER2_CATEGORIES) {
+      expect(TIER2_PLURAL[category]).toBeTruthy();
+    }
+  });
+
+  it("never prints a raw OSM tag at a human", () => {
+    for (const category of TIER2_CATEGORIES) {
+      expect(TIER2_PLURAL[category]).not.toContain("_");
+    }
+  });
+
+  it("reads as a kind of place, not as one place", () => {
+    // "Cafe 2,297" would be a count of one thing; "Cafés 2,297" is the row a
+    // person is choosing between.
+    expect(TIER2_PLURAL.cafe).toBe("Cafés");
+    expect(TIER2_PLURAL.bakery).toBe("Bakeries");
+    // Mass nouns stay singular on purpose: "Parkings" is not English, and
+    // "Places of worship" does not fit the chip.
+    expect(TIER2_PLURAL.parking).toBe("Parking");
+    expect(TIER2_PLURAL.place_of_worship).toBe("Worship");
   });
 });

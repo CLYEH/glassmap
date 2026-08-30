@@ -128,7 +128,7 @@ export function ActivityFeed() {
 
   return (
     <section
-      className={`feed glass${collapsed ? " collapsed" : ""}${busy ? " has-calls" : ""}`}
+      className={`feed lg deep wake${collapsed ? " collapsed" : ""}${busy ? " has-calls" : ""}`}
       aria-label="Agent activity"
       data-testid="activity-feed"
       data-collapsed={collapsed}
@@ -212,7 +212,7 @@ export function ActivityTicker() {
   const last = activity[activity.length - 1];
 
   return (
-    <div className="ticker glass" data-testid="activity-ticker">
+    <div className="ticker lg wake" data-testid="activity-ticker">
       <span aria-hidden className="pulse" />
       {last ? (
         <span className="ticker-row">

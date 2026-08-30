@@ -176,6 +176,7 @@ describe("planHashUpdate", () => {
 const slice = (patch: Partial<ShareStoreSlice> = {}): ShareStoreSlice => ({
   view: DEFAULT_VIEW,
   selection: [],
+  selectionSources: {},
   drawings: [],
   annotations: [],
   tier2Loaded: [],
@@ -196,23 +197,42 @@ const slice = (patch: Partial<ShareStoreSlice> = {}): ShareStoreSlice => ({
 function recordingStore(initial: Partial<ShareStoreSlice> = {}) {
   const state = slice(initial);
   const restores: Tier2Category[][] = [];
+  /** Every write in order, so the flag-first ordering is assertable as a list. */
+  const writes: string[] = [];
+  let restoredAgentState = false;
+  let attributionExplicit = false;
   const target: ShareRestoreTarget = {
     setView: (view) => {
+      writes.push("view");
       state.view = view;
     },
-    setSelection: (ids) => {
+    setSelection: (ids, attribution) => {
+      writes.push("selection");
       state.selection = ids;
+      state.selectionSources =
+        attribution && typeof attribution !== "string" ? attribution : state.selectionSources;
+    },
+    setRestoredAgentState: (value) => {
+      writes.push("restoredAgentState");
+      restoredAgentState = value;
+    },
+    setSelectionAttributionExplicit: (value) => {
+      writes.push("selectionAttributionExplicit");
+      attributionExplicit = value;
     },
     addDrawing: (drawing) => {
+      writes.push("drawing");
       state.drawings = [...state.drawings, { ...drawing, id: `drawing:${state.drawings.length + 1}` }];
     },
     addAnnotation: (annotation) => {
+      writes.push("annotation");
       state.annotations = [
         ...state.annotations,
         { ...annotation, id: `annotation:${state.annotations.length + 1}` },
       ];
     },
     restoreTier2Categories: (categories) => {
+      writes.push("categories");
       restores.push([...categories]);
       state.tier2Pending = [...new Set([...state.tier2Pending, ...categories])]
         .filter((c) => !state.tier2Loaded.includes(c))
@@ -220,7 +240,13 @@ function recordingStore(initial: Partial<ShareStoreSlice> = {}) {
       return Promise.resolve();
     },
   };
-  return { state, restores, target };
+  return {
+    state,
+    restores,
+    writes,
+    target,
+    flags: () => ({ restoredAgentState, attributionExplicit }),
+  };
 }
 
 describe("shareStateOf", () => {
@@ -241,6 +267,37 @@ describe("shareStateOf", () => {
     // no-change guard above rewrites the bar forever.
     const shared = shareStateOf(slice({ tier2Loaded: ["cafe"], tier2Pending: ["cafe"] }));
     expect(shared.categories).toEqual(["cafe"]);
+  });
+
+  it("carries the human's own ids, so the bar and get_share_link say the same thing", () => {
+    // The whole point of part two: `get_share_link` writes `su` from
+    // `selectionSources`, and until the mirror did too, the address bar
+    // rewrote a proven-human map into a `su`-less one 300 ms later — and a
+    // `su`-less selection reads as the agent's. The proof of "the same thing"
+    // is byte equality with the state the tool encodes, not a shape check.
+    const mixed = slice({
+      selection: ["mrt:1", "park:2"],
+      selectionSources: { "mrt:1": "user", "park:2": "agent" },
+    });
+    expect(shareStateOf(mixed).userSelected).toEqual(["mrt:1"]);
+    expect(encodeShareState(shareStateOf(mixed))).toBe(
+      encodeShareState(state({ selection: ["mrt:1", "park:2"], userSelected: ["mrt:1"] })),
+    );
+  });
+
+  it("says nothing about a selection the agent made alone", () => {
+    // Byte identity is the compatibility promise `su` was designed around: a
+    // map with no human-selected id encodes to exactly what this codec wrote
+    // before the key existed, so every link already in a chat window still
+    // means what it meant.
+    const agentOnly = slice({
+      selection: ["mrt:1"],
+      selectionSources: { "mrt:1": "agent" },
+    });
+    expect(shareStateOf(agentOnly).userSelected).toEqual([]);
+    expect(encodeShareState(shareStateOf(agentOnly))).toBe(
+      encodeShareState(state({ selection: ["mrt:1"] })),
+    );
   });
 
   it("leaves a map that never touched tier-2 encoding to the bytes it always did", () => {
@@ -325,6 +382,77 @@ describe("applyShareHash", () => {
     // fragment this build could not parse.
     expect(restored.view).toBe(DEFAULT_VIEW);
     expect(restored.selection).toEqual([]);
+  });
+});
+
+describe("what a restored link states about who was here", () => {
+  it("writes both flags before it writes a single thing the map shows", () => {
+    // The ordering is the contract (`src/lib/awaken/index.ts`): every
+    // subscriber sees every write, so a camera or a shape landing while the
+    // page still reports "idle" is a restored map shown for a frame in human
+    // chrome, with the agent panels snapping in behind it. It is also what
+    // keeps a *future* restore writer from being read as an agent arriving.
+    const link = encodeShareState(
+      state({ selection: ["node/1"], drawings: [{ ...polygon(4), source: "agent" }] }),
+    );
+    const { writes } = (() => {
+      const store = recordingStore();
+      expect(applyShareHash(link, store.target)).toEqual({ ok: true });
+      return store;
+    })();
+    expect(writes.slice(0, 2).sort()).toEqual([
+      "restoredAgentState",
+      "selectionAttributionExplicit",
+    ]);
+    expect(writes.slice(2)).toEqual(["view", "selection", "drawing"]);
+  });
+
+  it("records the link's `su` ids as the human's, and claims nothing about the rest", () => {
+    // §2.5's razor: the record says what it was told. The ids outside `su` are
+    // left unattributed rather than stamped "agent" — that reading is an
+    // inference, and `selectionAttributionExplicit` is where a surface takes
+    // it knowingly.
+    const link = encodeShareState(
+      state({ selection: ["mrt:1", "park:2"], userSelected: ["mrt:1"] }),
+    );
+    const store = recordingStore();
+    expect(applyShareHash(link, store.target)).toEqual({ ok: true });
+
+    expect(store.state.selectionSources).toEqual({ "mrt:1": "user" });
+    expect(store.flags()).toEqual({ restoredAgentState: true, attributionExplicit: true });
+
+    // And the recipient's own bar re-encodes to the link they were sent, `su`
+    // and all: the round trip that used to lose the sender's proof.
+    expect(encodeShareState(shareStateOf(store.state))).toBe(link);
+  });
+
+  it("keeps a map the human selected alone out of agent chrome entirely", () => {
+    // The one selection that is evidence of no agent at all: attributed, and
+    // attributed entirely to the person. A page that woke up for this link
+    // would be announcing an agent that never existed.
+    const link = encodeShareState(
+      state({ selection: ["mrt:1"], userSelected: ["mrt:1"] }),
+    );
+    const store = recordingStore();
+    expect(applyShareHash(link, store.target)).toEqual({ ok: true });
+
+    expect(store.flags()).toEqual({ restoredAgentState: false, attributionExplicit: true });
+    expect(encodeShareState(shareStateOf(store.state))).toBe(link);
+  });
+
+  it("hedges a link that stated nothing, and stays teal about it", () => {
+    // Every `su`-less link is one indistinguishable wire state — legacy, or
+    // all-agent from the new encoder — so the page presumes agent (the safe
+    // direction, Ruling 3) and knows it is presuming.
+    const link = encodeShareState(state({ selection: ["mrt:1"] }));
+    const store = recordingStore();
+    expect(applyShareHash(link, store.target)).toEqual({ ok: true });
+
+    expect(store.state.selectionSources).toEqual({});
+    expect(store.flags()).toEqual({ restoredAgentState: true, attributionExplicit: false });
+    // Nothing to say, so nothing said: the bar the recipient re-writes is the
+    // same `su`-less link, not one that invents an attribution.
+    expect(encodeShareState(shareStateOf(store.state))).toBe(link);
   });
 });
 

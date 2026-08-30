@@ -92,6 +92,19 @@ Three-round adversarial motion design (SHIP verdict; package in the design sessi
 | T-71 | FX driver + 14 effects (reads=teal gaze, writes=materialize, human=rose; ≤2s, kill switch, reduced motion) | map-ui-dev | done | PR #53; zero residue 0/490k px reviewer-reproduced |
 | T-72 | FX e2e: ON path, concurrency, kill, mount-replay guard, rm, human separation | qa | done | PR #55; MutationObserver over polling for sub-cadence windows |
 
+## The Awakening — approved 2026-08-30 · gate: human-first product that visibly wakes into agent mode
+
+Five-round adversarial design (SHIP verdict). Contract: `.claude/design-archive/redesign2/design2-v5.md` §8 (FINAL HANDOFF, file:line-verified) + `mockup2-v5.html` (reference, absolute path readable from worktrees). Owner signed off (2026-08-30): glow amendment; mixed-cluster=teal; caption-toast 3.2s dwell; su-less links keep teal beads with "from a shared link" hedged copy (su-on-every-link lever recorded, reversible); Chrome declarative-form exposure verified at implementation. Feed re-voicing supersedes the machine-voice rule; mono tool-name stays as the transparency spine.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-80 | Foundations: `selectionSources` store field; `su` share-wire key (ignorable, omitted-when-none) + `restoredAgentStateOf`; `src/lib/awaken/` module (mode machine, flag-first trigger, AWAKEN_MAX_MS=2000, T1–T11) | tool-dev | doing(tool-dev) | §8.2 step 1 |
+| T-81 | Bead marker system: sprites, provenance rims, cluster coalescing (~30px), browse ink budget (K=12, tier minimums), halo split | map-ui-dev | doing(map-ui-dev) | §8.2 step 2; parallel with T-80 |
+| T-82 | Human-first IA: default chrome flip (Draw/Note/Share pills, Places browse, whisper chip), OnTheMapCard, liquid-glass material CSS | map-ui-dev | todo | after T-80/81 merge |
+| T-83 | Awakening choreography (desktop+mobile), restored-state surfaces (wire-true row, FROM LINK hedges), mobile ticker/sheet rework | map-ui-dev | todo | consumes T-80's module |
+| T-84 | Feed re-voicing: human-sentence templates in activity.ts (mono spine kept) | tool-dev | todo | parallel with T-83 |
+| T-85 | e2e: awakening ordering (incl. T11 declarative-form first-call), bead/cluster assertions, human-default + hidden-panel updates to the existing suite, restored hedges | qa | todo | suite WILL churn — panels hidden pre-awakening by design |
+
 ## Handoff log
 
 Append-only. `date · from → to · what`.

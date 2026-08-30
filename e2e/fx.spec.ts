@@ -176,6 +176,12 @@ test.describe("FX layer (T-72)", () => {
   test("kill switch: ?fx=off never gains a single child across 3 calls", async ({ page }) => {
     await page.goto("/?fx=off");
     await waitForTools(page);
+    // MapCanvas is a next/dynamic import that can still be pending well after
+    // window.__glassmap appears (helpers.ts documents it); the tool calls below
+    // exercise MapLibre-backed reads, so without this wait the map is sometimes
+    // still "loading" and list_features_in_view answers "map not ready" -
+    // an intermittent failure diagnosed independently by two reviews.
+    await waitForLiveMap(page);
 
     await expect(page.locator("body")).toHaveAttribute("data-fx", "off");
 

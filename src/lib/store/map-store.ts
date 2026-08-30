@@ -48,8 +48,9 @@ export const DEFAULT_VIEW: MapView = {
  *  - features: the six bundled datasets, written by the data loader once, plus
  *    every tier-2 category a tool has loaded since (see `loadCategory`)
  *  - selection: written by tools (select_features) and by the UI (click)
- *  - selectionSources: written by whichever of those two made the selection;
- *    left empty by a restore, which was never told who made it
+ *  - selectionSources: written by whichever of those two made the selection,
+ *    plus the share-link restore, which records what the link's `su` key
+ *    states and nothing else
  *  - activity: written by the tool layer only; read by the page
  */
 export interface MapToolStore {
@@ -96,26 +97,47 @@ export interface MapToolStore {
   restoreCategories(categories: readonly Tier2Category[]): Promise<Tier2RestoreResult>;
   getSelection(): readonly string[];
   /**
-   * Replace the selection, and record who put each id there.
+   * Replace the selection, and record who put each id there — in one write,
+   * because every subscriber (the address-bar mirror, the awakening, the
+   * chrome) sees each store write, and a selection that lands a tick before
+   * its provenance is a map that briefly misattributes itself.
    *
-   * `source` attributes the ids this write *adds* — an id that was already
-   * selected keeps the source already on record, because this write only kept
-   * it. Ids that leave the selection lose their entry in the same write, so the
-   * record can never name a feature the map is not highlighting.
+   * `attribution` says what this write knows, in one of three shapes:
    *
-   * Omitting `source` records nothing: it is how the share-link restore path
-   * writes a selection whose origin this page was never told (see
-   * `getSelectionSources`). Callers that know the answer must say so —
-   * `select_features` passes `"agent"`, the map's click toggle passes `"user"`.
+   *  - **A single source** — "the ids this write *adds* are this source's".
+   *    An id that was already selected keeps whatever the record already said
+   *    about it, because this write did not select it, it kept it. That is
+   *    what makes a mixed selection expressible: the human clicks a cafe, the
+   *    agent selects forty more around it with `replace: false`, and the cafe
+   *    is still the human's.
+   *  - **A per-id record** — "these are the facts about this selection", and
+   *    it replaces the record wholesale: an id the map names goes in with the
+   *    stated source, an id it does not name comes out unattributed even if it
+   *    had a source a moment ago. Two writers need this. `select_features`
+   *    with `replace: true` chose every id afresh, so every id is the agent's
+   *    (see the call site). The share-link restore states what the link's `su`
+   *    key states — the wire's claim is the fact about a map this page did not
+   *    watch being made — and `restoredSelectionSources` in `map-tools/share.ts`
+   *    builds it.
+   *  - **Omitted** — this write knows nothing new; ids that stay keep their
+   *    record, ids that arrive are unattributed. A selection nobody claimed is
+   *    exactly why the "from a shared link" copy hedges.
+   *
+   * Ids that leave the selection lose their entry whichever shape is used, so
+   * the record can never name a feature the map is not highlighting.
    */
-  setSelection(ids: string[], source?: SelectionSource): void;
+  setSelection(ids: string[], attribution?: SelectionAttribution): void;
   /**
    * Who selected each currently selected id, as recorded — never guessed.
    *
-   * An id with no entry is one nobody on this page claimed: today that is every
-   * id restored from a share link, which is exactly why the surfaces that say
-   * "selected by the agent" have to hedge for them rather than assert. Read by
-   * `get_share_link` (the `su` wire key) and by the UI's provenance copy.
+   * An id with no entry is one nobody claimed: a click or a tool call this
+   * page did not watch, or a share link that carried no `su` for it. Those are
+   * the ids the surfaces that say "selected by the agent" have to hedge for
+   * rather than assert. Read by `get_share_link` today (through
+   * `userSelectedIds`, for the `su` wire key) and, once the component halves
+   * land, by the address-bar mirror through that same helper and by the UI's
+   * provenance copy — see `userSelectedIds` in `map-tools/share.ts` for why
+   * one writer carrying `su` and the other not is a bug and not a gap.
    */
   getSelectionSources(): Readonly<Record<string, SelectionSource>>;
   getDrawings(): readonly Drawing[];
@@ -143,27 +165,47 @@ export interface MapToolStore {
 export type SelectionSource = "agent" | "user";
 
 /**
+ * What a `setSelection` write knows about who chose its ids: one source for
+ * the ids it adds, or the whole per-id truth about the selection it is
+ * writing. See `MapToolStore.setSelection` for which writer uses which, and
+ * why the difference cannot be collapsed.
+ */
+export type SelectionAttribution =
+  | SelectionSource
+  | Readonly<Record<string, SelectionSource>>;
+
+/**
  * Attribution follows the selection: `ids` is the whole new selection, and the
- * result holds an entry only for ids that are in it.
+ * result holds an entry only for ids that are in it. The two shapes of
+ * `attribution` are the two rules, and `MapToolStore.setSelection` is where
+ * they are argued; this is only where they are applied.
  *
- * `source` is written at *add*. An id that was already selected keeps whatever
- * the record already said about it, because this write did not select it — it
- * kept it. That is what makes a mixed selection expressible in one field: the
- * human clicks a cafe, the agent then selects forty more with `replace: false`,
- * and the cafe is still the human's.
+ * Shared by both backings so the in-memory adapter the tool tests assert
+ * against cannot answer this question differently from the app.
  */
 function nextSelectionSources(
   previousSelection: readonly string[],
   previousSources: Readonly<Record<string, SelectionSource>>,
   ids: readonly string[],
-  source?: SelectionSource,
+  attribution?: SelectionAttribution,
 ): Record<string, SelectionSource> {
-  const wasSelected = new Set(previousSelection);
   const next: Record<string, SelectionSource> = {};
+  // Stated per id: the caller is describing this selection, not adding to it,
+  // so what it does not state is unknown — including about an id that was
+  // already selected. Anything else would let a stale tag outlive the write
+  // that superseded it.
+  if (attribution && typeof attribution !== "string") {
+    for (const id of ids) {
+      const stated = attribution[id];
+      if (stated) next[id] = stated;
+    }
+    return next;
+  }
+  const wasSelected = new Set(previousSelection);
   for (const id of ids) {
     const recorded = previousSources[id];
     if (recorded) next[id] = recorded;
-    else if (source && !wasSelected.has(id)) next[id] = source;
+    else if (attribution && !wasSelected.has(id)) next[id] = attribution;
   }
   return next;
 }
@@ -333,7 +375,7 @@ interface MapStore {
   selection: string[];
   /** See `MapToolStore.getSelectionSources`: as recorded, pruned to `selection`. */
   selectionSources: Record<string, SelectionSource>;
-  setSelection: (ids: string[], source?: SelectionSource) => void;
+  setSelection: (ids: string[], attribution?: SelectionAttribution) => void;
   /**
    * Whether the link this page was opened with carried agent work — set by
    * `applyShareHash` from `restoredAgentStateOf(decoded)`, false on a page
@@ -382,10 +424,15 @@ export const useMapStore = create<MapStore>((set, get) => ({
   tier2Manifest: null,
   selection: [],
   selectionSources: {},
-  setSelection: (selection, source) =>
+  setSelection: (selection, attribution) =>
     set((s) => ({
       selection,
-      selectionSources: nextSelectionSources(s.selection, s.selectionSources, selection, source),
+      selectionSources: nextSelectionSources(
+        s.selection,
+        s.selectionSources,
+        selection,
+        attribution,
+      ),
     })),
   restoredAgentState: false,
   setRestoredAgentState: (restoredAgentState) => set({ restoredAgentState }),
@@ -468,7 +515,7 @@ export const zustandToolStore: MapToolStore = {
   getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
   restoreCategories: (categories) => zustandTier2.restoreCategories(categories),
   getSelection: () => useMapStore.getState().selection,
-  setSelection: (ids, source) => useMapStore.getState().setSelection(ids, source),
+  setSelection: (ids, attribution) => useMapStore.getState().setSelection(ids, attribution),
   getSelectionSources: () => useMapStore.getState().selectionSources,
   getDrawings: () => useMapStore.getState().drawings,
   addDrawing: (drawing) => useMapStore.getState().addDrawing(drawing),
@@ -536,8 +583,8 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     },
   });
   let selection = [...(init.selection ?? [])];
-  // An initial selection is attributed to nobody, exactly like one restored
-  // from a link: a test that wants a source writes it through `setSelection`.
+  // An initial selection is attributed to nobody: nothing told this store who
+  // made it. A test that wants a source writes it through `setSelection`.
   let selectionSources: Record<string, SelectionSource> = {};
   let drawings = [...(init.drawings ?? [])];
   let drawingSeq = drawings.length + 1;
@@ -560,8 +607,8 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     getRestoreFailures: () => tier2RestoreFailures,
     restoreCategories: (categories) => tier2.restoreCategories(categories),
     getSelection: () => selection,
-    setSelection: (ids, source) => {
-      selectionSources = nextSelectionSources(selection, selectionSources, ids, source);
+    setSelection: (ids, attribution) => {
+      selectionSources = nextSelectionSources(selection, selectionSources, ids, attribution);
       selection = [...ids];
     },
     getSelectionSources: () => selectionSources,

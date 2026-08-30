@@ -149,6 +149,48 @@ describe("selection provenance", () => {
       expect(store.getSelectionSources(), name).toEqual({ "osm:node:2": "user" });
     }
   });
+
+  it("takes a per-id record as the whole truth, replacing what it does not restate", () => {
+    for (const [name, store] of adapters()) {
+      // The second shape of the write, and the reason it cannot be folded into
+      // the first: a caller that hands over a record is describing the whole
+      // selection, not adding to it. `select_features` with `replace: true`
+      // and the share-link restore both chose every id in the map they are
+      // writing, so a tag left over from the selection they replaced would
+      // outlive the decision that made it.
+      store.setSelection(["osm:node:2", "osm:way:10"], "user");
+      store.setSelection(["osm:node:2", "osm:way:10", "osm:node:3"], {
+        "osm:node:2": "agent",
+      });
+      expect(store.getSelectionSources(), name).toEqual({ "osm:node:2": "agent" });
+    }
+  });
+
+  it("restores a link's `su` as the human's, and drops what this page thought before", () => {
+    for (const [name, store] of adapters()) {
+      // The restore path (`applyShareHash` via `restoredSelectionSources`).
+      // Two facts in one write. The link's statement is recorded, because
+      // without it the recipient's address bar re-encodes the selection with
+      // no `su` and a proven-human map reads as the agent's on reload. And a
+      // click this page made before the link landed is not carried over: the
+      // restore replaced the map, so the wire's statement is the fact about
+      // it, not this page's memory of a map that is gone.
+      store.setSelection(["osm:node:2"], "user");
+      store.setSelection(["osm:node:2", "osm:way:10"], { "osm:way:10": "user" });
+      expect(store.getSelectionSources(), name).toEqual({ "osm:way:10": "user" });
+    }
+  });
+
+  it("ignores a stated source for an id that is not selected", () => {
+    for (const [name, store] of adapters()) {
+      // The same intersect-only rule `su` obeys on the wire: the record can
+      // only ever describe what the map is showing, so a hand-edited link -
+      // or a caller building a record from a stale list - cannot leave a
+      // provenance entry behind for a feature nobody selected.
+      store.setSelection(["osm:node:2"], { "osm:node:2": "user", "osm:way:10": "agent" });
+      expect(store.getSelectionSources(), name).toEqual({ "osm:node:2": "user" });
+    }
+  });
 });
 
 /**

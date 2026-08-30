@@ -791,10 +791,19 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         : store.getSelection().filter((id) => byId.has(id) || restoring);
       for (const id of requestedIds) if (!nextIds.includes(id)) nextIds.push(id);
       for (const f of matched) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
-      // "agent" attributes the ids this call *adds*; anything it merely kept
-      // (replace: false) stays whoever's the store already says it is, so a
-      // human's own click is not overwritten by the agent selecting around it.
-      store.setSelection(nextIds, "agent");
+      // Who chose these, recorded at the write — and the two modes are
+      // genuinely different questions. `replace: true` is a selection built
+      // from nothing: the agent named every id in it, so every id is the
+      // agent's, including one the human had clicked before this call threw
+      // that selection away. Keeping the old "user" tag there would credit a
+      // person for a choice the agent made, which is the direction the whole
+      // provenance record exists to prevent. `replace: false` only adds: the
+      // ids it keeps stay whoever the store already says they are, so a
+      // human's own click survives the agent selecting around it.
+      store.setSelection(
+        nextIds,
+        replace ? Object.fromEntries(nextIds.map((id) => [id, "agent" as const])) : "agent",
+      );
 
       // Split before capping, never after. During a restore the retained ids of
       // the link come first and cannot be described yet; one shared cap would

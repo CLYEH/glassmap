@@ -41,7 +41,7 @@
  *    luck.
  *  - A restored map must never be shown in human chrome. Written last, the
  *    camera, the selection and every shape would land while this module still
- *    reported "human", and the agent chrome would snap in afterwards.
+ *    reported "idle", and the agent chrome would snap in afterwards.
  *
  * ## Contracts the UI owns (mirrored from the FX driver, which owns the map's
  * motion; this owns a one-time mode change, so it cannot live in that driver:
@@ -57,18 +57,53 @@
  *  - **Reduced motion**: an opacity-only crossfade of `AWAKEN_RM_MS`, then
  *    `completeWaking()`.
  *  - **Lifecycle**: write `body[data-awaken]` on every `onMode` call — the
- *    e2e suite waits on "awake", not on a frame.
+ *    e2e suite waits on "awake", not on a frame. The mode values *are* the
+ *    attribute values (`AwakenMode`), so the write is the mode, unmapped.
+ *  - **Mount exactly one controller.** `played` is per *document*, not per
+ *    controller (see below), and this module never sees the DOM, so it cannot
+ *    enforce that. Two live controllers share one flag: whichever crosses
+ *    first spends the story and the other reports the end state with no
+ *    transition — a page that announced the agent in the badge and not in the
+ *    lane. One mount, beside `FxLayer` in `page.tsx`, torn down before any
+ *    remount.
+ *  - **`onMode` can fire synchronously from `teardown()`.** A teardown
+ *    mid-story delivers "awake" from inside the teardown call itself, which in
+ *    React is the cleanup pass: the callback must be safe to run there — write
+ *    the attribute, tolerate a node that is already gone, and start no
+ *    animation whose end nothing is left to hear.
+ *
+ * ## Deviations from the design contract (§8.2 row 6, blessed)
+ *
+ *  1. `restoredAgentStateOf` and `selectionAttributionExplicit` live in
+ *     `map-tools/share.ts`, not `components/share-hash.ts` as the inventory
+ *     row places them: they are codec facts, read by tools, and the tool layer
+ *     may not import from `components/`.
+ *  2. `body[data-awaken]`, the freeze marker and the `__awaken` handle are
+ *     named here as contracts and implemented by the UI. This module is
+ *     store-only, which is what lets the eleven orderings be asserted in node
+ *     rather than through a renderer.
+ *  3. No `timeline.ts`. The schedule is the three constants above; the
+ *     keyframes belong to the CSS that plays them, and a module that only
+ *     re-exported numbers would be one more file to keep in sync with the
+ *     stylesheet.
  */
 
 /**
  * What the page is showing, and the only three answers there are.
+ *
+ * These are the design's own words for `body[data-awaken]` (mockup2-v5.html
+ * :53, :1332), used unchanged as this module's internal vocabulary so the UI
+ * writes `mode()` into the attribute with nothing in between. "idle" is that
+ * contract's name for the human-first chrome — no feed, no badge, no lane —
+ * and a second vocabulary here would buy nothing but a mapping function and a
+ * plausible-looking `data-awaken="human"` that no e2e selector matches.
  *
  * "waking" is the transition itself. It exists as a mode rather than as a
  * boolean beside "awake" because the UI has to be able to tell "the agent
  * chrome is arriving, narrate it" from "the agent chrome is simply here" —
  * a restored page and a remounted one are the second, and get no story.
  */
-export type AwakenMode = "human" | "waking" | "awake";
+export type AwakenMode = "idle" | "waking" | "awake";
 
 /**
  * The ceiling on the whole transition, in ms. The same law the FX driver
@@ -130,7 +165,7 @@ export function isAgentState(state: AwakenState): boolean {
  * replay the awakening on every remount.
  */
 export function bootMode(state: AwakenState): AwakenMode {
-  return isAgentState(state) ? "awake" : "human";
+  return isAgentState(state) ? "awake" : "idle";
 }
 
 export interface AwakenController {
@@ -226,7 +261,7 @@ export function createAwaken({ store, onMode }: AwakenOptions): AwakenController
     // controller that started in the middle of a write sequence was not there
     // for the writes before it, and must not read one of them as a transition
     // it missed.
-    if (mode !== "human" || !isAgentState(state)) return;
+    if (mode !== "idle" || !isAgentState(state)) return;
     // An agent worked before this link was sent. Real agent state, no arrival:
     // this is the write flag-first ordering puts at the head of the restore
     // sequence, and reading it as a crossing is exactly the bug that ordering

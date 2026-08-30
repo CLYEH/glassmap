@@ -42,6 +42,7 @@ import {
   decodeShareState,
   encodeShareState,
   restoredAgentStateOf,
+  restoredSelectionSources,
   type DecodedShareState,
   type ShareState,
 } from "@/lib/map-tools/share";
@@ -112,7 +113,10 @@ function restoreWrites(decoded: DecodedShareState, { flagFirst = true } = {}) {
   const flag = () => store.setRestoredAgentState(restoredAgentStateOf(decoded));
   if (flagFirst) flag();
   store.setView(decoded.view);
-  store.setSelection(decoded.selection);
+  // The link's `su` is what this page knows about who selected these ids -
+  // the only provenance a restore is ever handed, and what the recipient's own
+  // address bar is re-encoded from (`restoredSelectionSources`).
+  store.setSelection(decoded.selection, restoredSelectionSources(decoded));
   for (const drawing of decoded.drawings) store.addDrawing(drawing);
   for (const annotation of decoded.annotations) store.addAnnotation(annotation);
   if (!flagFirst) flag();
@@ -158,7 +162,7 @@ describe("awaken: the mode a page is in", () => {
   it("boots into the end state when the agent work is already there", () => {
     // History, not news. Both cases are real: a link applied before the
     // component mounted, and a remount after the agent has been working.
-    expect(bootMode({ activity: [], restoredAgentState: false })).toBe("human");
+    expect(bootMode({ activity: [], restoredAgentState: false })).toBe("idle");
     expect(bootMode({ activity: [], restoredAgentState: true })).toBe("awake");
     expect(bootMode({ activity: [1], restoredAgentState: false })).toBe("awake");
   });
@@ -169,19 +173,29 @@ describe("awaken: the mode a page is in", () => {
     expect(AWAKEN_MS).toBeLessThanOrEqual(AWAKEN_MAX_MS);
     expect(AWAKEN_RM_MS).toBeLessThan(AWAKEN_MS);
   });
+
+  it("holds the map for at most 2000 ms — the calm-map ceiling, the number FX_MAX_MS states", () => {
+    // The literal, because the law is the number and the relations above
+    // would hold just as happily at twenty seconds. `FX_MAX_MS` is 2000 for
+    // the same reason (`components/fx/driver.ts:23`): the calm map is the
+    // product, and nothing announcing an agent may hold the screen longer
+    // than a couple of seconds. Raising this is a product decision, not a
+    // tuning knob, and it has to break a test to be one.
+    expect(AWAKEN_MAX_MS).toBe(2000);
+  });
 });
 
 describe("awaken trigger: the eleven orderings", () => {
   it("T1 · mount, then the first live call: plays exactly once", () => {
     const w = watch();
-    expect(w.modes).toEqual(["human"]);
+    expect(w.modes).toEqual(["idle"]);
 
     useMapStore.getState().recordActivity(agentCall());
-    expect(w.modes).toEqual(["human", "waking"]);
+    expect(w.modes).toEqual(["idle", "waking"]);
     expect(w.mode()).toBe("waking");
 
     w.completeWaking();
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 
   it("T2 · a second and third call add nothing: the story is an arrival, not an effect", () => {
@@ -192,17 +206,17 @@ describe("awaken trigger: the eleven orderings", () => {
     w.completeWaking();
     useMapStore.getState().recordActivity(agentCall("select_features"));
     useMapStore.getState().recordActivity(agentCall("draw_shape"));
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 
   it("T3 · mount, then a restore carrying agent work: lands awake without a story", () => {
     // The agent worked on the sender's map, not on this one. Announcing an
     // arrival here would credit an agent that is not present.
     const w = watch();
-    expect(w.modes).toEqual(["human"]);
+    expect(w.modes).toEqual(["idle"]);
 
     restoreWrites(AGENT_LINK);
-    expect(w.modes).toEqual(["human", "awake"]);
+    expect(w.modes).toEqual(["idle", "awake"]);
     expect(w.mode()).toBe("awake");
   });
 
@@ -226,7 +240,7 @@ describe("awaken trigger: the eleven orderings", () => {
     expect(w.modes).toEqual(["awake"]);
 
     store.setView(AGENT_LINK.view);
-    store.setSelection(AGENT_LINK.selection);
+    store.setSelection(AGENT_LINK.selection, restoredSelectionSources(AGENT_LINK));
     for (const drawing of AGENT_LINK.drawings) store.addDrawing(drawing);
     expect(w.modes).toEqual(["awake"]);
   });
@@ -237,12 +251,12 @@ describe("awaken trigger: the eleven orderings", () => {
     // arrival that never happened.
     const first = watch();
     first.teardown();
-    expect(first.modes).toEqual(["human"]);
+    expect(first.modes).toEqual(["idle"]);
 
     const second = watch();
     useMapStore.getState().recordActivity(agentCall());
     second.completeWaking();
-    expect(second.modes).toEqual(["human", "waking", "awake"]);
+    expect(second.modes).toEqual(["idle", "waking", "awake"]);
 
     second.teardown();
     const third = watch();
@@ -258,10 +272,10 @@ describe("awaken trigger: the eleven orderings", () => {
     restoreWrites(HUMAN_LINK);
 
     const w = watch();
-    expect(w.modes).toEqual(["human"]);
+    expect(w.modes).toEqual(["idle"]);
 
     useMapStore.getState().recordActivity(agentCall());
-    expect(w.modes).toEqual(["human", "waking"]);
+    expect(w.modes).toEqual(["idle", "waking"]);
   });
 
   it("T8 · a person drawing, pinning and selecting on their own map wakes nothing", () => {
@@ -272,8 +286,8 @@ describe("awaken trigger: the eleven orderings", () => {
     store.addDrawing({ ...USER_DRAWING });
     store.addAnnotation({ source: "user", at: VIEW.center, note: "my desk" });
     store.setSelection(["osm:node:2"], "user");
-    expect(w.modes).toEqual(["human"]);
-    expect(w.mode()).toBe("human");
+    expect(w.modes).toEqual(["idle"]);
+    expect(w.mode()).toBe("idle");
   });
 
   it("T9 · a legacy selection-only link boots awake on the presumption, silently", () => {
@@ -290,27 +304,28 @@ describe("awaken trigger: the eleven orderings", () => {
     expect(w.mode()).toBe("awake");
   });
 
-  it("T10 · the flag's position in the restore sequence: silent either way, human-flash only if last", () => {
+  it("T10 · the flag's position in the restore sequence: silent either way, idle-flash only if last", () => {
     // Sufficiency first: no restore write can be read as an arrival wherever
     // the flag sits, because nothing in the sequence touches `activity`.
     const late = watch();
     restoreWrites(AGENT_LINK, { flagFirst: false });
-    expect(late.modes).toEqual(["human", "awake"]);
+    expect(late.modes).toEqual(["idle", "awake"]);
     expect(late.modes).not.toContain("waking");
 
     // And the reason the ordering is still a contract: written last, every
-    // content write lands while the page still reports human mode, so the
+    // content write lands while the page still reports the idle (human-first)
+    // chrome, so the
     // restored map is rendered in human chrome and the agent chrome snaps in
     // afterwards. Flag-first collapses that window to nothing.
-    const humanWindowWrites = useMapStore.getState().drawings.length;
-    expect(humanWindowWrites).toBeGreaterThan(0);
+    const idleWindowWrites = useMapStore.getState().drawings.length;
+    expect(idleWindowWrites).toBeGreaterThan(0);
     expect(late.mode()).toBe("awake");
 
     useMapStore.setState({ restoredAgentState: false, drawings: [] });
     const early = watch();
     restoreWrites(AGENT_LINK, { flagFirst: true });
     // First write, first notification: nothing after it is seen in human mode.
-    expect(early.modes).toEqual(["human", "awake"]);
+    expect(early.modes).toEqual(["idle", "awake"]);
     expect(early.modes.indexOf("awake")).toBe(1);
   });
 
@@ -324,7 +339,7 @@ describe("awaken trigger: the eleven orderings", () => {
 
     // The human's submission: the note is added, no activity is recorded.
     store.addAnnotation({ source: "user", at: VIEW.center, note: "meet here" });
-    expect(w.modes).toEqual(["human"]);
+    expect(w.modes).toEqual(["idle"]);
 
     // The agent's submission, in the form's own words.
     store.addAnnotation({ source: "agent", at: VIEW.center, note: "Nearest supermarket" });
@@ -335,10 +350,10 @@ describe("awaken trigger: the eleven orderings", () => {
       ok: true,
       refIds: ["annotation:2"],
     });
-    expect(w.modes).toEqual(["human", "waking"]);
+    expect(w.modes).toEqual(["idle", "waking"]);
 
     w.completeWaking();
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 });
 
@@ -354,14 +369,14 @@ describe("awaken lifecycle", () => {
     vi.advanceTimersByTime(AWAKEN_MAX_MS - 1);
     expect(w.mode()).toBe("waking");
     vi.advanceTimersByTime(1);
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 
   it("plays once per document, even if the store's agent evidence comes and goes", () => {
     // Defence in depth, and deliberately kept: today `bootMode` alone would
     // cover every remount, because `activity` only ever grows and
     // `restoredAgentState` is only ever turned on — so a page can never fall
-    // back to human mode and cross a second time. The module-level flag is
+    // back to idle and cross a second time. The module-level flag is
     // what makes "once" a property of the awakening rather than a property of
     // that growth pattern: whoever later trims the feed, resets a session or
     // mounts a second watcher gets no second arrival.
@@ -372,10 +387,36 @@ describe("awaken lifecycle", () => {
 
     useMapStore.setState({ activity: [], activitySeq: 1 });
     const second = watch();
-    expect(second.modes).toEqual(["human"]);
+    expect(second.modes).toEqual(["idle"]);
 
     useMapStore.getState().recordActivity(agentCall("draw_shape"));
-    expect(second.modes).toEqual(["human", "awake"]);
+    expect(second.modes).toEqual(["idle", "awake"]);
+    expect(second.modes).not.toContain("waking");
+  });
+
+  it("a boot straight into the end state spends the story: a later live crossing is silent", () => {
+    // A page restored into agent chrome has already shown the human every
+    // thing the awakening exists to announce, so the announcement is used up
+    // — even though no story was played. Without that, a document whose
+    // store later falls back to idle (this teardown-and-reset, a trimmed
+    // feed, a second watcher) would narrate an arrival the human was already
+    // looking at, on a page where nothing arrived.
+    restoreWrites(AGENT_LINK);
+    const first = watch();
+    expect(first.modes).toEqual(["awake"]);
+    first.teardown();
+
+    useMapStore.setState({
+      restoredAgentState: false,
+      drawings: [],
+      activity: [],
+      activitySeq: 1,
+    });
+    const second = watch();
+    expect(second.modes).toEqual(["idle"]);
+
+    useMapStore.getState().recordActivity(agentCall());
+    expect(second.modes).toEqual(["idle", "awake"]);
     expect(second.modes).not.toContain("waking");
   });
 
@@ -385,12 +426,12 @@ describe("awaken lifecycle", () => {
     // announce anything.
     const w = watch();
     w.completeWaking();
-    expect(w.modes).toEqual(["human"]);
+    expect(w.modes).toEqual(["idle"]);
 
     useMapStore.getState().recordActivity(agentCall());
     w.completeWaking();
     w.completeWaking();
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 
   it("lands on a resting mode when torn down mid-story, and stops listening", () => {
@@ -400,10 +441,10 @@ describe("awaken lifecycle", () => {
     const w = watch();
     useMapStore.getState().recordActivity(agentCall());
     w.teardown();
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
 
     useMapStore.getState().recordActivity(agentCall("draw_shape"));
     vi.advanceTimersByTime(AWAKEN_MAX_MS * 2);
-    expect(w.modes).toEqual(["human", "waking", "awake"]);
+    expect(w.modes).toEqual(["idle", "waking", "awake"]);
   });
 });

@@ -21,7 +21,9 @@ import {
   encodeShareState,
   MAX_SHARE_URL_BYTES,
   restoredAgentStateOf,
+  restoredSelectionSources,
   selectionAttributionExplicit,
+  userSelectedIds,
   utf8Bytes,
   type ShareAnnotation,
   type ShareDrawing,
@@ -907,6 +909,100 @@ describe("share codec: who selected these features", () => {
     const bogus = decodeShareState(wire({ c: [121.5, 25], z: 14, s: ["osm:node:2"], su: "mine" }));
     if ("error" in bogus) throw new Error(bogus.error);
     expect(bogus.userSelected).toBeUndefined();
+  });
+});
+
+/**
+ * The recipient's own link — the round trip `su` exists to survive.
+ *
+ * The address bar is rewritten from the *store*, not from the link that filled
+ * it, so whatever the restore fails to record is gone from every link the
+ * recipient sends on, and from the page's own state after a reload. That makes
+ * "what the restore records" a wire property, tested here beside the codec:
+ * restore-then-re-encode has to be a fixed point, or a link degrades a little
+ * every time it is passed along.
+ */
+describe("share codec: what a restored map says about itself", () => {
+  /** The restore, as `applyShareHash` will perform it (T-82/83 wire it up). */
+  const restoreInto = (store: MemoryToolStore, hash: string) => {
+    const out = decodeShareState(hash);
+    if ("error" in out) throw new Error(out.error);
+    store.setSelection(out.selection, restoredSelectionSources(out));
+    return out;
+  };
+
+  /** The mirror, as `shareStateOf` will write it: from the store, every time. */
+  const mirrorOf = (store: MemoryToolStore, view: MapView) =>
+    encodeShareState({
+      view,
+      selection: store.getSelection(),
+      userSelected: userSelectedIds(store.getSelection(), store.getSelectionSources()),
+      drawings: [],
+      annotations: [],
+    });
+
+  it("keeps a proven-human map proven: the recipient's own link still carries `su`", () => {
+    // The trap, and the reason the restore records anything at all. A map its
+    // owner selected by hand decodes as no agent work (`restoredAgentStateOf`
+    // false). If the recipient's store forgets who selected those ids, the
+    // mirror re-encodes them `su`-less, `su`-less reads as the agent's, and a
+    // map with no agent anywhere in its history presents itself as an agent's
+    // work on the next reload - to the recipient, and to everyone they pass
+    // the link to after that.
+    const sent = encodeShareState({
+      view: VIEW,
+      selection: ["osm:way:10", "osm:node:2"],
+      userSelected: ["osm:way:10", "osm:node:2"],
+      drawings: [],
+      annotations: [],
+    });
+    const store = createMemoryToolStore();
+    const out = restoreInto(store, sent);
+    expect(restoredAgentStateOf(out)).toBe(false);
+    expect(store.getSelectionSources()).toEqual({
+      "osm:way:10": "user",
+      "osm:node:2": "user",
+    });
+
+    const mirrored = mirrorOf(store, out.view);
+    expect(mirrored).toBe(sent);
+    const reread = decodeShareState(mirrored);
+    if ("error" in reread) throw new Error(reread.error);
+    expect(restoredAgentStateOf(reread)).toBe(false);
+  });
+
+  it("records what the link stated and no more, so a mixed link stays mixed", () => {
+    // `su` names the human's ids; it does not name the agent's. The ids
+    // outside it are recorded as nobody's, which is what keeps the mirror from
+    // widening the sender's claim - and still reproduces the sender's link,
+    // because the mirror only ever writes back what `su` carried.
+    const sent = encodeShareState({
+      view: VIEW,
+      selection: ["osm:way:10", "osm:node:2"],
+      userSelected: ["osm:node:2"],
+      drawings: [],
+      annotations: [],
+    });
+    const store = createMemoryToolStore();
+    const out = restoreInto(store, sent);
+    expect(store.getSelectionSources()).toEqual({ "osm:node:2": "user" });
+    expect(mirrorOf(store, out.view)).toBe(sent);
+  });
+
+  it("adds no claim to a legacy link: `su`-less in, `su`-less out", () => {
+    // The link that says nothing must not become a link that says something.
+    // A restore that recorded a source it was never handed would turn every
+    // legacy link into a false statement about its own sender.
+    const sent = wire({ c: [121.5375, 25.0325], z: 14, s: ["osm:node:2", "osm:way:10"] });
+    const store = createMemoryToolStore();
+    const out = restoreInto(store, sent);
+    expect(out.userSelected).toBeUndefined();
+    expect(store.getSelectionSources()).toEqual({});
+    const mirrored = mirrorOf(store, out.view);
+    const reread = decodeShareState(mirrored);
+    if ("error" in reread) throw new Error(reread.error);
+    expect(reread.userSelected).toBeUndefined();
+    expect(restoredAgentStateOf(reread)).toBe(true);
   });
 });
 

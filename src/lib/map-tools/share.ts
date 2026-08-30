@@ -556,17 +556,59 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
 
 /**
  * The ids of `selection` a page recorded as human-selected — what
- * `ShareState.userSelected` takes, from what the store holds.
+ * `ShareState.userSelected` takes, from what the store holds
+ * (`MapToolStore.getSelectionSources`).
  *
- * Both link writers use it (the tool that hands a URL out and the address-bar
- * mirror), because a link the human copies from the bar and a link the agent
- * printed must say the same thing about the same map.
+ * **Today exactly one link writer calls it: `get_share_link`.** The other
+ * writer — the address-bar mirror, `components/useShareHash.ts` through
+ * `shareStateOf` — does not, and until it does, a map whose owner proved they
+ * selected everything on it loses that proof the moment the bar is rewritten:
+ * the recipient's map re-encodes without `su`, and a `su`-less selection is
+ * read as the agent's (`restoredAgentStateOf`). A proven-human map would flip
+ * to presumed-agent on reload. The component halves are T-82/T-83; this is the
+ * three-part contract they implement, and all three parts are needed or none
+ * of them helps:
+ *
+ *  1. `ShareStoreSlice` (`components/share-hash.ts`) gains `selectionSources`,
+ *     so the mirror can see what the store recorded.
+ *  2. `shareStateOf` passes `userSelected: userSelectedIds(selection,
+ *     selectionSources)`, so the bar writes the same `su` the tool does.
+ *  3. `applyShareHash` records the link's `su` ids as `"user"` through the
+ *     widened store API — `setSelection(decoded.selection,
+ *     restoredSelectionSources(decoded))` — so a recipient's store holds the
+ *     provenance its own mirror will have to re-encode.
  */
 export function userSelectedIds(
   selection: readonly string[],
   sources: Readonly<Record<string, SelectionSource>>,
 ): string[] {
   return selection.filter((id) => sources[id] === "user");
+}
+
+/**
+ * The decode-side counterpart: what a restored link states about who selected
+ * its ids, in the shape `setSelection`'s per-id attribution takes.
+ *
+ * Only `su` is stated, and so only `"user"` is ever recorded. The ids outside
+ * `su` are left unattributed rather than recorded as the agent's: §2.5 reads a
+ * `su`-carrying link as "the rest are the agent's", and that is the right
+ * reading for the link's *copy*, but it is an inference, and there is a
+ * reachable page where it is wrong — restore a `su`-less link, click one more
+ * feature, and the mirror writes a `su` whose complement was never attributed
+ * to anybody. The record says what it was told; a surface that wants the
+ * agent half of a restored selection asks `selectionAttributionExplicit` and
+ * takes the presumption knowingly.
+ *
+ * Wholesale on purpose (see `setSelection`): a restore replaces the map, so
+ * the link's statement replaces whatever this page thought about the ids it
+ * used to hold.
+ */
+export function restoredSelectionSources(
+  decoded: DecodedShareState,
+): Record<string, SelectionSource> {
+  const sources: Record<string, SelectionSource> = {};
+  for (const id of decoded.userSelected ?? []) sources[id] = "user";
+  return sources;
 }
 
 /**

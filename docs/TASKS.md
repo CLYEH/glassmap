@@ -74,13 +74,23 @@ Outcome of the basemap-interop adversarial study (5 rounds; tile-reading refuted
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
-| T-60 | Tier-2 pipeline: 18 OSM categories via Overpass → `public/data/tier2/<cat>.geojson` (sorted, schema-compatible) + `tier2/index.json` manifest (category/count/bytes) | data-engineer | doing(data-engineer) | sanctioned channel; fair-use pacing; ODbL attribution |
-| T-61 | Selection painting via feature-state (promoteId), retiring the `["in", …literal]` filter | map-ui-dev | doing(map-ui-dev) | measured: 13.8k-id literal = 1.4s/pass; visuals must stay identical |
-| T-62 | Category-lazy core: `loadCategory` in store; find/list/select category-required for tier-2 + disclosure of unsearched categories + counts-per-category from the manifest; select cap (refuse >500 with advice); gazetteer grows on load | tool-dev | doing(tool-dev) | fixture-driven — no dependency on T-60 output; pages that load no tier-2 behave byte-identically (existing suite stays green) |
-| T-63 | Share manifest: hash wire v2 carries loaded-category list; recipient loads before resolving; prune-exemption for pending ids; loud failure | tool-dev | todo | after T-62 merges |
-| T-64 | UI: legend/inspector disclosure of loaded categories; tier-2 unpainted (design-gated) | map-ui-dev | todo | after T-61/T-62 merge |
-| T-65 | e2e: determinism (load-order invariance), lazy round-trip, share-manifest restore, select cap, perf budget | qa | todo | after wave 2 |
-| T-66 | README: tier-2 section + roadmap (Overpass runtime long-tail — CORS verified open; live plane = backend-when-live-data) | docs-writer | todo | |
+| T-60 | Tier-2 pipeline: 18 OSM categories via Overpass → `public/data/tier2/<cat>.geojson` (sorted, schema-compatible) + `tier2/index.json` manifest (category/count/bytes) | data-engineer | done | PR #44; 31,068 features, ~0.84MB gz |
+| T-61 | Selection painting via feature-state (promoteId), retiring the `["in", …literal]` filter | map-ui-dev | done | PR #45; idle-to-idle flat in N, pixel-identical |
+| T-62 | Category-lazy core: `loadCategory` in store; find/list/select category-required for tier-2 + disclosure of unsearched categories + counts-per-category from the manifest; select cap (refuse >500 with advice); gazetteer grows on load | tool-dev | done | PR #46; dual-tagged determinism mutation-proved |
+| T-63 | Share manifest: hash wire v2 carries loaded-category list; recipient loads before resolving; prune-exemption for pending ids; loud failure | tool-dev | done | PR #48 wire v2 + #50 failure semantics (transient keeps categories declared; loaded clears failed); UI wiring PR #49 |
+| T-64 | UI: disclosure strip + selected-POI materialization (membership-is-selection); tier-2 unpainted by default | map-ui-dev | done | PR #47 + share-hash wiring PR #49 |
+| T-65 | e2e: determinism, lazy round-trip, share-manifest restore (money path PASS), select cap | qa | done | PR #51; 13 specs ×3 zero flake |
+| T-66 | README: city-wide breadth + agent-FX sections; comparison footnotes | docs-writer | done | PR #54 |
+
+## Agent-presence FX — approved 2026-08-30 · shipped same day
+
+Three-round adversarial motion design (SHIP verdict; package in the design session workspace + repo `.claude` archive), then implementation.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-70 | FX tool contract: find/list origin echo (+radius_m), describe name echo, ActivityEntry.fx, RETRYABLE_4XX rider | tool-dev | done | PR #52; distances recompute from printed origins |
+| T-71 | FX driver + 14 effects (reads=teal gaze, writes=materialize, human=rose; ≤2s, kill switch, reduced motion) | map-ui-dev | done | PR #53; zero residue 0/490k px reviewer-reproduced |
+| T-72 | FX e2e: ON path, concurrency, kill, mount-replay guard, rm, human separation | qa | done | PR #55; MutationObserver over polling for sub-cadence windows |
 
 ## Handoff log
 
@@ -100,3 +110,5 @@ Append-only. `date · from → to · what`.
 - 2026-08-29 · reviewer → docs-writer (T-41) · docs/comparison.md:57 "camera animates, state settles at moveend" is over-cautious since PR #39 (no-style path jumps synchronously); soften when T-41 touches the file.
 - 2026-08-29 · qa/map-ui-dev → orchestrator · "Hide" collapses only the inspector body; the glass lane still covers the map, so bounds keep excluding it (correct). If Hide should return the lane to the map, that is a layout decision — padding and bounds would follow for free.
 - 2026-08-30 · orchestrator → all · Tier-2 approved by the user (time explicitly not a constraint; agent-parallel build). Integration on develop only; main stays demo-stable until the whole package is green. Category taxonomy and interface contracts are fixed in the dispatches.
+- 2026-08-30 · qa → orchestrator (decision logged) · the toMap re-entrancy guard is only exercised by the opt-in live-basemap spec (isolation forces jumpTo); accepted live-only exercise for now.
+- 2026-08-30 · docs-writer → orchestrator · README roadmap table still frames a 5-day build with no tier-2/redesign/FX rows — a scope decision for T-41's final pass.

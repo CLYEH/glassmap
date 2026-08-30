@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all eleven tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 2,063 bundled Taipei features (real OpenStreetMap data, plus 25 fabricated sample listings). The interactive map, hand-drawing, annotations and the inspector panel are live, and a live "Agent activity" feed renders every tool call as a one-line summary as it happens. Remaining: the nice-to-have `set_layers` tool, the screenshot-vs-WebMCP comparison measurement, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all eleven tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -72,6 +72,20 @@ Design rules the tool layer follows:
 - Bad input returns a structured `{ error }` instead of throwing, so the agent can recover.
 - No `alert` / `confirm` / `prompt` anywhere — modal dialogs freeze agents.
 
+## City-wide breadth
+
+The six bundled datasets above (2,063 features) are always in memory. Beyond them, GlassMap knows about 18 more OpenStreetMap point-of-interest categories — `restaurant`, `cafe`, `pharmacy`, `hotel`, `bank` and 13 others — covering roughly 31,000 more features across Taipei, held as static files under `public/data/tier2/` and described by a manifest the tools read without loading a byte of feature data.
+
+**Naming a category is what fetches it.** Pass `categories: ["restaurant"]` to `find_features`, `list_features_in_view`, `describe_surroundings` or `compare_areas` and it fetches every restaurant in the city once — 13,789 of them — and keeps them in memory for the rest of the session. There is no "list every category" call: loading all 18 at once would put ~31,000 features into a browser tab for a question nobody asked. A query that omits `categories` is answered only from what is already loaded (the six bundled datasets plus whatever a category call already fetched this session) — and it says so: the answer's `unsearched_categories` names every category it did not search, each with its true city-wide count from the manifest, so "no cafes nearby" can never be confused with "no cafe file was ever fetched."
+
+A few real counts from the manifest (`public/data/tier2/index.json`): `restaurant` 13,789, `convenience` 3,231, `bicycle_rental` 2,602 (YouBike stations), `cafe` 2,297, down to `museum` 119 and `hospital` 74. Full table, tag mapping and Overpass queries for all 18 are in [`public/data/README.md`](./public/data/README.md).
+
+`select_features` still highlights every match a filter finds, its contract since the tool shipped — but once a point-of-interest category is involved, a filter matching more than 500 of them is refused rather than lighting up half the city: the answer gives the true count and asks for `near`+`radius_m`, `within` or `query` to narrow it. The six bundled categories are exempt from that cap.
+
+A `get_share_link` link carries the *names* of every point-of-interest category the sender had loaded, not their features — the recipient's page fetches the same files itself — so opening the link rebuilds the sender's map, selection included, instead of resolving to features the recipient's session never heard of. A link that names a category is written as `v2`; a link with none still encodes to the exact `v1` bytes it always did, so no existing link breaks.
+
+Fetching a category file can fail two honestly different ways: a **permanent** failure (this deployment ships no such file — a 404) drops the category and is not retried; a **transient** one (a slow connection, a rate-limited mirror — a 5xx, or a 408/425/429 that means "ask again") keeps the category on the books, including in any share link handed out meanwhile, so the next call simply tries again.
+
 ## Working together on the same map
 
 The map is shared state, not a private channel for the agent:
@@ -81,6 +95,10 @@ The map is shared state, not a private channel for the agent:
 - **Two WebMCP APIs, one state.** Besides the imperative tools above, the inspector's pin-note field is a plain `<form toolname="add_note">` — the declarative half of WebMCP, filled in by a human or submitted by an agent with no JavaScript registration. `SubmitEvent.agentInvoked` tells the store which one happened, so the note is stored as `source: "agent"` or `source: "user"` honestly either way. Together the 11 registered tools and this one declarative form are the 12 the on-page WebMCP badge counts.
 
 The address bar is part of that shared state, too: it always holds a link back to the map exactly as it stands, kept current whether the human or the agent made the last change, and opening that link — or one handed off from `get_share_link` — restores the same camera, selection, drawings and notes rather than a description of them. That is what lets a judge (or anyone else) reproduce what this README can only show as a screenshot.
+
+## Seeing the agent work
+
+Every tool call also plays out on the map itself, not just as a row in the activity feed: a read (`get_map_state`, `find_features`, `describe_surroundings`, …) washes translucent teal across whatever it looked at — a compass sweep, a glinting hit, a soft glow over the viewport — then fades to nothing; a write (`set_map_view`, `draw_shape`, `select_features`, `annotate`, …) materializes in the same teal as the change lands — a reticle drops onto the new camera centre, a shape draws itself on, a pin lands — and what's left behind is exactly the ordinary map state it always would have been. A shape or note a human adds by hand plays the identical two verbs in rose instead of teal, so who did what is legible without reading a word. Every effect is capped under two seconds and leaves zero residue on the canvas, and the matching row in the "Agent activity" feed glows on the same clock it animates on. Append `?fx=off` to the URL to turn the whole layer off, and it already honours `prefers-reduced-motion` (a short opacity crossfade plays instead of the full animation).
 
 ## Try it
 
@@ -104,10 +122,14 @@ const found = await document.modelContext.executeTool(byName.find_features, {
   categories: ["park", "school"],
 });
 JSON.parse(found);
-// → { total: <number in range>, returned: <number listed, ≤ limit>, features: [
-//     { id, name, name_en?, category: "park" | "school", distance_m, direction }, … ] }
-// e.g. { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
-//        category: "park", distance_m: <metres>, direction: <compass point> }
+// → { total: <number in range>, returned: <number listed, ≤ limit>,
+//     features: [ { id, name, name_en?, category: "park" | "school", distance_m, direction }, … ],
+//     origin: { lng, lat },     // what these distances were measured from
+//     radius_m: 800 }           // echoed back because near/radius_m bounded the search
+// e.g. { total: 13, returned: 13, features: [
+//     { id: "osm:way:1227733215", name: "大安森林公園", name_en: "Da-an Forest Park",
+//       category: "park", distance_m: 355, direction: "S" }, … ],
+//     origin: { lng: 121.53528, lat: 25.03356 }, radius_m: 800 }
 
 // Draw a circle so the human can see the area, then ask what's inside it — the
 // same "within" an agent would use to read a shape a human drew by hand.
@@ -186,12 +208,12 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 | D1 | MapLibre + OpenFreeMap on Vercel; `get_map_state` and `set_map_view` on a real map; verify a WebMCP client can call them | done |
 | D2 | GeoJSON data; `list_features_in_view`, `find_features`, `select_features` + sidebar | done |
 | D3 | `draw_shape` (agent- and hand-drawn), `annotate`, `describe_surroundings` | done |
-| D4 | `compare_areas`, `measure`, `get_share_link` (done); `set_layers`, screenshot-vs-WebMCP comparison (todo) | in progress |
+| D4 | `compare_areas`, `measure`, `get_share_link`, the [screenshot-vs-WebMCP comparison](./docs/comparison.md) (done); `set_layers` (todo) | in progress |
 | D5 | Demo video, submission text | todo |
 
 ## Data and licensing
 
-Six GeoJSON files bundled under `public/data/`, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API. Full provenance, Overpass queries and export notes are in [`public/data/README.md`](./public/data/README.md).
+Six GeoJSON files bundled under `public/data/` and loaded on startup, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API. A further 18 point-of-interest files under `public/data/tier2/` are prepared the same way but loaded lazily, one category at a time, on request — see [City-wide breadth](#city-wide-breadth) above. Full provenance, Overpass queries and export notes for all 24 categories are in [`public/data/README.md`](./public/data/README.md).
 
 | Dataset | Category | Features |
 |---|---|---:|

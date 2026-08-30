@@ -92,6 +92,19 @@ Three-round adversarial motion design (SHIP verdict; package in the design sessi
 | T-71 | FX driver + 14 effects (reads=teal gaze, writes=materialize, human=rose; ≤2s, kill switch, reduced motion) | map-ui-dev | done | PR #53; zero residue 0/490k px reviewer-reproduced |
 | T-72 | FX e2e: ON path, concurrency, kill, mount-replay guard, rm, human separation | qa | done | PR #55; MutationObserver over polling for sub-cadence windows |
 
+## The Awakening — approved 2026-08-30 · gate: human-first product that visibly wakes into agent mode
+
+Five-round adversarial design (SHIP verdict). Contract: `.claude/design-archive/redesign2/design2-v5.md` §8 (FINAL HANDOFF, file:line-verified) + `mockup2-v5.html` (reference, absolute path readable from worktrees). Owner signed off (2026-08-30): glow amendment; mixed-cluster=teal; caption-toast 3.2s dwell; su-less links keep teal beads with "from a shared link" hedged copy (su-on-every-link lever recorded, reversible); Chrome declarative-form exposure verified at implementation. Feed re-voicing supersedes the machine-voice rule; mono tool-name stays as the transparency spine.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-80 | Foundations: `selectionSources` store field; `su` share-wire key (ignorable, omitted-when-none) + `restoredAgentStateOf`; `src/lib/awaken/` module (mode machine, flag-first trigger, AWAKEN_MAX_MS=2000, T1–T11) | tool-dev | done | PR #60; su mirror trap closed (restore records su as user); replace:true re-attributes |
+| T-81 | Bead marker system: sprites, provenance rims, cluster coalescing (~30px), browse ink budget (K=12, tier minimums), halo split | map-ui-dev | done | PR #61; found map.addLayer silently skips invalid layers — guard walks every spec |
+| T-82 | Human-first IA: chrome flip, Places tray, OnTheMapCard (features+pins+drawings), liquid glass, boot-chrome no-flash probe, share su wiring | map-ui-dev | done | PR #62 (with qa's five-spec rider + the pin+card idle-note ruling) |
+| T-83 | Awakening choreography (both tiers), restored surfaces, honest badge (Agent-readable until a live call) | map-ui-dev | done | PR #64; handover jumps 194/235/155px → 0.00 measured |
+| T-84 | Feed re-voicing (11/11 templates tested; 'all' honestly gated) + riders | tool-dev | done | PR #63; the cafés-row decline recorded with corrected reasoning |
+| T-85 | e2e: awakening contract end-to-end, bead/cluster live specs, suite hardening (browser-clock timing) | qa | done | PR #65 (+ the five-spec rider on #62, the flake fix #59); verdict: the contract holds |
+
 ## Handoff log
 
 Append-only. `date · from → to · what`.
@@ -112,3 +125,6 @@ Append-only. `date · from → to · what`.
 - 2026-08-30 · orchestrator → all · Tier-2 approved by the user (time explicitly not a constraint; agent-parallel build). Integration on develop only; main stays demo-stable until the whole package is green. Category taxonomy and interface contracts are fixed in the dispatches.
 - 2026-08-30 · qa → orchestrator (decision logged) · the toMap re-entrancy guard is only exercised by the opt-in live-basemap spec (isolation forces jumpTo); accepted live-only exercise for now.
 - 2026-08-30 · docs-writer → orchestrator · README roadmap table still frames a 5-day build with no tier-2/redesign/FX rows — a scope decision for T-41's final pass.
+- 2026-08-31 · qa → map-ui-dev · MapCanvas.tsx:633 comment says a bead tap deselects; it opens the card (correct behavior, stale words) — cosmetic, ride any next components pass.
+- 2026-08-31 · reviewers → docs-writer · README lines 6/56/94/95 still describe the pre-Awakening chrome (sidebar as landing surface, feed as landing chrome) — the final docs pass (T-41) owns the rewrite.
+- 2026-08-31 · suite lesson (recorded) · timing checks against animations must anchor to the browser's clock (MutationObserver + performance.now in one evaluate); Node-side polls across IPC lose races on shared runners — three instances fixed in fx.spec.ts.

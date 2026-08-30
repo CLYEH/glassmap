@@ -4,11 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isFeatureCategory } from "@/lib/data/schema";
 import { useMapStore, type Annotation, type Drawing } from "@/lib/store/map-store";
 import { ActivityPanel } from "./ActivityFeed";
-import { AddNoteForm } from "./AddNoteForm";
 import { selectActivity } from "./activity-model";
 import { categorySingular } from "./category-labels";
 import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
+import { selectionClaim, type SelectionClaim } from "./restored-model";
 import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
 import { SHEET_TIER, useMediaQuery } from "./useMediaQuery";
@@ -24,17 +24,25 @@ function SectionHead({
   count,
   testid,
   highlight,
+  tag,
 }: {
   icon: React.ReactNode;
   title: string;
   count: number;
   testid: string;
   highlight?: boolean;
+  /** Who put these here, when the page can say so honestly (`selectionClaim`). */
+  tag?: SelectionClaim | null;
 }) {
   return (
     <div className="sec-head">
       {icon}
       <h3>{title}</h3>
+      {tag ? (
+        <span className={`sec-tag${tag === "YOU" ? " you" : ""}`} data-testid={`${testid}-tag`}>
+          {tag}
+        </span>
+      ) : null}
       <span className={`sec-count${highlight && count > 0 ? " active" : ""}`} data-testid={testid}>
         {count}
       </span>
@@ -129,15 +137,18 @@ function summarise(selection: number, shapes: number, notes: number): string {
  * What is on the map, in words: the selected features, the shapes and the
  * pinned notes, each labelled with who put it there and removable by hand.
  *
+ * Agent chrome: it is mounted only once an agent is here (`page.tsx`). A
+ * person browsing Taipei gets the map, not a lane listing what is on it — and
+ * the two things this panel used to be the only home for have moved out to
+ * where a human can reach them without an agent: the declarative `add_note`
+ * form is now the Note popover (`Tools.tsx`, always in the DOM, because a
+ * WebMCP client discovers it by finding `form[toolname]`), and a tapped
+ * feature answers in `OnTheMapCard`.
+ *
  * Below 921px it becomes the bottom sheet, where Contents shares the space
  * with the Activity feed (there is no room for the floating panel), and the
  * sheet opens on Activity — the pitch, or the calls, is the stronger first
  * read at that size.
- *
- * Only the three lists collapse. The declarative `add_note` form sits outside
- * the collapsible body and stays visible: a collapsed `display: none` form is
- * a 0x0 element whose own fields cannot be focused or filled in, so folding a
- * panel would quietly break a tool an agent had already been told about.
  */
 export function Inspector() {
   const [open, setOpen] = useState(true);
@@ -150,6 +161,8 @@ export function Inspector() {
   const removeDrawing = useMapStore((s) => s.removeDrawing);
   const removeAnnotation = useMapStore((s) => s.removeAnnotation);
   const activityCount = useMapStore((s) => selectActivity(s).length);
+  const selectionSources = useMapStore((s) => s.selectionSources);
+  const selectionAttributionExplicit = useMapStore((s) => s.selectionAttributionExplicit);
   const sheet = useMediaQuery(SHEET_TIER);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -157,6 +170,10 @@ export function Inspector() {
     () => resolveSelection(features, selection, tier2Features),
     [features, selection, tier2Features],
   );
+  // Who selected these, on the one surface that lists them all. Null — no tag —
+  // whenever the answer is not the same for every row: a section head has room
+  // for one word, and one word about a mixed list would be false for part of it.
+  const claim = selectionClaim(selection, selectionSources, selectionAttributionExplicit);
   const quiet = rows.length === 0 && drawings.length === 0 && annotations.length === 0;
 
   // In the sheet, the feed shares the inspector's scroll container, so
@@ -220,6 +237,7 @@ export function Inspector() {
               count={rows.length}
               testid="sidebar-selection-count"
               highlight
+              tag={claim}
             />
             <ul data-testid="sidebar-selection">
               {rows.map((row) => (
@@ -352,9 +370,6 @@ export function Inspector() {
           <ActivityPanel />
         </div>
       </div>
-
-      {/* Outside the collapsible body on purpose - see the comment above. */}
-      <AddNoteForm />
     </aside>
   );
 }

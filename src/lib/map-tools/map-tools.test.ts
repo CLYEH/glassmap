@@ -296,6 +296,19 @@ describe("get_map_state", () => {
     const written = await call(byName.set_map_view, { zoom: 16 });
     expect(Object.keys(written).sort()).toEqual(Object.keys(read).sort());
   });
+
+  it("warns that the first call of a session can report the pre-chrome corridor", () => {
+    // The page opens without its agent chrome and grows the inspector lane the
+    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`), so
+    // the first call's answer is computed against a viewport that is about to
+    // shrink. The tool cannot fix that - the chrome appears *because* of this
+    // call - and an agent that is not told will read the difference between
+    // call one and call two as the human having moved the map. The description
+    // is the only place it can learn otherwise.
+    expect(toolsFor().byName.get_map_state.description).toMatch(
+      /first call of a session can report a slightly wider corridor/,
+    );
+  });
 });
 
 describe("set_map_view", () => {
@@ -706,6 +719,40 @@ describe("select_features", () => {
     await call(byName.select_features, { ids: ["osm:way:10"] });
     await call(byName.select_features, { ids: ["osm:way:10", "osm:way:10"], replace: false });
     expect(store.getSelection()).toEqual(["osm:way:10"]);
+  });
+
+  it("replace: false adds, so the human's own click keeps its provenance", async () => {
+    // The map says who selected what, and it only ever says what it was told.
+    // This is the agent half of that record; the click toggle is the other.
+    // Marking everything the call ends up holding would rewrite the human's
+    // own click as the agent's the first time the agent selects around it -
+    // and "3 selected by the agent · 2 by you" would quietly become "5
+    // selected by the agent".
+    const { store, byName } = mapReady();
+    store.setSelection(["osm:way:10"], "user");
+    await call(byName.select_features, { ids: ["osm:node:2"], replace: false });
+    expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(store.getSelectionSources()).toEqual({
+      "osm:way:10": "user",
+      "osm:node:2": "agent",
+    });
+  });
+
+  it("replace: true chooses afresh, so an id the human had clicked becomes the agent's", async () => {
+    // The other half of the same rule, and it points the other way. A replace
+    // throws the human's selection away and names a new one; every id in the
+    // result is one the agent picked, including one the human happened to have
+    // picked before. Keeping the old "user" tag would credit a person for a
+    // choice the agent made - the direction Ruling 3 calls the harmful one,
+    // because it hides the agent's hand rather than over-showing it.
+    const { store, byName } = mapReady();
+    store.setSelection(["osm:way:10"], "user");
+    await call(byName.select_features, { ids: ["osm:way:10", "osm:node:2"] });
+    expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(store.getSelectionSources()).toEqual({
+      "osm:way:10": "agent",
+      "osm:node:2": "agent",
+    });
   });
 
   it("clears the selection with an empty ids array", async () => {

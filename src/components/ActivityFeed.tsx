@@ -11,6 +11,7 @@ import {
   type ActivityEntry,
   type ActivityRow,
 } from "./activity-model";
+import { restoredSummary, restoredTicker } from "./restored-model";
 import { SHEET_ASK_CARDS, TryAsking } from "./TryAsking";
 import { TOOL_ROSTER } from "./tool-roster";
 import { MID_TIER, SHEET_TIER, useMediaQuery } from "./useMediaQuery";
@@ -58,21 +59,65 @@ function Call({ row }: { row: ActivityRow }) {
 }
 
 /**
+ * What a link carried, as the one row the wire can prove.
+ *
+ * Not a call and deliberately shaped as one only where that helps a person
+ * read it: no tool name, no timestamp, and a hollow ring instead of a dot,
+ * because nothing here happened *on this page*. The meta line is a wire fact —
+ * these counts came out of the URL — and the mono slot it borrows is a
+ * typographic choice, not a tool-name slot (design2-v5 §2.6, r5 §4B).
+ */
+function RestoredSummary({ summary }: { summary: string }) {
+  return (
+    <li className="call restored-sum" data-testid="restored-summary">
+      <span aria-hidden className="dot" />
+      <p className="call-sum">{summary}</p>
+      <div className="call-head">
+        <code className="tool">decoded from the link</code>
+      </div>
+    </li>
+  );
+}
+
+/**
  * The calls, oldest first, with the waiting row underneath. The order is the
  * store's own: a feed that reordered calls to tell a better story would be
  * lying about what the agent did.
+ *
+ * A restored link puts one synthesized row above them under a divider, and the
+ * divider is then exactly true: everything below it is live history, starting
+ * with the first call this page saw for itself.
  */
-export function CallList({ activity }: { activity: readonly ActivityEntry[] }) {
+export function CallList({
+  activity,
+  restored,
+}: {
+  activity: readonly ActivityEntry[];
+  restored?: string | null;
+}) {
   return (
-    <ol className="feed-list" data-testid="activity-list">
-      {groupActivity(activity).map((row) => (
-        <Call key={row.entry.seq} row={row} />
-      ))}
-      <li className="call wait">
-        <span aria-hidden className="dot" />
-        <p className="wait-sum">Listening — waiting for the next call…</p>
-      </li>
-    </ol>
+    <>
+      {restored ? (
+        <div className="feed-divider" data-testid="restored-divider">
+          restored from a link
+        </div>
+      ) : null}
+      <ol className="feed-list" data-testid="activity-list">
+        {restored ? <RestoredSummary summary={restored} /> : null}
+        {groupActivity(activity).map((row) => (
+          <Call key={row.entry.seq} row={row} />
+        ))}
+        {/* No agent is connected to a page that only opened a link, so there is
+            nothing to be listening for. The row comes back with the first live
+            call, which is also the moment the claim becomes true again. */}
+        {restored && activity.length === 0 ? null : (
+          <li className="call wait">
+            <span aria-hidden className="dot" />
+            <p className="wait-sum">Listening — waiting for the next call…</p>
+          </li>
+        )}
+      </ol>
+    </>
   );
 }
 
@@ -105,6 +150,7 @@ function LandingPitch({ cards }: { cards?: boolean }) {
  */
 export function ActivityFeed() {
   const activity = useMapStore(selectActivity);
+  const restored = useMapStore(restoredSummary);
   const toolCount = useDeclaredToolCount();
   const midTier = useMediaQuery(MID_TIER);
   const sheet = useMediaQuery(SHEET_TIER);
@@ -128,10 +174,14 @@ export function ActivityFeed() {
 
   return (
     <section
-      className={`feed glass${collapsed ? " collapsed" : ""}${busy ? " has-calls" : ""}`}
+      className={`feed lg deep wake${collapsed ? " collapsed" : ""}${busy ? " has-calls" : ""}`}
       aria-label="Agent activity"
       data-testid="activity-feed"
       data-collapsed={collapsed}
+      // A restored page has no live agent, so the header's pulse stops
+      // pulsing: an animated "live" light over a map nobody is watching is the
+      // smallest possible lie, and still a lie.
+      data-restored={restored !== null && !busy ? "true" : undefined}
     >
       <div className="feed-head">
         <span aria-hidden className="pulse" />
@@ -171,9 +221,9 @@ export function ActivityFeed() {
         </button>
       </div>
 
-      {busy ? (
+      {busy || restored ? (
         <div className="feed-body" ref={bodyRef}>
-          <CallList activity={activity} />
+          <CallList activity={activity} restored={restored} />
         </div>
       ) : (
         <div className="feed-empty" data-testid="activity-pitch">
@@ -192,27 +242,44 @@ export function ActivityFeed() {
  */
 export function ActivityPanel() {
   const activity = useMapStore(selectActivity);
+  const restored = useMapStore(restoredSummary);
   const sheet = useMediaQuery(SHEET_TIER);
   // Above 920px the floating panel is the feed; see `ActivityFeed`.
   if (!sheet) return null;
-  if (activity.length === 0) {
+  if (activity.length === 0 && restored === null) {
     return (
       <div data-testid="activity-pitch">
         <LandingPitch cards />
       </div>
     );
   }
-  return <CallList activity={activity} />;
+  return <CallList activity={activity} restored={restored} />;
 }
 
 /** Above the sheet: the last call, so the map still reports what just happened. */
 export function ActivityTicker() {
   const activity = useMapStore(selectActivity);
+  const restored = useMapStore(restoredTicker);
   const toolCount = useDeclaredToolCount();
   const last = activity[activity.length - 1];
 
+  // A restored link gets the same sentence the feed's synthesized row carries,
+  // and an empty count slot: there are no calls to count, and "1 call" over a
+  // link's contents would be inventing one.
+  if (!last && restored !== null) {
+    return (
+      <div className="ticker lg wake" data-testid="activity-ticker" data-restored="true">
+        <span aria-hidden className="pulse" />
+        <span className="ticker-row">
+          <span className="ticker-sum">{restored}</span>
+          <span className="ticker-n" />
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div className="ticker glass" data-testid="activity-ticker">
+    <div className="ticker lg wake" data-testid="activity-ticker">
       <span aria-hidden className="pulse" />
       {last ? (
         <span className="ticker-row">

@@ -39,10 +39,12 @@ import { MAX_SHARE_HASH_CHARS, SHARE_VERSIONS } from "@/lib/map-tools/share";
  * cannot rebuild (an impossible coordinate, a ring with more points than
  * `draw_shape` accepts) and this one counts them. So a hand-mangled link whose
  * only agent evidence is an item the codec rejects paints agent chrome for one
- * frame and is corrected by `useChromeAttribute` on the first commit after
- * hydration. The camera gate below removes the large majority of that class up
- * front: a payload with no valid `c`/`z` is a link the codec refuses whole, and
- * refusing it here too keeps a corrupt fragment from dressing the page at all.
+ * frame and is corrected by the awakening controller
+ * (`components/awaken/controller.ts`, which owns `data-chrome` from the moment
+ * it mounts) on the first commit after hydration. The camera gate below removes
+ * the large majority of that class up front: a payload with no valid `c`/`z` is
+ * a link the codec refuses whole, and refusing it here too keeps a corrupt
+ * fragment from dressing the page at all.
  *
  * `boot-chrome.test.ts` runs this string against links the real encoder
  * produced and asserts it agrees with `restoredAgentStateOf`, so the two

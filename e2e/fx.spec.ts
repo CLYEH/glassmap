@@ -307,6 +307,10 @@ test.describe("FX layer (T-72)", () => {
     await expect(page.getByTestId("activity-call")).toHaveCount(0);
 
     // No SubmitEvent.agentInvoked patch: an ordinary visitor's browser.
+    // T-82 chrome flip: the note form now lives in a closed popover
+    // (opacity:0, pointer-events:none) until note-toggle opens it.
+    await page.getByTestId("note-toggle").click();
+    await expect(page.getByTestId("note-popover")).toHaveAttribute("data-open", "true");
     await page.getByTestId("add-note-input").fill("a human note for FX");
     await page.getByTestId("add-note-submit").click();
     await expect(page.getByTestId("add-note-status")).not.toHaveText("");

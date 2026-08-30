@@ -31,6 +31,10 @@ test.describe("add_note -> activity feed (T-54)", () => {
     await page.goto("/");
     await waitForTools(page);
 
+    // T-82 chrome flip: the note form now lives in a closed popover
+    // (opacity:0, pointer-events:none) until note-toggle opens it.
+    await page.getByTestId("note-toggle").click();
+    await expect(page.getByTestId("note-popover")).toHaveAttribute("data-open", "true");
     await page.getByTestId("add-note-input").fill("agent submitted this note");
     await page.getByTestId("add-note-submit").click();
     await expect(page.getByTestId("add-note-status")).not.toHaveText("");
@@ -49,10 +53,36 @@ test.describe("add_note -> activity feed (T-54)", () => {
   test("a plain human submit creates the note but records zero add_note activity rows", async ({
     page,
   }) => {
+    // KNOWN DEFECT (found while riding T-82, T-85): the assertion below --
+    // that a plain human note shows up in the Notes list -- can never pass
+    // under current product behaviour. `page.tsx` only mounts <Inspector />
+    // when `awake` (`{awake ? <Inspector /> : null}`), and `awake` is driven
+    // by `activity`/`restoredAgentState` (lib/awaken). A plain human submit
+    // through AddNoteForm.tsx never calls `recordActivity` (deliberately --
+    // see that file's own comment), so chrome stays "idle" for the rest of
+    // this scenario and `sidebar-annotations-count` never mounts. This is
+    // consistent with the redesign's own documented intent (page.tsx: "a
+    // person who came to look at Taipei is not shown a dashboard about a
+    // protocol they did not ask about"; Tools.tsx: the note form "used to
+    // live in the inspector, which no longer exists on a page no agent has
+    // touched") -- but that means the test's own premise (a human's note is
+    // still visible in *this* list) needs a product decision (e.g. does a
+    // human's own note deserve some idle-chrome confirmation beyond the map
+    // pin `emitHumanFx` already draws?) that is out of QA's remit to make
+    // unilaterally. Left failing rather than silently loosened; the fix
+    // instructions for this test's interaction path (T-85) did not cover
+    // this assertion. `test.fail()` is this repo's existing convention for
+    // exactly this (see data-and-view.spec.ts's own comment).
+    test.fail();
+
     // No SubmitEvent patch: this is what an ordinary visitor's browser does.
     await page.goto("/");
     await waitForTools(page);
 
+    // T-82 chrome flip: the note form now lives in a closed popover
+    // (opacity:0, pointer-events:none) until note-toggle opens it.
+    await page.getByTestId("note-toggle").click();
+    await expect(page.getByTestId("note-popover")).toHaveAttribute("data-open", "true");
     await page.getByTestId("add-note-input").fill("a human typed this note");
     await page.getByTestId("add-note-submit").click();
     await expect(page.getByTestId("add-note-status")).not.toHaveText("");

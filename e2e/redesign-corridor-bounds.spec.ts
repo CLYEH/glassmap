@@ -56,6 +56,15 @@ test.describe("visible-corridor bounds (T-54 / PR #36)", () => {
     await waitForLiveMap(page);
     await waitForBounds(page);
 
+    // T-82 chrome flip: the FIRST tool call on a page flips chrome idle ->
+    // awake (lib/awaken), which mounts the inspector lane and narrows the
+    // corridor on its own (MapCanvas.tsx's bootMode-change branch applies
+    // padding and republishes bounds synchronously). Warm the chrome up here
+    // so `before` is already in awake mode -- otherwise `before` would race
+    // that one-time narrowing and this test would end up asserting "idle vs
+    // awake" instead of "inspector visible vs hidden".
+    await callTool(page, "get_map_state");
+
     const before = await callTool(page, "get_map_state");
     expect(before.bounds).not.toBeNull();
 

@@ -9,6 +9,8 @@ import {
   LABEL_MINZOOM,
   SELECTION_SOURCE,
   buildLayerSpecs,
+  categorySourceSpec,
+  featureSourceIndex,
   paintOf,
   selectionAnchorsToGeoJson,
   sourceId,
@@ -47,30 +49,45 @@ const square = (id: string, lng: number, lat: number): GlassMapFeature => ({
 });
 
 /**
- * map-style.ts is pure, and these three properties are what the rest of T-03
- * relies on: selection highlighting keys on properties.id, clicks must never
+ * map-style.ts is pure, and these properties are what the rest of the map
+ * relies on: the selected look is driven by feature state, clicks must never
  * hit label layers, and every category must have somewhere to render.
  */
 describe("buildLayerSpecs", () => {
-  it("highlights the selected features by matching properties.id", () => {
-    const selection = ["osm:way:1", "listing:02"];
-    const specs = buildLayerSpecs(selection);
-    // The selection reaches the layers as an ["in", ["get","id"], [literal ...]]
-    // expression, so tools that write store.selection light up the right pixels.
-    const wanted = JSON.stringify(["in", ["get", "id"], ["literal", selection]]);
-    expect(JSON.stringify(specs)).toContain(wanted);
+  it("highlights the selected features from feature state", () => {
+    // The map marks a selected feature with `setFeatureState({selected:true})`
+    // and the paint reads it back. This is the whole contract between
+    // MapCanvas and the style; if the key or the shape drifts, the highlight
+    // silently stops appearing while every test that counts ids stays green.
+    const wanted = JSON.stringify(["boolean", ["feature-state", "selected"], false]);
+    expect(JSON.stringify(buildLayerSpecs())).toContain(wanted);
   });
 
-  it("carries the current selection, not a stale one", () => {
-    // An empty selection must still key on id (with an empty literal), otherwise
-    // deselection could never clear a highlight.
-    expect(JSON.stringify(buildLayerSpecs([]))).toContain(
-      JSON.stringify(["in", ["get", "id"], ["literal", []]]),
-    );
+  it("never embeds the selected ids in an expression", () => {
+    // `["in", ["get","id"], ["literal", ids]]` costs a linear scan of the id
+    // array per feature per evaluation pass, and rewriting it on every
+    // selection change re-evaluates the paint array for every feature in the
+    // source. At a few thousand selected ids that was seconds per change; the
+    // layers must therefore not depend on the selection at all.
+    expect(buildLayerSpecs.length).toBe(0);
+    const json = JSON.stringify(buildLayerSpecs());
+    expect(json).not.toContain('"literal"');
+    expect(json).not.toContain('["get","id"]');
+  });
+
+  it("keeps the selected look in paint, where feature state is legal", () => {
+    // MapLibre evaluates `filter` and `layout` without a feature state, so a
+    // selection-dependent value there would either throw at addLayer or
+    // silently never light up.
+    for (const layer of buildLayerSpecs()) {
+      const { filter, layout } = layer as { filter?: unknown; layout?: unknown };
+      expect(JSON.stringify(filter ?? null)).not.toContain("feature-state");
+      expect(JSON.stringify(layout ?? null)).not.toContain("feature-state");
+    }
   });
 
   it("gives every category a source to render into", () => {
-    const specs = buildLayerSpecs([]);
+    const specs = buildLayerSpecs();
     for (const category of FEATURE_CATEGORIES) {
       const src = sourceId(category);
       expect(specs.some((l) => (l as { source?: string }).source === src)).toBe(true);
@@ -78,10 +95,28 @@ describe("buildLayerSpecs", () => {
   });
 });
 
+describe("the sources the selection is addressed through", () => {
+  it("promotes properties.id to the feature id", () => {
+    // `map.setFeatureState` addresses a feature by feature id, and a GeoJSON
+    // feature has none of its own. Without promoteId every call would target
+    // an id no feature has and nothing would ever highlight.
+    expect(categorySourceSpec().promoteId).toBe("id");
+    expect(categorySourceSpec().data).toEqual({ type: "FeatureCollection", features: [] });
+  });
+
+  it("says which source each feature id lives in", () => {
+    // Feature state is stored per source, so a selected id is unusable until
+    // its category is known.
+    const index = featureSourceIndex([point("osm:node:1", [121.5, 25])]);
+    expect(index.get("osm:node:1")).toBe(sourceId("park"));
+    expect(index.get("osm:node:404")).toBeUndefined();
+  });
+});
+
 describe("INTERACTIVE_LAYER_IDS", () => {
   it("excludes symbol/label layers so a click never lands on a label", () => {
     const symbolIds = new Set(
-      buildLayerSpecs([])
+      buildLayerSpecs()
         .filter((l) => l.type === "symbol")
         .map((l) => l.id),
     );
@@ -93,7 +128,7 @@ describe("INTERACTIVE_LAYER_IDS", () => {
     // The halo rings carry no feature id (see below), so a click on one can
     // never resolve to a feature. Leaving them interactive gave the user a
     // pointer cursor over a target that silently does nothing.
-    const halo = buildLayerSpecs([])
+    const halo = buildLayerSpecs()
       .filter((l) => "source" in l && l.source === SELECTION_SOURCE)
       .map((l) => l.id);
     expect(halo.length).toBe(2);
@@ -101,7 +136,7 @@ describe("INTERACTIVE_LAYER_IDS", () => {
   });
 
   it("is exactly the per-category data layers", () => {
-    const data = buildLayerSpecs([])
+    const data = buildLayerSpecs()
       .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)
       .map((l) => l.id);
     expect(INTERACTIVE_LAYER_IDS).toEqual(data);
@@ -131,8 +166,7 @@ function forSelected(expr: Expr, selected: boolean): Expr {
   return selected ? list[2] : list[3];
 }
 
-const pointPaint = (selection: string[] = []) =>
-  paintOf(buildLayerSpecs(selection).find((l) => l.id === "gm-park-circle")!);
+const pointPaint = () => paintOf(buildLayerSpecs().find((l) => l.id === "gm-park-circle")!);
 
 describe("the calm ramp below z14", () => {
   it("draws an unselected place as a 2px dot at .55 opacity with a hairline stroke", () => {
@@ -147,7 +181,7 @@ describe("the calm ramp below z14", () => {
   it("does not quieten a selected place at the same zoom", () => {
     // The highlight is the answer to "which ones did you mean": it has to stay
     // exactly as loud as it was before the ramp existed (6 at z10, 12 at z16).
-    const paint = pointPaint(["osm:way:1"]);
+    const paint = pointPaint();
     expect(forSelected(atZoom(paint["circle-radius"], 10), true)).toBe(6);
     expect(forSelected(atZoom(paint["circle-radius"], 13), true)).toBe(9);
     expect(forSelected(atZoom(paint["circle-radius"], 16), true)).toBe(12);
@@ -158,7 +192,7 @@ describe("the calm ramp below z14", () => {
     // Below z14 those two label layers printed a name on every dot in the
     // frame, which is what made the landing view unreadable.
     for (const id of ["gm-mrt_station-label", "gm-listing-label"]) {
-      const layer = buildLayerSpecs([]).find((l) => l.id === id) as { minzoom?: number };
+      const layer = buildLayerSpecs().find((l) => l.id === id) as { minzoom?: number };
       expect(layer.minzoom).toBe(LABEL_MINZOOM);
     }
   });
@@ -168,7 +202,7 @@ describe("the selection halo", () => {
   it("is drawn after everything else GlassMap adds", () => {
     // A ring under a park fill proves nothing. It is the last thing drawn so
     // "highlighted all 8" can be counted by eye.
-    const ids = buildLayerSpecs([]).map((l) => l.id);
+    const ids = buildLayerSpecs().map((l) => l.id);
     expect(ids.slice(-2)).toEqual(["gm-selection-halo-case", "gm-selection-halo"]);
   });
 

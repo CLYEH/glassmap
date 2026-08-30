@@ -31,10 +31,12 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
+  SELECTED_STATE,
   SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
-  paintOf,
+  categorySourceSpec,
+  featureSourceIndex,
   selectionAnchorsToGeoJson,
   sourceId,
 } from "./map-style";
@@ -103,19 +105,6 @@ function inspectorLane(): number {
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;
-}
-
-type PaintPropertyName = Parameters<MapLibreMap["setPaintProperty"]>[1];
-type PaintPropertyValue = Parameters<MapLibreMap["setPaintProperty"]>[2];
-
-/** Re-evaluate every selection-dependent paint property. */
-function applySelection(map: MapLibreMap, selection: readonly string[]) {
-  for (const layer of buildLayerSpecs(selection)) {
-    if (!map.getLayer(layer.id)) continue;
-    for (const [prop, value] of Object.entries(paintOf(layer))) {
-      map.setPaintProperty(layer.id, prop as PaintPropertyName, value as PaintPropertyValue);
-    }
-  }
 }
 
 /** Re-place the selection halo rings; see `selectionAnchorsToGeoJson`. */
@@ -401,14 +390,68 @@ export default function MapCanvas() {
       styleLoaded = true;
     });
 
+    // --- Selection ---------------------------------------------------------
+    // The selected look is a feature state, not a list of ids in the paint
+    // expressions (see `sel` in map-style.ts). Both maps are id -> source id:
+    // `featureSources` is every feature the store has loaded, `selectedFeatures`
+    // is the subset currently flagged on the map.
+
+    let featureSources = new Map<string, string>();
+    let selectedFeatures = new Map<string, string>();
+
+    /**
+     * Move the map's feature state to `selection`, touching only the ids whose
+     * membership changed. Clearing everything and re-setting everything would
+     * put the whole selection through MapLibre's paint-array update on each
+     * keystroke of a refinement, which is the cost this mechanism exists to
+     * avoid. Ids the store has selected but no dataset has yet are skipped -
+     * `reapply` picks them up once their data arrives.
+     */
+    const applySelectionState = (selection: readonly string[], reapply = false) => {
+      const next = new Map<string, string>();
+      for (const id of selection) {
+        const source = featureSources.get(id);
+        if (source) next.set(id, source);
+      }
+      for (const [id, source] of selectedFeatures) {
+        // Only our own key: `removeFeatureState` without one would drop any
+        // other state a future feature might carry.
+        if (next.get(id) !== source) map.removeFeatureState({ source, id }, SELECTED_STATE);
+      }
+      for (const [id, source] of next) {
+        if (reapply || selectedFeatures.get(id) !== source) {
+          map.setFeatureState({ source, id }, { [SELECTED_STATE]: true });
+        }
+      }
+      selectedFeatures = next;
+    };
+
+    /**
+     * New feature data, and the selection re-stated on top of it.
+     *
+     * `setData` reloads the source's tiles, so the state has to be re-stated
+     * rather than diffed: which ids are even addressable changes with the data
+     * (a selected id whose category had not loaded yet becomes markable), and
+     * whether the reload keeps the previously applied state is MapLibre's
+     * internal business, not something the highlight should depend on.
+     */
+    const applyFeatureData = (
+      features: readonly GlassMapFeature[],
+      selection: readonly string[],
+    ) => {
+      applyFeatures(map, features);
+      featureSources = featureSourceIndex(features);
+      applySelectionState(selection, true);
+    };
+
     map.on("load", () => {
       for (const category of FEATURE_CATEGORIES) {
-        map.addSource(sourceId(category), { type: "geojson", data: EMPTY });
+        map.addSource(sourceId(category), categorySourceSpec());
       }
       map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
       const { features, selection, drawings } = store.getState();
-      for (const layer of buildLayerSpecs(selection)) map.addLayer(layer);
-      applyFeatures(map, features);
+      for (const layer of buildLayerSpecs()) map.addLayer(layer);
+      applyFeatureData(features, selection);
       applySelectionHalo(map, features, selection);
 
       // Drawings sit on top of the data layers: a shape is always about the
@@ -486,8 +529,11 @@ export default function MapCanvas() {
         syncAnnotationMarkers(map, markers, state.annotations);
       }
       if (!ready) return;
-      if (state.features !== previous.features) applyFeatures(map, state.features);
-      if (state.selection !== previous.selection) applySelection(map, state.selection);
+      // Feature data carries the selection with it: `applyFeatureData` re-states
+      // the flags against the data that just landed, so a separate diff pass
+      // would only undo work it has already done.
+      if (state.features !== previous.features) applyFeatureData(state.features, state.selection);
+      else if (state.selection !== previous.selection) applySelectionState(state.selection);
       if (state.selection !== previous.selection || state.features !== previous.features) {
         applySelectionHalo(map, state.features, state.selection);
       }

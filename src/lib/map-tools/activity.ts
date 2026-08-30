@@ -154,10 +154,14 @@ function placeLabel(value: unknown, resolved?: unknown): string | undefined {
  * Station — found 42" — where the design mockup writes "Found 42 cafés inside
  * the circle" (design2-v5, `mockup2-v5.html`). Reaching that sentence needs a
  * noun inflected by the count for all 24 categories, in two numbers, and a
- * union form for a multi-category filter; the chrome has such a vocabulary
- * (`components/category-labels.ts`, `TIER2_PLURAL`) but it belongs to the UI
- * and the tool layer must not import upwards to reach it. Same words, same
- * order, one clause rearranged — declined here on purpose, not overlooked.
+ * union form for a multi-category filter; no such vocabulary exists anywhere.
+ * The chrome's nearest thing (`components/category-labels.ts`, `TIER2_PLURAL`)
+ * is a browse-tray label map, not a count noun — "Worship", "Parking",
+ * "Convenience" — so it would not serve this row even if the tool layer could
+ * import upwards (it must not). Authoring 24 count-inflected nouns is a new
+ * vocabulary (natural home: `src/lib/data/`, beside the schema), a separate
+ * task. Same words, same order, one clause rearranged — declined here on
+ * purpose, not overlooked.
  */
 const poiLabel = (category: string) =>
   capitalise(category.replace(/_/g, " "));

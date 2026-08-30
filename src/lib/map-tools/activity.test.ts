@@ -325,8 +325,11 @@ describe("summary copy", () => {
     await call(byName.select_features, { categories: ["park"] });
     expect(last(store).summary).toBe("Highlighted all 2 on the map");
 
-    await call(byName.select_features, { ids: ["osm:way:10", "no:such:thing"] });
-    expect(last(store).summary).toBe("Highlighted 1 on the map · 1 unknown id");
+    await call(byName.select_features, { ids: ["osm:way:10", "osm:way:11", "no:such:thing"] });
+    // Two real parks + one bogus id: count > 1, so only the !unknown term of the
+    // "all" gate suppresses the word here - the row that reports a rejection must
+    // not also assert "all" (this line is the mutation kill for that term).
+    expect(last(store).summary).toBe("Highlighted 2 on the map · 1 unknown id");
 
     await call(byName.select_features, { ids: [] });
     expect(last(store).summary).toBe("Cleared the selection");

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Position } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import type { MapFeature, Tier2Category } from "@/lib/store/tier2";
-import { BEAD_SOURCE } from "./bead-style";
+import { BEAD_LAYER, BEAD_SOURCE, buildBeadLayerSpecs } from "./bead-style";
 import {
   CALM_OPACITY,
   CALM_RADIUS,
@@ -276,11 +276,14 @@ describe("the selection ring", () => {
     expect(collection.features.map((f) => f.geometry)).toEqual([
       { type: "Point", coordinates: [121.5, 25] },
     ]);
-    // And it holds for an id a POI file shares with a bundled feature: the
-    // geometry drawn is the bundled one, the same precedence the store applies
-    // in `appendTier2Features`.
-    const shared = selectionAnchorsToGeoJson([point("osm:node:1", [121.5, 25])], ["osm:node:1"]);
-    expect(shared.features[0].geometry).toEqual({ type: "Point", coordinates: [121.5, 25] });
+    // And the split is exhaustive on the other side: the id that got no ring
+    // is exactly the one the bead source takes. Every selected place ends up
+    // with one mark — never two on the same place, never none.
+    const beaded = selectedPoiFeatures(
+      [poi("osm:node:7", [121.55, 25.03])],
+      ["osm:node:1", "osm:node:7"],
+    );
+    expect(beaded.map((f) => f.properties.id)).toEqual(["osm:node:7"]);
   });
 });
 
@@ -315,6 +318,11 @@ describe("what the bead source is allowed to hold", () => {
     // The bead system changed what a selected POI looks like. It must not have
     // changed what a selected park looks like: the calm ramp's selected branch
     // is a shipped design the redesign explicitly left alone.
+    // Pinned to the literal, not just to itself: both sides of the loop below
+    // read `SELECTED_RADIUS`, so without this a change to the constant would
+    // move the paint and the expectation together and the test would still
+    // pass while the shipped design moved.
+    expect(SELECTED_RADIUS).toEqual([6, 9, 12]);
     const bundled = paintOf(buildLayerSpecs().find((l) => l.id === "gm-park-circle")!);
     for (const [zoom, radius] of [
       [10, SELECTED_RADIUS[0]],
@@ -324,6 +332,17 @@ describe("what the bead source is allowed to hold", () => {
       expect(forSelected(atZoom(bundled["circle-radius"], zoom), true)).toBe(radius);
     }
     expect(forSelected(atZoom(bundled["circle-opacity"], 13), true)).toBe(SELECTED_OPACITY);
+  });
+
+  it("needs no feature state, because membership is selection", () => {
+    // The bundled layers read `["feature-state","selected"]`; the bead layers
+    // must not. If they did, a POI whose state had not been written yet would
+    // render at the *unselected* size — a calm dot for the one place the agent
+    // just said it was pointing at. Membership in the source IS the selection,
+    // so there is nothing left for a state flag to say.
+    expect(JSON.stringify(buildBeadLayerSpecs())).not.toContain("feature-state");
+    const bead = buildBeadLayerSpecs().find((l) => l.id === BEAD_LAYER)!;
+    expect((bead as { source?: string }).source).toBe(BEAD_SOURCE);
   });
 
   it("stays out of the feature-state index", () => {

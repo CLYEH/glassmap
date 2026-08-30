@@ -60,9 +60,9 @@ function Chip({
  * The total stays the six bundled datasets even when point-of-interest
  * categories are loaded. This legend is a key to what is painted: its six
  * chips have to add up to the number beside them, and POIs are not painted
- * (only the selected ones are — see POI_SOURCE). Folding 31k unpainted
- * features into "places" would name a legend entry that has no colour and no
- * dots on the map. What is loaded but unpainted is disclosed one row above by
+ * (only the selected ones are, as beads — see `bead-style.ts`). Folding 31k
+ * unpainted features into "places" would name a legend entry that has no
+ * colour and no dots on the map. What is loaded but unpainted is disclosed one row above by
  * `LoadedCategories`; the exact machine total, matching `get_map_state`'s
  * `features_loaded`, is in the state overlay.
  *

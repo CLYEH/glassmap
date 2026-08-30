@@ -486,6 +486,11 @@ export default function MapCanvas() {
      * every browse feature in view whatever the current threshold is — the
      * measurement cannot chase its own result. Clusters are addressed by
      * `cluster_id` because one straddling a tile seam is returned twice.
+     *
+     * Queried over the corridor, not the canvas: "the twelve largest clusters
+     * in view" has to mean the same rectangle `bounds` reports and the camera
+     * is centred in, or the budget would be spent on clusters sitting under
+     * the inspector's glass, where nobody can read a numeral.
      */
     let inkThreshold = Number.POSITIVE_INFINITY;
     const applyInkBudget = () => {
@@ -494,7 +499,12 @@ export default function MapCanvas() {
       let next = Number.POSITIVE_INFINITY;
       if (browsing) {
         const counts = new Map<number, number>();
-        for (const feature of map.queryRenderedFeatures({
+        const container = map.getContainer();
+        const corridor: [[number, number], [number, number]] = [
+          [0, 0],
+          [Math.max(container.clientWidth - inspectorLane(), 0), container.clientHeight],
+        ];
+        for (const feature of map.queryRenderedFeatures(corridor, {
           layers: [BROWSE_GRAIN_LAYER, BROWSE_BEAD_LAYER],
         })) {
           const { cluster_id: cluster, point_count: count } = feature.properties as {

@@ -24,6 +24,7 @@ import {
   selectionProvenance,
 } from "./bead-style";
 import { BEAD_BAKE_RADIUS, GLOW_ALPHA, beadImageId } from "./bead-sprite";
+import { buildDrawingLayerSpecs } from "./drawing-style";
 import { buildLayerSpecs } from "./map-style";
 
 const poi = (id: string, at: Position, category: Tier2Category = "cafe"): MapFeature => ({
@@ -52,6 +53,26 @@ const outline = (id: string, lng: number, lat: number): MapFeature => ({
 
 const layer = (id: string) => buildBeadLayerSpecs().find((l) => l.id === id)!;
 const layoutOf = (id: string) => (layer(id) as { layout?: Record<string, unknown> }).layout ?? {};
+
+/**
+ * Evaluate a `text-size` expression for one cluster count. Small enough to be
+ * obviously right, and the only way to check a *rendered* size: the expression
+ * is a nest of min/max/ln, so reading its shape would say nothing about the
+ * number a human ends up looking at.
+ */
+const sizeFor = (expression: unknown, count: number): number => {
+  if (typeof expression === "number") return expression;
+  if (!Array.isArray(expression)) throw new Error(`not an expression: ${expression}`);
+  const [op, ...args] = expression as [string, ...unknown[]];
+  if (op === "get") return count; // `point_count`, the only property in there
+  const values = args.map((arg) => sizeFor(arg, count));
+  if (op === "max") return Math.max(...values);
+  if (op === "min") return Math.min(...values);
+  if (op === "+") return values.reduce((a, b) => a + b, 0);
+  if (op === "*") return values.reduce((a, b) => a * b, 1);
+  if (op === "ln") return Math.log(values[0]);
+  throw new Error(`unhandled operator: ${op}`);
+};
 const paintOf = (id: string) => (layer(id) as { paint?: Record<string, unknown> }).paint ?? {};
 
 describe("bead anchors", () => {
@@ -320,9 +341,28 @@ describe("the bead layers", () => {
     expect(layoutOf(BEAD_LAYER)["text-field"]).toBeUndefined();
   });
 
+  it("never sets a numeral below the mockup's 10px floor", () => {
+    // A count set at 8px inside a 13px pearl stops being a number and becomes
+    // grain — and unlike a grain it has already spent one of the twelve slots
+    // in the ink budget. The smallest cluster either layer can be asked to
+    // letter is the zoom band's minimum (5 places) and, for a selection that
+    // clusters at all, a pair; both land under the floor without it.
+    const browseSize = layoutOf(BROWSE_BEAD_LAYER)["text-size"];
+    const selectionSize = layoutOf(BEAD_CLUSTER_LAYER)["text-size"];
+    expect(sizeFor(browseSize, 5)).toBe(10);
+    expect(sizeFor(selectionSize, 2)).toBe(10);
+    // A floor, not a fixed size: the numeral still grows with the count.
+    expect(sizeFor(browseSize, 400)).toBeGreaterThan(10);
+  });
+
   it("draws browse under selection: acted-on outranks looked-at", () => {
     const ids = buildBeadLayerSpecs().map((l) => l.id);
     expect(ids).toEqual([BROWSE_GRAIN_LAYER, BROWSE_BEAD_LAYER, BEAD_LAYER, BEAD_CLUSTER_LAYER]);
+    // The second half is the click contract the POI dot used to carry: what
+    // you can see is what you can act on. `BEAD_LAYER_IDS` is the exact list
+    // MapCanvas hands to `map.on("click", ...)`, so a fifth bead layer that
+    // forgot to join it would be an unclickable mark — and this fails. That
+    // the handler then does the right thing is a browser fact (T-85).
     expect([...BEAD_LAYER_IDS]).toEqual(ids);
   });
 
@@ -357,7 +397,15 @@ describe("the bead layers", () => {
  * inside a `["case"]`.
  *
  * Checked over every layer GlassMap adds, not just the bead ones: the trap is
- * the file's, not the layer's.
+ * the file's, not the layer's. That means all three builders `MapCanvas` calls
+ * — `buildLayerSpecs`, `buildBeadLayerSpecs`, `buildDrawingLayerSpecs`; a
+ * fourth one has to be added to the list below or it ships unchecked.
+ *
+ * The walk inspects `paint` and `layout` only. MapLibre's `filterSpec` takes
+ * `zoom` as a parameter too, under the same top-level rule, so a filter could
+ * in principle break the same way — none of GlassMap's do (every filter here
+ * is a `point_count` test with a number baked in by the budget pass), and the
+ * next one that reaches for `["zoom"]` has to widen this walk.
  */
 describe("layer specs MapLibre will actually accept", () => {
   const usesZoom = (value: unknown): boolean =>
@@ -374,7 +422,11 @@ describe("layer specs MapLibre will actually accept", () => {
   };
 
   it("never nests a zoom expression inside another expression", () => {
-    const specs = [...buildLayerSpecs(), ...buildBeadLayerSpecs()] as {
+    const specs = [
+      ...buildLayerSpecs(),
+      ...buildBeadLayerSpecs(),
+      ...buildDrawingLayerSpecs(),
+    ] as {
       id: string;
       paint?: Record<string, unknown>;
       layout?: Record<string, unknown>;

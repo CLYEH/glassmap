@@ -7,10 +7,12 @@
  * drawings already use (`DRAWING_COLOR`), so the grammar is one grammar.
  *
  * Why a baked sprite and not a stack of circle layers: a MapLibre `circle`
- * has one flat fill and one hard stroke. It cannot do the radial wash that
- * makes the bead read as glass, it cannot blur, and it cannot drop a shadow —
- * so the pearl, the glow and the lift would all be lost, and the same mark
- * would cost four layers per provenance instead of one image.
+ * has one flat fill and one hard stroke, so it cannot do the multi-stop
+ * radial wash that makes the bead read as glass, and it cannot drop a shadow
+ * under itself. (`circle-blur` does exist — but it softens the one edge a
+ * circle has, which is not a wash under a rim under a glow.) Assembling the
+ * three cues out of circles would cost four layers per provenance and still
+ * lose the pearl; this is one image.
  *
  * The glow obeys the colour-law amendment signed off on 2026-08-30: a bright
  * hue may be baked into a persistent mark only while it is **static, blurred

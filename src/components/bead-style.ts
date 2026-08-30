@@ -192,10 +192,26 @@ const clusterIconSize = (ramp: LogRamp) => ["/", logRampExpr(ramp), BEAD_BAKE_RA
 /** The numeral inside a counted bead: dark ink on the pearl, no halo needed. */
 const COUNT_COLOR = "#17202a";
 
+/**
+ * The smallest a numeral may be set, from the mockup's `Math.max(10, ...)`.
+ * Below 10 px a two-digit count on a pearl stops being a number and becomes
+ * grain — and a numeral nobody can read is worse than the texture it replaced,
+ * because it still spends the ink budget.
+ */
+const COUNT_MIN_SIZE = 10;
+
+/**
+ * Deviation from the mockup, declared rather than hidden: the mockup sets the
+ * numeral in a heavier face. Every label GlassMap draws asks the basemap's
+ * glyph endpoint for `Noto Sans Regular` (see `map-style.ts` and
+ * `drawing-style.ts`), and a fontstack that endpoint does not serve drops the
+ * label entirely — a silent failure exactly like the one the layer-spec test
+ * exists for. One stack, everywhere, until a heavier one is verified live.
+ */
 const countLabel = (ramp: LogRamp) => ({
   "text-field": ["get", "point_count_abbreviated"],
   "text-font": ["Noto Sans Regular"],
-  "text-size": ["*", 0.82, logRampExpr(ramp)],
+  "text-size": ["max", COUNT_MIN_SIZE, ["*", 0.82, logRampExpr(ramp)]],
   "text-allow-overlap": true,
   "text-ignore-placement": true,
 });
@@ -337,11 +353,16 @@ export function buildBeadLayerSpecs(threshold = Number.POSITIVE_INFINITY): AddLa
 /**
  * The store's record of who selected each id — "as recorded", never guessed.
  *
- * Read through a widening cast because `selectionSources` is landing in a
- * parallel task (T-80). Until it does, every selection reads as the agent's,
- * which is the direction Ruling 3 made safe: a false teal under-credits the
- * human, a false rose would hide the agent's involvement entirely. The moment
- * the field exists this returns it, with no change on this side.
+ * Read through a widening cast because `selectionSources` landed in a parallel
+ * task (T-80) that merges first. Where it is absent every selection reads as
+ * the agent's, which is the direction Ruling 3 made safe: a false teal
+ * under-credits the human, a false rose would hide the agent's involvement
+ * entirely.
+ *
+ * TODO(T-82): T-80 has shipped `selectionSources: Record<string, "agent" |
+ * "user">` on the store root, so delete the cast and the `?? NOTHING` fallback
+ * and take `state: Pick<MapStore, "selectionSources">` — the shim only exists
+ * for the window in which the two branches were unmerged.
  */
 export function selectionProvenance(state: object): Readonly<Record<string, Provenance>> {
   return (state as { selectionSources?: Record<string, Provenance> }).selectionSources ?? NOTHING;

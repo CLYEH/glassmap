@@ -11,6 +11,7 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import {
   useMapStore,
   type Annotation,
@@ -31,12 +32,16 @@ import {
 } from "./drawing-style";
 import {
   INTERACTIVE_LAYER_IDS,
+  POI_SOURCE,
   SELECTION_SOURCE,
   STYLE_URL,
   buildLayerSpecs,
-  paintOf,
+  categorySourceSpec,
+  featureSourceIndex,
+  selectedPoiFeatures,
   selectionAnchorsToGeoJson,
   sourceId,
+  syncSelectionState,
 } from "./map-style";
 import { approximateBounds, visibleBounds } from "./viewport-bounds";
 
@@ -105,27 +110,15 @@ function inspectorLane(): number {
   return Number.parseFloat(value) || 0;
 }
 
-type PaintPropertyName = Parameters<MapLibreMap["setPaintProperty"]>[1];
-type PaintPropertyValue = Parameters<MapLibreMap["setPaintProperty"]>[2];
-
-/** Re-evaluate every selection-dependent paint property. */
-function applySelection(map: MapLibreMap, selection: readonly string[]) {
-  for (const layer of buildLayerSpecs(selection)) {
-    if (!map.getLayer(layer.id)) continue;
-    for (const [prop, value] of Object.entries(paintOf(layer))) {
-      map.setPaintProperty(layer.id, prop as PaintPropertyName, value as PaintPropertyValue);
-    }
-  }
-}
-
 /** Re-place the selection halo rings; see `selectionAnchorsToGeoJson`. */
 function applySelectionHalo(
   map: MapLibreMap,
   features: readonly GlassMapFeature[],
   selection: readonly string[],
+  poi: readonly MapFeature[],
 ) {
   const source = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
-  source?.setData(selectionAnchorsToGeoJson(features, selection));
+  source?.setData(selectionAnchorsToGeoJson(features, selection, poi));
 }
 
 /** Push a GeoJSON source, ignoring the window before `load` when it does not exist yet. */
@@ -401,15 +394,81 @@ export default function MapCanvas() {
       styleLoaded = true;
     });
 
+    // --- Selection ---------------------------------------------------------
+    // The selected look is a feature state, not a list of ids in the paint
+    // expressions (see `sel` in map-style.ts). Both maps are id -> source id:
+    // `featureSources` is every feature the store has loaded, `selectedFeatures`
+    // is the subset currently flagged on the map.
+
+    let featureSources = new Map<string, string>();
+    let selectedFeatures = new Map<string, string>();
+
+    /**
+     * Move the map's feature state to `selection`. The diff itself lives in
+     * `syncSelectionState` (map-style.ts), where it can be unit-tested without
+     * a live map; this only binds it to the two MapLibre calls and keeps the
+     * result.
+     */
+    const applySelectionState = (selection: readonly string[], reapply = false) => {
+      selectedFeatures = syncSelectionState({
+        selection,
+        applied: selectedFeatures,
+        featureSources,
+        reapply,
+        setFeatureState: (target, state) => map.setFeatureState(target, state),
+        removeFeatureState: (target, key) => map.removeFeatureState(target, key),
+      });
+    };
+
+    /**
+     * New feature data, and the selection re-stated on top of it (`reapply`,
+     * see `syncSelectionState`): a selected id whose category had not loaded
+     * yet becomes markable only now.
+     */
+    const applyFeatureData = (
+      features: readonly GlassMapFeature[],
+      selection: readonly string[],
+    ) => {
+      applyFeatures(map, features);
+      featureSources = featureSourceIndex(features);
+      applySelectionState(selection, true);
+    };
+
+    /**
+     * Materialise the selected POIs and ring them.
+     *
+     * One call does both because the two must never disagree: the halo is what
+     * says "this is the thing I meant", and a POI dot that appeared without one
+     * would read as map furniture rather than as an answer. Deselecting empties
+     * the source, which is how the calm map comes back — a category stays in
+     * memory for the tools, and off the screen.
+     */
+    const applySelectedPoi = (
+      tier2: readonly MapFeature[],
+      features: readonly GlassMapFeature[],
+      selection: readonly string[],
+    ) => {
+      const poi = selectedPoiFeatures(tier2, selection);
+      setSourceData(map, POI_SOURCE, { type: "FeatureCollection", features: poi });
+      applySelectionHalo(map, features, selection, poi);
+    };
+
     map.on("load", () => {
       for (const category of FEATURE_CATEGORIES) {
-        map.addSource(sourceId(category), { type: "geojson", data: EMPTY });
+        map.addSource(sourceId(category), categorySourceSpec());
       }
+      // Empty, and empty is also its resting state: it only ever holds the
+      // selected tier-2 features. `buildLayerSpecs` puts its layer under the
+      // halo layers, which is what makes a ring land on top of its dot.
+      map.addSource(POI_SOURCE, { type: "geojson", data: EMPTY });
       map.addSource(SELECTION_SOURCE, { type: "geojson", data: EMPTY });
-      const { features, selection, drawings } = store.getState();
-      for (const layer of buildLayerSpecs(selection)) map.addLayer(layer);
-      applyFeatures(map, features);
-      applySelectionHalo(map, features, selection);
+      const { features, selection, drawings, tier2Features } = store.getState();
+      for (const layer of buildLayerSpecs()) map.addLayer(layer);
+      applyFeatureData(features, selection);
+      // Read from the store rather than started empty: a category can already
+      // be loaded and selected by the time the style finishes (the tools work
+      // before the basemap does, and a remount re-runs this whole effect).
+      applySelectedPoi(tier2Features, features, selection);
 
       // Drawings sit on top of the data layers: a shape is always about the
       // features under it.
@@ -486,10 +545,20 @@ export default function MapCanvas() {
         syncAnnotationMarkers(map, markers, state.annotations);
       }
       if (!ready) return;
-      if (state.features !== previous.features) applyFeatures(map, state.features);
-      if (state.selection !== previous.selection) applySelection(map, state.selection);
-      if (state.selection !== previous.selection || state.features !== previous.features) {
-        applySelectionHalo(map, state.features, state.selection);
+      // Feature data carries the selection with it: `applyFeatureData` re-states
+      // the flags against the data that just landed, so a separate diff pass
+      // would only undo work it has already done.
+      if (state.features !== previous.features) applyFeatureData(state.features, state.selection);
+      else if (state.selection !== previous.selection) applySelectionState(state.selection);
+      // A tier-2 category arriving changes nothing on screen on its own — only
+      // the selected subset is ever drawn — but it does change which selected
+      // ids can be placed, so it is one of the three inputs here.
+      if (
+        state.selection !== previous.selection ||
+        state.features !== previous.features ||
+        state.tier2Features !== previous.tier2Features
+      ) {
+        applySelectedPoi(state.tier2Features, state.features, state.selection);
       }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });

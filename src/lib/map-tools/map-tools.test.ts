@@ -437,8 +437,13 @@ describe("list_features_in_view", () => {
   });
 
   it("rejects a category that is not in the schema, listing what was wrong", async () => {
+    // "cafeteria" is the test's whole point: it is not one of the six bundled
+    // categories *and* not one of the 18 point-of-interest ones, so the
+    // rejection is about the name, not about a file that failed to load.
     const { byName } = mapReady();
-    expect((await call(byName.list_features_in_view, { categories: ["cafe"] })).error).toMatch(/cafe/);
+    expect(
+      (await call(byName.list_features_in_view, { categories: ["cafeteria"] })).error,
+    ).toMatch(/cafeteria/);
   });
 
   it("honours limit while still reporting the true total", async () => {

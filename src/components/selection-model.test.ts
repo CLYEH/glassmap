@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { GlassMapFeature } from "@/lib/data/schema";
+import type { MapFeature } from "@/lib/store/tier2";
 import { resolveSelection } from "./selection-model";
+
+const poi = (id: string, patch: Partial<MapFeature["properties"]> = {}): MapFeature => ({
+  type: "Feature",
+  geometry: { type: "Point", coordinates: [121.54, 25.03] },
+  properties: { id, name: `cafe ${id}`, category: "cafe", source: "osm", ...patch },
+});
 
 const feature = (
   id: string,
@@ -49,5 +56,45 @@ describe("resolveSelection", () => {
 
   it("is empty for an empty selection", () => {
     expect(resolveSelection(features, [])).toEqual([]);
+  });
+
+  describe("point-of-interest features", () => {
+    // The store keeps POIs out of `features` on purpose (the map draws the six
+    // bundled datasets), but a selected cafe is still a selected feature. Read
+    // from `features` alone the sidebar showed a raw `osm:node:…` id labelled
+    // "not loaded" for the place the agent had just named.
+    it("names a selected POI and reports its category", () => {
+      const rows = resolveSelection([], ["osm:node:77"], [poi("osm:node:77")]);
+      expect(rows).toEqual([
+        { id: "osm:node:77", name: "cafe osm:node:77", category: "cafe", sample: false },
+      ]);
+    });
+
+    it("keeps the store's order across both tiers", () => {
+      const rows = resolveSelection(features, ["osm:node:77", "osm:node:1"], [poi("osm:node:77")]);
+      expect(rows.map((r) => r.category)).toEqual(["cafe", "mrt_station"]);
+    });
+
+    it("falls back to the English name, then the id, for a nameless POI", () => {
+      // OSM has plenty of unnamed car parks and bike docks; they are still
+      // places, and the row has to say something a person can read.
+      const named = resolveSelection([], ["a"], [poi("a", { name: "", nameEn: "Daan Park" })]);
+      expect(named[0].name).toBe("Daan Park");
+      const bare = resolveSelection([], ["b"], [poi("b", { name: "" })]);
+      expect(bare[0].name).toBe("b");
+    });
+
+    it("lets a bundled feature win a shared id", () => {
+      // `appendTier2Features` gives the bundled datasets the same precedence,
+      // so the row and the map must not disagree about what the id is.
+      const rows = resolveSelection(features, ["osm:node:1"], [poi("osm:node:1")]);
+      expect(rows[0].category).toBe("mrt_station");
+    });
+
+    it("still says 'not loaded' for an id neither tier has", () => {
+      expect(resolveSelection(features, ["osm:way:404"], [poi("osm:node:77")])[0].category).toBe(
+        null,
+      );
+    });
   });
 });

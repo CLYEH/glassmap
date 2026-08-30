@@ -9,7 +9,7 @@
  *    needs in order to describe a map to a human.
  */
 import { bbox, bearing as turfBearing, centroid, distance } from "@turf/turf";
-import type { FeatureCategory, GlassMapFeature } from "@/lib/data/schema";
+import type { MapCategory, MapFeature } from "@/lib/store/tier2";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
 
 export const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
@@ -20,9 +20,19 @@ export interface FeatureOutput {
   id: string;
   name: string;
   name_en?: string;
-  category: FeatureCategory;
+  category: MapCategory;
   /** Present and true only for fabricated demo data, so the agent can say so. */
   sample?: boolean;
+  /**
+   * The other categories this feature is tagged with, when it has any. Without
+   * it, a fast_food search that returns something categorised "bakery" looks
+   * like a bug rather than a POI that is both.
+   */
+  categories?: MapCategory[];
+  /** Tier-2 only, and only when the source has them: what makes a POI answer useful. */
+  cuisine?: string;
+  brand?: string;
+  opening_hours?: string;
   /** Great-circle metres from the query origin to this feature's point/centroid. */
   distance_m?: number;
   direction?: Compass;
@@ -42,7 +52,7 @@ const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number
  * geometry uses its centroid. Returns null for geometry we cannot use, so
  * callers degrade (no distance) instead of throwing.
  */
-export function featureCenter(feature: GlassMapFeature): LngLat | null {
+export function featureCenter(feature: MapFeature): LngLat | null {
   try {
     const geometry = feature?.geometry;
     if (!geometry) return null;
@@ -58,7 +68,7 @@ export function featureCenter(feature: GlassMapFeature): LngLat | null {
 }
 
 /** [west, south, east, north] of a feature, or null when the geometry is unusable. */
-export function featureBounds(feature: GlassMapFeature): Bounds | null {
+export function featureBounds(feature: MapFeature): Bounds | null {
   try {
     if (!feature?.geometry) return null;
     const b = bbox(feature);
@@ -84,11 +94,18 @@ export function distanceMeters(from: LngLat, to: LngLat): number {
  * caller has no origin (e.g. an id-only selection) and both are omitted.
  * Direction is omitted at zero distance because a bearing to yourself is noise.
  */
-export function describeFeature(feature: GlassMapFeature, from?: LngLat | null): FeatureOutput {
+export function describeFeature(feature: MapFeature, from?: LngLat | null): FeatureOutput {
   const p = feature.properties;
   const out: FeatureOutput = { id: p.id, name: p.name, category: p.category };
   if (p.nameEn) out.name_en = p.nameEn;
   if (p.sample) out.sample = true;
+  // "A restaurant" is not an answer to "somewhere vegetarian, open now": these
+  // three tags are the whole reason a POI is worth fetching. Absent on the
+  // bundled datasets, so nothing about their output changes.
+  if (p.categories) out.categories = p.categories;
+  if (p.cuisine) out.cuisine = p.cuisine;
+  if (p.brand) out.brand = p.brand;
+  if (p.opening_hours) out.opening_hours = p.opening_hours;
   if (from) {
     const center = featureCenter(feature);
     if (center) {

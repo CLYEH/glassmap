@@ -2,7 +2,8 @@ import type { AddLayerObject } from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { DATASETS, FEATURE_CATEGORIES, type FeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
 import type { MapFeature } from "@/lib/store/tier2";
-import { positionsOf } from "./drawing-style";
+import { BEAD_BAKE_RADIUS, beadImageId, type Provenance } from "./bead-sprite";
+import { anchorPosition } from "./bead-style";
 
 /** OpenFreeMap — no API key, no usage limits. */
 export const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
@@ -51,8 +52,13 @@ export const sourceId = (category: FeatureCategory) => `gm-src-${category}`;
 
 /**
  * MapLibre does not export the style-spec expression types, so layer literals
- * are written untyped and validated by MapLibre at runtime (`map.addLayer`
- * throws on an invalid layer, which surfaces in the `error` handler).
+ * are written untyped and validated by MapLibre at runtime.
+ *
+ * That validation does NOT throw, as this comment used to claim: `addLayer`
+ * fires an `error` event and **skips the layer**, leaving a map that is merely
+ * missing something. A nested `["zoom"]` cost the browse grains exactly that
+ * way during T-81, so `bead-style.test.ts` walks every spec here for the
+ * shapes MapLibre rejects.
  */
 const asLayer = (spec: object) => spec as AddLayerObject;
 
@@ -85,49 +91,28 @@ export const SELECTED_OPACITY = 0.9;
 export const LABEL_MINZOOM = 14;
 
 /**
- * One point per selected feature, feeding the selection halo. Kept in its own
- * source rather than filtering the category sources: a `circle` layer draws a
- * circle at every vertex of a polygon, so a park would get a ring per corner.
+ * One point per selected **bundled** feature, feeding the selection ring. Kept
+ * in its own source rather than filtering the category sources: a symbol drawn
+ * from a polygon source lands on every vertex, so a park would get a ring per
+ * corner.
+ *
+ * Selected points of interest are deliberately absent — the halo split (design
+ * round 2, §8.1 row 3). A POI has no category colour to ring, so it is drawn as
+ * a bead instead (`BEAD_SOURCE`), and the bead's own rim and glow already say
+ * everything a ring would. Ringing it too would put two marks on one place and
+ * would give a clustered bead a stack of loose rings underneath it — exactly
+ * the pile of dots the bead system exists to remove.
  */
 export const SELECTION_SOURCE = "gm-src-selection";
 
-/**
- * The point-of-interest source, and the one invariant the whole tier-2
- * treatment rests on: **it holds exactly the selected tier-2 features, and
- * nothing else**.
- *
- * Tier-2 ships unpainted. The calm ramp was designed around 2,063 dots; the
- * 18 POI categories are 31k features, so drawing a whole loaded category would
- * be 6-13x the density the landing view was verified at, and no default paint
- * for them has been designed yet. What the agent or the human explicitly acts
- * on is a different question — that has to be visible, or "I selected the 14
- * cafes near you" is a claim about a map nobody can see.
- *
- * Membership *is* selection, which is why this layer needs no feature state:
- * a feature is in the source only while it is selected, so its paint is the
- * selected look unconditionally and cannot drift out of step with the store
- * the way a `setData`-then-`setFeatureState` pair can.
- */
-export const POI_SOURCE = "gm-src-poi";
+/** The one layer drawn from it. */
+export const SELECTION_RING_LAYER = "gm-selection-ring";
 
 /**
- * The materialised POI dot. Neutral ink on purpose: the six bundled categories
- * own the map's colour vocabulary (CATEGORY_COLOR, mirrored by the legend), so
- * a POI painted in any of them would make the legend lie, and painting it teal
- * or rose would claim a provenance it does not have — a POI is data, not
- * something an agent or a human drew. The white casing and the teal halo
- * around it are the same treatment every selected feature gets.
- *
- * A future design pass that gives the 18 categories their own ramp owns this
- * value; until then, "a place, category not colour-coded" is the honest look.
+ * Ring size in screen pixels at z10 and z16; grows a little with the zoom,
+ * like the dots. The same span the two-layer halo interpolated over.
  */
-export const POI_COLOR = "#111827";
-
-/** The halo's teal (= DRAWING_COLOR.agent), cased in white like the map dots. */
-export const HALO_COLOR = "#0b7285";
-
-/** Ring size in screen pixels; grows a little with the zoom, like the dots. */
-const HALO_RADIUS = ["interpolate", ["linear"], ["zoom"], 10, 7, 16, 11];
+const RING_RADIUS = [7, 11] as const;
 
 const POINTS = ["==", ["geometry-type"], "Point"];
 const AREAS = ["!=", ["geometry-type"], "Point"];
@@ -161,7 +146,7 @@ export const categorySourceSpec = (): {
  * source, so an id in `store.selection` cannot be marked until we know which
  * of the six sources to mark it on.
  *
- * Tier-2 ids are deliberately absent. POIs render out of POI_SOURCE, whose
+ * Tier-2 ids are deliberately absent. POIs render out of BEAD_SOURCE, whose
  * paint reads no feature state at all, so listing them here would write state
  * that nothing reads — and would make `syncSelectionState` believe it had
  * highlighted a feature by a mechanism that is not the one doing the work.
@@ -171,8 +156,11 @@ export function featureSourceIndex(features: readonly GlassMapFeature[]): Map<st
 }
 
 /**
- * The selected tier-2 features, in the store's order — everything POI_SOURCE
- * is allowed to contain.
+ * The selected tier-2 features — everything the bead source is allowed to
+ * contain. Membership *is* selection: a POI is in it only while it is
+ * selected, so the bead cannot drift out of step with the store the way a
+ * `setData`-then-`setFeatureState` pair can, and deselecting empties it and
+ * gives the calm map back.
  *
  * Selection order is not preserved (the store's is), which costs nothing: the
  * result is only ever drawn, never listed. Scanning the tier-2 slice rather
@@ -391,62 +379,38 @@ export function buildLayerSpecs(): AddLayerObject[] {
     }),
   );
 
-  // The materialised POI dot, above the bundled data and below the halo that
-  // rings it. No `sel` anywhere in its paint: everything in POI_SOURCE is
-  // selected by construction (see the constant), so the selected look is the
-  // only look this layer has.
+  // The selection ring, on top of everything else GlassMap draws: the bead's
+  // glow and deep rim around a transparent core, so the category colour the
+  // legend promises still shows through. One sprite replaces the two circle
+  // layers the white-cased teal halo needed — a circle layer has one stroke,
+  // and the casing and the ring were a stroke each. The white is still there,
+  // baked into the sprite: it is what keeps the ring readable over a dark park
+  // fill as well as over pale streets.
   specs.push(
     asLayer({
-      id: "gm-poi-circle",
-      type: "circle",
-      source: POI_SOURCE,
-      filter: POINTS,
-      paint: {
-        "circle-color": POI_COLOR,
-        "circle-radius": [
+      id: SELECTION_RING_LAYER,
+      type: "symbol",
+      source: SELECTION_SOURCE,
+      layout: {
+        "icon-image": [
+          "case",
+          ["==", ["get", "prov"], "user"],
+          beadImageId("ring", "user"),
+          beadImageId("ring", "agent"),
+        ],
+        "icon-size": [
           "interpolate",
           ["linear"],
           ["zoom"],
           10,
-          SELECTED_RADIUS[0],
-          13,
-          SELECTED_RADIUS[1],
+          RING_RADIUS[0] / BEAD_BAKE_RADIUS,
           16,
-          SELECTED_RADIUS[2],
+          RING_RADIUS[1] / BEAD_BAKE_RADIUS,
         ],
-        "circle-opacity": SELECTED_OPACITY,
-        "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 1.5,
-      },
-    }),
-  );
-
-  // The selection halo, on top of everything else GlassMap draws: a
-  // white-cased teal ring at the centre of each selected feature. Two layers
-  // because a circle layer has one stroke, and the white casing is what keeps
-  // the ring readable over a dark park fill as well as over pale streets.
-  specs.push(
-    asLayer({
-      id: "gm-selection-halo-case",
-      type: "circle",
-      source: SELECTION_SOURCE,
-      paint: {
-        "circle-color": "rgba(0,0,0,0)",
-        "circle-radius": HALO_RADIUS,
-        "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 5,
-        "circle-stroke-opacity": 0.92,
-      },
-    }),
-    asLayer({
-      id: "gm-selection-halo",
-      type: "circle",
-      source: SELECTION_SOURCE,
-      paint: {
-        "circle-color": "rgba(0,0,0,0)",
-        "circle-radius": HALO_RADIUS,
-        "circle-stroke-color": HALO_COLOR,
-        "circle-stroke-width": 2.5,
+        // A ring that MapLibre decided to hide would leave a selected feature
+        // looking unselected.
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
       },
     }),
   );
@@ -454,62 +418,55 @@ export function buildLayerSpecs(): AddLayerObject[] {
   return specs;
 }
 
-/** All a halo anchor needs: an id to match on and a geometry to average. */
+/** All a ring anchor needs: an id to match on and a geometry to average. */
 type AnchorFeature = { geometry: Geometry | null; properties: { id: string } };
 
 /**
- * Where each selected feature's ring goes: the average of the feature's own
- * coordinates, which is the anchor rule labelled drawings already use
- * (`labelPointsToGeoJson`). Unknown ids contribute nothing — a tool can select
- * an id before the datasets have finished loading.
+ * Where each selected **bundled** feature's ring goes: the average of the
+ * feature's own coordinates, which is the anchor rule labelled drawings
+ * already use (`labelPointsToGeoJson`). Unknown ids contribute nothing — a
+ * tool can select an id before the datasets have finished loading, and an
+ * unplaceable id must not become a ring at [0, 0].
  *
- * `poi` is the selected tier-2 features (see `selectedPoiFeatures`); they live
- * in no category source, so without them a selected cafe would be the one
- * highlighted feature on the map with no ring around it. Bundled features win
- * a shared id, which is the same precedence the store applies when it appends
- * a tier-2 category.
+ * Selected points of interest are not in here and never will be: that is the
+ * halo split. They are beads (`beadAnchorsToGeoJson`), and a bead already
+ * carries the rim and the glow a ring would have added.
  *
- * The points deliberately carry no `id` property: the halo layers are hit by
- * clicks like every other non-symbol layer, and a ring must not become a
+ * The points carry a provenance and deliberately no `id`: the ring layer is
+ * hit by clicks like every other bead layer, and a ring must not become a
  * second, invisible way to toggle the feature underneath it.
  */
 export function selectionAnchorsToGeoJson(
   features: readonly AnchorFeature[],
   selection: readonly string[],
-  poi: readonly AnchorFeature[] = [],
+  sources: Readonly<Record<string, Provenance>> = {},
 ): FeatureCollection {
   const byId = new Map<string, AnchorFeature>();
-  for (const feature of poi) byId.set(feature.properties.id, feature);
   for (const feature of features) byId.set(feature.properties.id, feature);
   const out: Feature[] = [];
   for (const id of selection) {
-    const feature = byId.get(id);
-    if (!feature?.geometry) continue;
-    const positions = positionsOf(feature.geometry);
-    if (positions.length === 0) continue;
-    const sum = positions.reduce(([x, y], [lng, lat]) => [x + lng, y + lat], [0, 0]);
+    const at = anchorPosition(byId.get(id)?.geometry ?? null);
+    if (!at) continue;
     out.push({
       type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: [sum[0] / positions.length, sum[1] / positions.length],
-      },
-      properties: {},
+      geometry: { type: "Point", coordinates: at },
+      // Teal unless the store recorded a human: Ruling 3's safe direction.
+      properties: { prov: sources[id] ?? "agent" },
     });
   }
   return { type: "FeatureCollection", features: out };
 }
 
 /**
- * Layer ids that respond to clicks and show a pointer cursor: the data layers
- * only. Labels are excluded so a click never lands on text instead of the
- * thing it names, and the selection halo is excluded because its rings carry
- * no feature id — hovering one showed a pointer that promised a selection the
- * click could not make.
+ * Layer ids that respond to clicks and show a pointer cursor: the bundled data
+ * layers only. Labels are excluded so a click never lands on text instead of
+ * the thing it names, and the selection ring is excluded because its anchors
+ * carry no feature id — hovering one showed a pointer that promised a
+ * selection the click could not make.
  *
- * The POI layer is in: a materialised POI is on the map because someone acted
- * on it, and clicking the thing you can see to take it off the map again is
- * the same gesture every other dot answers to.
+ * The bead layers answer to clicks too, through `BEAD_LAYER_IDS`; they are a
+ * separate list because a click on a bead can also mean "this is a cluster,
+ * split it", which no bundled dot can mean.
  */
 export const INTERACTIVE_LAYER_IDS = buildLayerSpecs()
   .filter((l) => l.type !== "symbol" && "source" in l && l.source !== SELECTION_SOURCE)

@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useMapStore } from "@/lib/store/map-store";
+import { useBrowseStore } from "./browse-store";
 import { loadedCategoryRows } from "./tier2-disclosure";
 
 const number = (n: number) => n.toLocaleString("en-US");
@@ -30,12 +31,20 @@ const number = (n: number) => n.toLocaleString("en-US");
 export function LoadedCategories() {
   const loaded = useMapStore((s) => s.tier2Loaded);
   const features = useMapStore((s) => s.tier2Features);
-  const rows = useMemo(() => loadedCategoryRows(loaded, features), [loaded, features]);
+  // The browsed category is painted, and the Places dock already names it with
+  // its count — so it belongs to the legend's half of the split, not to this
+  // one. What is left here is exactly what the row claims to be: loaded, and
+  // invisible.
+  const browsing = useBrowseStore((s) => s.category);
+  const rows = useMemo(
+    () => loadedCategoryRows(loaded, features).filter((row) => row.category !== browsing),
+    [loaded, features, browsing],
+  );
 
   if (rows.length === 0) return null;
 
   return (
-    <div className="poi-strip glass" data-testid="poi-loaded">
+    <div className="poi-strip lg" data-testid="poi-loaded">
       <span className="poi-strip-label">POI loaded</span>
       {rows.map((row) => (
         <span

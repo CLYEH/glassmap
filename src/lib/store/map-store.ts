@@ -371,6 +371,13 @@ interface MapStore {
   tier2RestoreFailures: Tier2RestoreFailure[];
   /** See `MapToolStore.restoreCategories`; this is the same call, for the page. */
   restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
+  /**
+   * See `MapToolStore.loadTier2Manifest`; the same call, for the page. The
+   * Places tray needs the per-category counts to offer them, and it must ask
+   * the same registry the tools ask, or the index would be fetched twice and
+   * the two halves of the page could disagree about what exists.
+   */
+  loadTier2Manifest: () => Promise<Tier2ManifestResult>;
   tier2Manifest: Tier2Manifest | null;
   selection: string[];
   /** See `MapToolStore.getSelectionSources`: as recorded, pruned to `selection`. */
@@ -449,6 +456,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
   tier2RestoreFailures: [],
   // The loader is created below (it needs this store); read at call time.
   restoreTier2Categories: (categories) => zustandTier2.restoreCategories(categories),
+  loadTier2Manifest: () => zustandTier2.loadManifest(),
   tier2Manifest: null,
   selection: [],
   selectionSources: {},

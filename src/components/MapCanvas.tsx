@@ -10,6 +10,7 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
+import { bootMode } from "@/lib/awaken";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import type { MapFeature } from "@/lib/store/tier2";
 import {
@@ -21,6 +22,7 @@ import {
 } from "@/lib/store/map-store";
 import { createAnnotationElement } from "./annotation-marker";
 import { createBeadImages } from "./bead-sprite";
+import { useCardStore } from "./card-store";
 import {
   BEAD_LAYER_IDS,
   BEAD_SOURCE,
@@ -117,6 +119,13 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
  * below 921px, where the inspector is a bottom sheet and the map container is
  * shortened instead of overlaid.
  *
+ * Zero in human chrome as well, and for the plainest possible reason: there is
+ * no inspector there (`page.tsx` mounts it only once an agent is here), so the
+ * whole canvas is the corridor. Read from the store rather than from the DOM
+ * because it is the store's answer the chrome is rendered from — the same
+ * `bootMode` the page and the awakening use — and a padding measured off a
+ * class name would be one render behind whichever of the two moved first.
+ *
  * This is the single source of truth for the corridor: `applyPadding` puts the
  * camera centre in it and `pushViewFromMap` publishes its edges as `bounds`,
  * so the two can never describe different rectangles. It does not follow the
@@ -124,6 +133,7 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
  * still covers the lane, so the map under it is still not visible.
  */
 function inspectorLane(): number {
+  if (bootMode(useMapStore.getState()) === "idle") return 0;
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;
@@ -210,6 +220,7 @@ export default function MapCanvas() {
     const store = useMapStore;
     const draw = useDrawStore;
     const browse = useBrowseStore;
+    const card = useCardStore;
 
     /**
      * No map, so nothing will ever report a viewport. Compute one instead:
@@ -232,7 +243,10 @@ export default function MapCanvas() {
       };
       pushBounds();
       const unsubscribe = store.subscribe((state, previous) => {
-        if (state.view !== previous.view) pushBounds();
+        // The chrome flipping is a corridor change like any other: the
+        // inspector lane appears with the agent, and the rectangle a tool is
+        // told about has to shrink with it.
+        if (state.view !== previous.view || bootMode(state) !== bootMode(previous)) pushBounds();
       });
       window.addEventListener("resize", pushBounds);
       return () => {
@@ -563,11 +577,27 @@ export default function MapCanvas() {
       applyDraft(map, draw.getState().draft);
 
       const canvas = map.getCanvas();
-      const toggleSelection = (id: string) => {
+      /**
+       * A person's tap on a place: it goes on the map, and it answers.
+       *
+       * The selection write carries `"user"` — the click is the human writer
+       * `selectionSources` was built for (T-80), and it is what keeps a rose
+       * bead rose, keeps `su` in the link this page writes back, and lets the
+       * card say "you tapped it" instead of hedging. Without it every tap on
+       * this map read as the agent's, on the page and in every link leaving it.
+       *
+       * A tap on a place that is *already* on the map no longer takes it off.
+       * It opens the card instead, and the card's own Remove does the taking
+       * off — because a tap has to be able to ask "what is this?" of a bead
+       * the agent put there without deleting the agent's work to find out,
+       * and because a mark that vanishes on the same gesture that would have
+       * explained it is the interaction the card exists to replace
+       * (design2-v5 §8.1 row 8: one card, two provenances).
+       */
+      const tapFeature = (id: string, at: { x: number; y: number }) => {
         const current = store.getState().selection;
-        store
-          .getState()
-          .setSelection(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+        if (!current.includes(id)) store.getState().setSelection([...current, id], "user");
+        card.getState().open({ id, x: at.x, y: at.y });
       };
       map.on("click", INTERACTIVE_LAYER_IDS, (event) => {
         // While drawing, a click is a vertex, not a selection.
@@ -575,7 +605,7 @@ export default function MapCanvas() {
         const id = event.features
           ?.map((f) => f.properties?.id)
           .find((value): value is string => typeof value === "string");
-        if (id) toggleSelection(id);
+        if (id) tapFeature(id, event.point);
       });
 
       // A bead answers to two gestures, because it stands for two things. One
@@ -604,7 +634,7 @@ export default function MapCanvas() {
             });
           return;
         }
-        if (typeof id === "string") toggleSelection(id);
+        if (typeof id === "string") tapFeature(id, event.point);
       });
 
       const pointerLayers = [...INTERACTIVE_LAYER_IDS, ...beadLayers];
@@ -623,6 +653,12 @@ export default function MapCanvas() {
     });
 
     map.on("moveend", pushViewFromMap);
+
+    // The card is anchored to a pixel, and a pixel stops meaning a place the
+    // moment the camera moves. Closing it is the honest answer: re-projecting
+    // it would keep a card on screen through a flight that took its subject
+    // off it.
+    map.on("movestart", () => card.getState().close());
 
     // --- Hand drawing -----------------------------------------------------
     // Registered outside `load` so drawing works even if the basemap never
@@ -656,6 +692,15 @@ export default function MapCanvas() {
 
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.view !== previous.view && !fromMap) applyView(state.view);
+      // The first tool call dresses the page in agent chrome, and the
+      // inspector lane it brings takes 336px of the map with it. The camera
+      // centre has to move into what is left, and `bounds` has to say so —
+      // otherwise the agent's very next `get_map_state` describes a corridor
+      // that stopped existing on its own first call.
+      if (bootMode(state) !== bootMode(previous)) {
+        applyPadding();
+        pushBoundsFromMap();
+      }
       // Markers do not need the style, so they are kept in sync from the start.
       if (state.annotations !== previous.annotations) {
         syncAnnotationMarkers(map, markers, state.annotations);

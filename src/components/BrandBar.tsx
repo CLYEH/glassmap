@@ -1,7 +1,6 @@
 "use client";
 
 import { useMapStore } from "@/lib/store/map-store";
-import { ShareChip } from "./ShareChip";
 
 /** 4 decimals is ~11 m: the precision a human reads off a map corner. */
 const dms = (value: number) => Math.abs(value).toFixed(4);
@@ -10,13 +9,19 @@ const dms = (value: number) => Math.abs(value).toFixed(4);
 const zoomLabel = (zoom: number) => `z${Math.round(zoom * 10) / 10}`;
 
 /**
- * The top-left cluster: who this is, where the camera is, and a link back to
- * exactly this view.
+ * The top-left cluster: who this is, and — once an agent is here — where the
+ * camera is.
  *
  * The camera chip is the human-readable half of `get_map_state`: the same
  * numbers a tool reads, in the register a person reads. Its glyph is a scope
  * (circle, centre dot, crosshair ticks) and deliberately not the plain
  * circle-dot the inspector's "Selected" header uses — two concepts, two marks.
+ *
+ * It is agent chrome, so it is hidden in the human landing (globals.css keys
+ * off `.app[data-chrome]`) rather than unmounted: nobody browsing a city needs
+ * five decimal places of their own camera, but the readout is the machine
+ * mirror of a value tools write, and taking it out of the DOM would take it out
+ * of reach of a headless run.
  */
 export function BrandBar() {
   const view = useMapStore((s) => s.view);
@@ -24,7 +29,7 @@ export function BrandBar() {
 
   return (
     <div className="brand-cluster" data-testid="brand-bar">
-      <div className="brand glass">
+      <div className="brand lg lens">
         {/* Teal frame = the agent's view of the map, rose centre = the human's
             place in it. Split solid colours so both survive at 20px. */}
         <svg className="logomark" viewBox="0 0 20 20" fill="none" aria-hidden>
@@ -44,7 +49,7 @@ export function BrandBar() {
         <span className="brand-city">TAIPEI</span>
       </div>
 
-      <div className="cam-chip glass" data-testid="camera-chip">
+      <div className="cam-chip lg" data-testid="camera-chip">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
           <circle cx="5" cy="5" r="3.2" stroke="#b9c3ce" />
           <circle cx="5" cy="5" r="1" fill="#b9c3ce" />
@@ -56,8 +61,6 @@ export function BrandBar() {
           <span className="z">{zoomLabel(view.zoom)}</span>
         </span>
       </div>
-
-      <ShareChip />
     </div>
   );
 }

@@ -94,6 +94,39 @@ export const TIER2_SINGULAR: Record<Tier2Category, string> = {
 };
 
 /**
+ * The same 18, as a person browsing them would read them: the Places tray is a
+ * list of *kinds of place*, so its rows are plural where English pluralises
+ * them and mass nouns where it does not ("Parking", "Convenience", "Worship").
+ *
+ * Separate from `TIER2_SINGULAR` rather than derived from it because "Bakery"
+ * → "Bakeries" and "Place of worship" → "Worship" are not one rule, and a
+ * pluraliser that got them right would still be a function nobody could read
+ * the output of without running it. Same `Record<Tier2Category, …>`
+ * exhaustiveness: a nineteenth category cannot be added without a word for it
+ * here.
+ */
+export const TIER2_PLURAL: Record<Tier2Category, string> = {
+  restaurant: "Restaurants",
+  cafe: "Cafés",
+  fast_food: "Fast food",
+  bakery: "Bakeries",
+  bar: "Bars",
+  convenience: "Convenience",
+  pharmacy: "Pharmacies",
+  clinic: "Clinics",
+  hospital: "Hospitals",
+  place_of_worship: "Worship",
+  bank: "Banks",
+  hotel: "Hotels",
+  parking: "Parking",
+  bicycle_rental: "Bike share",
+  library: "Libraries",
+  museum: "Museums",
+  post_office: "Post offices",
+  police: "Police",
+};
+
+/**
  * The human label for any category a loaded feature can carry. Total over
  * `MapCategory`, so a selected row always has a word for what it is — the one
  * thing a row must never be missing is what kind of place it names.

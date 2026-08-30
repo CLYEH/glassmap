@@ -20,6 +20,8 @@ import {
   decodeShareState,
   encodeShareState,
   MAX_SHARE_URL_BYTES,
+  restoredAgentStateOf,
+  selectionAttributionExplicit,
   utf8Bytes,
   type ShareAnnotation,
   type ShareDrawing,
@@ -820,5 +822,203 @@ describe("opening a shared map on a page with no categories loaded", () => {
       .filter((f) => f.properties.category === "cafe")
       .map((f) => f.properties.id);
     expect(cafes).toContain("osm:node:100");
+  });
+});
+
+/**
+ * `su` — which of the selected ids the human picked themselves.
+ *
+ * The link is the only place a recipient can learn anything about who did
+ * what, and the map on the other side says it out loud ("selected by the
+ * agent"). One rule governs the whole key: **it may only ever narrow a claim.**
+ * A link that carries nothing new must weigh nothing new, byte for byte, and a
+ * link that carries it must never let a reader assert more than the sender
+ * actually recorded.
+ */
+describe("share codec: who selected these features", () => {
+  const HUMAN_ID = "osm:way:10";
+  const humanDemo: ShareState = { ...DEMO, userSelected: [HUMAN_ID] };
+
+  it("costs an agent-only map nothing at all: the same bytes, to the byte", () => {
+    // The byte-identity design, and the reason there is no version bump: every
+    // link written before this key existed, and every link a map the agent
+    // selected alone writes tomorrow, is the same string. An encoder that
+    // wrote `su: []` would invalidate every golden link and every recipient's
+    // "did the bar change?" comparison for a fact worth nothing.
+    expect(encodeShareState(DEMO)).toBe(V1_DEMO_LINK);
+    expect(encodeShareState({ ...DEMO, userSelected: [] })).toBe(V1_DEMO_LINK);
+    // Not selected is not attributable: an id outside `s` annotates nothing.
+    expect(encodeShareState({ ...DEMO, userSelected: ["osm:node:999"] })).toBe(V1_DEMO_LINK);
+    // And a map with no selection at all cannot grow one through this key.
+    const noSelection: ShareState = { ...DEMO, selection: [], userSelected: [HUMAN_ID] };
+    expect(encodeShareState(noSelection)).toBe(
+      encodeShareState({ ...DEMO, selection: [], userSelected: undefined }),
+    );
+  });
+
+  it("carries the human's ids and stays a v1 link an older build can still read", () => {
+    // Ignorable by construction: a build that has never heard of `su` drops it
+    // with every other unknown key and restores exactly the map it always did.
+    const hash = encodeShareState(humanDemo);
+    expect(hash.startsWith("v1.")).toBe(true);
+    const out = decoded(humanDemo);
+    expect(out.selection).toEqual(DEMO.selection);
+    expect(out.userSelected).toEqual([HUMAN_ID]);
+  });
+
+  it("orders `su` by the selection, so the same map always makes the same link", () => {
+    // The address bar is rewritten on any string difference; a key ordered by
+    // the sequence of clicks would rewrite it over a difference nobody can see.
+    const a = encodeShareState({ ...DEMO, userSelected: ["osm:way:10", "osm:node:2"] });
+    const b = encodeShareState({ ...DEMO, userSelected: ["osm:node:2", "osm:way:10"] });
+    expect(a).toBe(b);
+    expect(encodeShareState(decoded({ ...DEMO, userSelected: ["osm:way:10", "osm:node:2"] }))).toBe(a);
+  });
+
+  it("tells 'the link said nothing' apart from 'the link said none of these'", () => {
+    // The razor the hedged copy hangs on. Absent means unknown - which every
+    // link written before this key is - and unknown may not be printed as a
+    // fact about the agent. Empty means the sender looked and found none.
+    const legacy = decodeShareState(V1_DEMO_LINK);
+    if ("error" in legacy) throw new Error(legacy.error);
+    expect(legacy.userSelected).toBeUndefined();
+    expect(selectionAttributionExplicit(legacy)).toBe(false);
+
+    const stated = decodeShareState(wire({ c: [121.5, 25], z: 14, s: ["osm:node:2"], su: [] }));
+    if ("error" in stated) throw new Error(stated.error);
+    expect(stated.userSelected).toEqual([]);
+    expect(selectionAttributionExplicit(stated)).toBe(true);
+
+    expect(selectionAttributionExplicit(decoded(humanDemo))).toBe(true);
+  });
+
+  it("treats a hand-edited `su` as an annotation of `s` and nothing more", () => {
+    // A link is written by whoever sends it. Ids it marks as human-selected
+    // but never selected would otherwise become a selection the recipient
+    // never asked for, or a name in a sentence about a feature not on screen.
+    const out = decodeShareState(
+      wire({ c: [121.5, 25], z: 14, s: ["osm:node:2"], su: ["osm:node:2", "osm:way:99", 7] }),
+    );
+    if ("error" in out) throw new Error(out.error);
+    expect(out.selection).toEqual(["osm:node:2"]);
+    expect(out.userSelected).toEqual(["osm:node:2"]);
+
+    // A `su` that is not a list says nothing, exactly like no `su` at all.
+    const bogus = decodeShareState(wire({ c: [121.5, 25], z: 14, s: ["osm:node:2"], su: "mine" }));
+    if ("error" in bogus) throw new Error(bogus.error);
+    expect(bogus.userSelected).toBeUndefined();
+  });
+});
+
+/**
+ * Whether a restored map already holds agent work — the bit the awakening and
+ * every restored-state surface are built on. Getting it wrong in one direction
+ * announces an agent that was never there; in the other it hides one that was,
+ * which is the failure this whole product exists to prevent.
+ */
+describe("share codec: restoredAgentStateOf", () => {
+  const link = (state: ShareState) => restoredAgentStateOf(decoded(state));
+  const EMPTY: ShareState = { view: VIEW, selection: [], drawings: [], annotations: [] };
+
+  it("is proven by a drawing or a note the agent made", () => {
+    // `o` has ridden every link since the codec shipped, so this is a fact
+    // about the wire and not a presumption about it.
+    expect(link({ ...EMPTY, drawings: [CIRCLE] })).toBe(true);
+    expect(link({ ...EMPTY, annotations: [DEMO.annotations[0]] })).toBe(true);
+  });
+
+  it("is false for a map a person made alone", () => {
+    expect(link(EMPTY)).toBe(false);
+    expect(link({ ...EMPTY, drawings: [USER_DRAWN_AREA], annotations: [DEMO.annotations[1]] })).toBe(
+      false,
+    );
+    // Attributed, and attributed entirely to the human: the one selection that
+    // is evidence of no agent at all.
+    expect(
+      link({ ...EMPTY, selection: ["osm:node:2"], userSelected: ["osm:node:2"] }),
+    ).toBe(false);
+  });
+
+  it("presumes the agent for a selection the link does not attribute", () => {
+    // The blessed presumption. `su`-less is one wire state covering both an old
+    // link and a new all-agent one, and the two errors are not symmetric:
+    // crediting the human for the agent's work hides that an agent was here,
+    // while over-crediting the agent only over-announces a capability the page
+    // is built to show. The copy hedges ("from a shared link"); the bit does
+    // not, because behaviour has to choose.
+    expect(link({ ...EMPTY, selection: ["osm:node:2"] })).toBe(true);
+    // Attributed in part: whatever `su` does not name, the sender recorded as
+    // the agent's.
+    expect(
+      link({ ...EMPTY, selection: ["osm:node:2", "osm:way:10"], userSelected: ["osm:node:2"] }),
+    ).toBe(true);
+  });
+
+  it("reads the links people have already sent, which is every legacy shape there is", () => {
+    // Two shapes exist in the wild: with drawings (proven) and selection-only
+    // (presumed). Both have to answer without a `su` anywhere.
+    const demoLink = decodeShareState(V1_DEMO_LINK);
+    if ("error" in demoLink) throw new Error(demoLink.error);
+    expect(restoredAgentStateOf(demoLink)).toBe(true);
+
+    const selectionOnly = decodeShareState(
+      wire({ c: [121.5375, 25.0325], z: 14, s: ["osm:node:2", "osm:way:10"] }),
+    );
+    if ("error" in selectionOnly) throw new Error(selectionOnly.error);
+    expect(selectionOnly.userSelected).toBeUndefined();
+    expect(restoredAgentStateOf(selectionOnly)).toBe(true);
+
+    // A camera and nothing else is not agent work, however old the link is.
+    const cameraOnly = decodeShareState(wire({ c: [121.5375, 25.0325], z: 14 }));
+    if ("error" in cameraOnly) throw new Error(cameraOnly.error);
+    expect(restoredAgentStateOf(cameraOnly)).toBe(false);
+  });
+});
+
+describe("get_share_link: the selection's provenance", () => {
+  const selectionUrl = async (tool: { call(): Promise<ShareResult> }) => {
+    const out = await tool.call();
+    if (!out.url) throw new Error(out.error);
+    const decodedLink = decodeShareState(out.url.slice(out.url.indexOf("#")));
+    if ("error" in decodedLink) throw new Error(decodedLink.error);
+    return { url: out.url, decoded: decodedLink };
+  };
+
+  it("says which features the human picked, so the other side does not credit the agent", async () => {
+    const { store, call } = shareTool({ features: FIXTURE_FEATURES, view: VIEW });
+    store.setSelection(["osm:way:10"], "user");
+    store.setSelection(["osm:way:10", "osm:node:2"], "agent");
+
+    const { decoded: out } = await selectionUrl({ call });
+    expect(out.selection).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(out.userSelected).toEqual(["osm:way:10"]);
+    expect(restoredAgentStateOf(out)).toBe(true);
+  });
+
+  it("writes the same link it always did when the agent selected everything", async () => {
+    // The proof that the key is free: the same map, with and without a
+    // provenance record, is the same URL.
+    const attributed = shareTool({ features: FIXTURE_FEATURES, view: VIEW });
+    attributed.store.setSelection(["osm:way:10", "osm:node:2"], "agent");
+    const plain = shareTool({ features: FIXTURE_FEATURES, view: VIEW });
+    plain.store.setSelection(["osm:way:10", "osm:node:2"]);
+
+    const a = await selectionUrl(attributed);
+    const b = await selectionUrl(plain);
+    expect(a.url).toBe(b.url);
+    expect(a.decoded.userSelected).toBeUndefined();
+  });
+
+  it("carries nothing about ids the map is no longer showing", async () => {
+    // The store prunes attribution when an id leaves the selection, so a link
+    // can never name a feature it does not carry - which is what would make
+    // `su` decode into an id nobody selected.
+    const { store, call } = shareTool({ features: FIXTURE_FEATURES, view: VIEW });
+    store.setSelection(["osm:way:10"], "user");
+    store.setSelection(["osm:node:2"], "agent");
+
+    const { decoded: out } = await selectionUrl({ call });
+    expect(out.selection).toEqual(["osm:node:2"]);
+    expect(out.userSelected).toBeUndefined();
   });
 });

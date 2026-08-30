@@ -708,6 +708,21 @@ describe("select_features", () => {
     expect(store.getSelection()).toEqual(["osm:way:10"]);
   });
 
+  it("records the ids it adds as the agent's, and leaves the human's alone", async () => {
+    // The map says who selected what, and it only ever says what it was told.
+    // This is the agent half of that record; the click toggle is the other.
+    // Marking everything the call ends up holding would rewrite the human's
+    // own click as the agent's the first time the agent selects around it.
+    const { store, byName } = mapReady();
+    store.setSelection(["osm:way:10"], "user");
+    await call(byName.select_features, { ids: ["osm:node:2"], replace: false });
+    expect(store.getSelection()).toEqual(["osm:way:10", "osm:node:2"]);
+    expect(store.getSelectionSources()).toEqual({
+      "osm:way:10": "user",
+      "osm:node:2": "agent",
+    });
+  });
+
   it("clears the selection with an empty ids array", async () => {
     const { store, byName } = mapReady({ selection: ["osm:way:10"] });
     const out = await call(byName.select_features, { ids: [] });

@@ -48,6 +48,8 @@ export const DEFAULT_VIEW: MapView = {
  *  - features: the six bundled datasets, written by the data loader once, plus
  *    every tier-2 category a tool has loaded since (see `loadCategory`)
  *  - selection: written by tools (select_features) and by the UI (click)
+ *  - selectionSources: written by whichever of those two made the selection;
+ *    left empty by a restore, which was never told who made it
  *  - activity: written by the tool layer only; read by the page
  */
 export interface MapToolStore {
@@ -93,7 +95,29 @@ export interface MapToolStore {
    */
   restoreCategories(categories: readonly Tier2Category[]): Promise<Tier2RestoreResult>;
   getSelection(): readonly string[];
-  setSelection(ids: string[]): void;
+  /**
+   * Replace the selection, and record who put each id there.
+   *
+   * `source` attributes the ids this write *adds* — an id that was already
+   * selected keeps the source already on record, because this write only kept
+   * it. Ids that leave the selection lose their entry in the same write, so the
+   * record can never name a feature the map is not highlighting.
+   *
+   * Omitting `source` records nothing: it is how the share-link restore path
+   * writes a selection whose origin this page was never told (see
+   * `getSelectionSources`). Callers that know the answer must say so —
+   * `select_features` passes `"agent"`, the map's click toggle passes `"user"`.
+   */
+  setSelection(ids: string[], source?: SelectionSource): void;
+  /**
+   * Who selected each currently selected id, as recorded — never guessed.
+   *
+   * An id with no entry is one nobody on this page claimed: today that is every
+   * id restored from a share link, which is exactly why the surfaces that say
+   * "selected by the agent" have to hedge for them rather than assert. Read by
+   * `get_share_link` (the `su` wire key) and by the UI's provenance copy.
+   */
+  getSelectionSources(): Readonly<Record<string, SelectionSource>>;
   getDrawings(): readonly Drawing[];
   /** Returns the stored drawing with its assigned `drawing:<n>` id. */
   addDrawing(drawing: Omit<Drawing, "id">): Drawing;
@@ -109,6 +133,39 @@ export interface MapToolStore {
    * report what they did, only the page reads it back.
    */
   recordActivity(entry: Omit<ActivityEntry, "seq" | "at">): void;
+}
+
+/**
+ * Who put a feature in the selection. The same two words `Drawing.source` and
+ * `Annotation.source` already use, so one vocabulary covers everything on the
+ * map that has a provenance.
+ */
+export type SelectionSource = "agent" | "user";
+
+/**
+ * Attribution follows the selection: `ids` is the whole new selection, and the
+ * result holds an entry only for ids that are in it.
+ *
+ * `source` is written at *add*. An id that was already selected keeps whatever
+ * the record already said about it, because this write did not select it — it
+ * kept it. That is what makes a mixed selection expressible in one field: the
+ * human clicks a cafe, the agent then selects forty more with `replace: false`,
+ * and the cafe is still the human's.
+ */
+function nextSelectionSources(
+  previousSelection: readonly string[],
+  previousSources: Readonly<Record<string, SelectionSource>>,
+  ids: readonly string[],
+  source?: SelectionSource,
+): Record<string, SelectionSource> {
+  const wasSelected = new Set(previousSelection);
+  const next: Record<string, SelectionSource> = {};
+  for (const id of ids) {
+    const recorded = previousSources[id];
+    if (recorded) next[id] = recorded;
+    else if (source && !wasSelected.has(id)) next[id] = source;
+  }
+  return next;
 }
 
 /**
@@ -274,7 +331,26 @@ interface MapStore {
   restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
   tier2Manifest: Tier2Manifest | null;
   selection: string[];
-  setSelection: (ids: string[]) => void;
+  /** See `MapToolStore.getSelectionSources`: as recorded, pruned to `selection`. */
+  selectionSources: Record<string, SelectionSource>;
+  setSelection: (ids: string[], source?: SelectionSource) => void;
+  /**
+   * Whether the link this page was opened with carried agent work — set by
+   * `applyShareHash` from `restoredAgentStateOf(decoded)`, false on a page
+   * opened without a link.
+   *
+   * It exists so the awakening can tell "an agent is arriving now" from "an
+   * agent was here before this link was sent". `src/lib/awaken/` reads it
+   * beside `activity`: a page that boots with this true is already in agent
+   * mode and plays nothing, because there is no crossing to narrate.
+   *
+   * **The write has to come first.** `applyShareHash` is a sequence of store
+   * writes, and every subscriber sees each one; this flag being true from the
+   * first of them is what keeps a restored map out of human chrome for the
+   * milliseconds it takes the shapes to land (see `src/lib/awaken/index.ts`).
+   */
+  restoredAgentState: boolean;
+  setRestoredAgentState: (restoredAgentState: boolean) => void;
   drawings: Drawing[];
   drawingSeq: number;
   addDrawing: (drawing: Omit<Drawing, "id">) => Drawing;
@@ -305,7 +381,14 @@ export const useMapStore = create<MapStore>((set, get) => ({
   restoreTier2Categories: (categories) => zustandTier2.restoreCategories(categories),
   tier2Manifest: null,
   selection: [],
-  setSelection: (selection) => set({ selection }),
+  selectionSources: {},
+  setSelection: (selection, source) =>
+    set((s) => ({
+      selection,
+      selectionSources: nextSelectionSources(s.selection, s.selectionSources, selection, source),
+    })),
+  restoredAgentState: false,
+  setRestoredAgentState: (restoredAgentState) => set({ restoredAgentState }),
   drawings: [],
   drawingSeq: 1,
   addDrawing: (drawing) => {
@@ -385,7 +468,8 @@ export const zustandToolStore: MapToolStore = {
   getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
   restoreCategories: (categories) => zustandTier2.restoreCategories(categories),
   getSelection: () => useMapStore.getState().selection,
-  setSelection: (ids) => useMapStore.getState().setSelection(ids),
+  setSelection: (ids, source) => useMapStore.getState().setSelection(ids, source),
+  getSelectionSources: () => useMapStore.getState().selectionSources,
   getDrawings: () => useMapStore.getState().drawings,
   addDrawing: (drawing) => useMapStore.getState().addDrawing(drawing),
   removeDrawing: (id) => useMapStore.getState().removeDrawing(id),
@@ -452,6 +536,9 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     },
   });
   let selection = [...(init.selection ?? [])];
+  // An initial selection is attributed to nobody, exactly like one restored
+  // from a link: a test that wants a source writes it through `setSelection`.
+  let selectionSources: Record<string, SelectionSource> = {};
   let drawings = [...(init.drawings ?? [])];
   let drawingSeq = drawings.length + 1;
   let annotations = [...(init.annotations ?? [])];
@@ -473,9 +560,11 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     getRestoreFailures: () => tier2RestoreFailures,
     restoreCategories: (categories) => tier2.restoreCategories(categories),
     getSelection: () => selection,
-    setSelection: (ids) => {
+    setSelection: (ids, source) => {
+      selectionSources = nextSelectionSources(selection, selectionSources, ids, source);
       selection = [...ids];
     },
+    getSelectionSources: () => selectionSources,
     getDrawings: () => drawings,
     addDrawing: (drawing) => {
       const stored: Drawing = { ...drawing, id: `drawing:${drawingSeq++}` };

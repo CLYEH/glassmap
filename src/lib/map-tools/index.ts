@@ -68,7 +68,13 @@ import {
   validateLimit,
   validateRadius,
 } from "./query";
-import { decodeShareState, encodeShareState, MAX_SHARE_URL_BYTES, utf8Bytes } from "./share";
+import {
+  decodeShareState,
+  encodeShareState,
+  MAX_SHARE_URL_BYTES,
+  userSelectedIds,
+  utf8Bytes,
+} from "./share";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -785,7 +791,10 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         : store.getSelection().filter((id) => byId.has(id) || restoring);
       for (const id of requestedIds) if (!nextIds.includes(id)) nextIds.push(id);
       for (const f of matched) if (!nextIds.includes(f.properties.id)) nextIds.push(f.properties.id);
-      store.setSelection(nextIds);
+      // "agent" attributes the ids this call *adds*; anything it merely kept
+      // (replace: false) stays whoever's the store already says it is, so a
+      // human's own click is not overwritten by the agent selecting around it.
+      store.setSelection(nextIds, "agent");
 
       // Split before capping, never after. During a restore the retained ids of
       // the link come first and cannot be described yet; one shared cap would
@@ -1235,6 +1244,12 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const hash = encodeShareState({
         view: store.getView(),
         selection,
+        // Which of those ids the human picked themselves, as recorded. It costs
+        // nothing when there are none, and when there are some it is the only
+        // way the recipient's map can tell "the agent chose these" from "the
+        // person did" — otherwise every shared selection looks like the
+        // agent's work on the other side.
+        userSelected: userSelectedIds(selection, store.getSelectionSources()),
         drawings,
         annotations,
         categories,

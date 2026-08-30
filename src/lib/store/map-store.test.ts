@@ -11,6 +11,7 @@ import {
   useMapStore,
   zustandToolStore,
   type ActivityEntry,
+  type MapToolStore,
 } from "./map-store";
 
 const entry = (n: number): Omit<ActivityEntry, "seq" | "at"> => ({
@@ -80,5 +81,96 @@ describe("activity slice", () => {
     // else about the two rows has to be identical.
     const strip = (rows: readonly ActivityEntry[]) => rows.map((row) => ({ ...row, at: 0 }));
     expect(strip(memory.getActivity())).toEqual(strip(useMapStore.getState().activity));
+  });
+});
+
+/**
+ * Who selected what. The record exists so the map can say "the agent picked
+ * these five, you picked that one" without ever guessing — which means the
+ * interesting cases are the ones where it has to stay silent.
+ */
+describe("selection provenance", () => {
+  beforeEach(() => {
+    useMapStore.setState({ selection: [], selectionSources: {} });
+  });
+
+  /** Both adapters, so the tool tests and the app can never drift apart. */
+  const adapters = (): [string, MapToolStore][] => [
+    ["zustand", zustandToolStore],
+    ["memory", createMemoryToolStore()],
+  ];
+
+  it("records who added an id, and keeps it while the id stays selected", () => {
+    for (const [name, store] of adapters()) {
+      store.setSelection(["osm:node:2"], "user");
+      store.setSelection(["osm:node:2", "osm:way:10"], "agent");
+      // The human's own click survives the agent selecting around it: the
+      // second call added osm:way:10 and merely kept osm:node:2. Overwriting
+      // here is how "3 selected by the agent · 2 by you" would quietly become
+      // "5 selected by the agent".
+      expect(store.getSelectionSources(), name).toEqual({
+        "osm:node:2": "user",
+        "osm:way:10": "agent",
+      });
+    }
+  });
+
+  it("records nothing for a selection whose origin it was not told", () => {
+    for (const [name, store] of adapters()) {
+      // This is the share-link restore path: the ids arrive with no claim
+      // about who chose them, and inventing one is exactly what the hedged
+      // "from a shared link" copy exists to avoid.
+      store.setSelection(["osm:node:2", "osm:way:10"]);
+      expect(store.getSelectionSources(), name).toEqual({});
+      // A later agent call that keeps them does not retro-claim them either.
+      store.setSelection(["osm:node:2", "osm:way:10", "osm:node:3"], "agent");
+      expect(store.getSelectionSources(), name).toEqual({ "osm:node:3": "agent" });
+    }
+  });
+
+  it("forgets an id the moment it leaves the selection", () => {
+    for (const [name, store] of adapters()) {
+      store.setSelection(["osm:node:2", "osm:way:10"], "agent");
+      store.setSelection(["osm:way:10"], "agent");
+      expect(store.getSelectionSources(), name).toEqual({ "osm:way:10": "agent" });
+      // Nothing selected, nothing claimed: the record can never name a feature
+      // the map is not highlighting, which is what would let a share link's
+      // `su` carry an id its `s` does not.
+      store.setSelection([]);
+      expect(store.getSelectionSources(), name).toEqual({});
+    }
+  });
+
+  it("re-selecting after a clear is a new decision, attributed to whoever made it", () => {
+    for (const [name, store] of adapters()) {
+      store.setSelection(["osm:node:2"], "agent");
+      store.setSelection([]);
+      store.setSelection(["osm:node:2"], "user");
+      expect(store.getSelectionSources(), name).toEqual({ "osm:node:2": "user" });
+    }
+  });
+});
+
+/**
+ * The flag the awakening reads. The point of it being a plain store field is
+ * that the module watching it never has to know a link was involved.
+ */
+describe("restoredAgentState", () => {
+  it("is off on a page nobody opened with a link", () => {
+    useMapStore.setState({ restoredAgentState: false });
+    expect(useMapStore.getState().restoredAgentState).toBe(false);
+  });
+
+  it("is a one-write flag the restore path can put ahead of everything else", () => {
+    // Flag-first is the ordering contract (see src/lib/awaken/index.ts): this
+    // has to be settable on its own, before the view, the selection or a
+    // single shape has landed.
+    useMapStore.setState({ restoredAgentState: false, selection: [], drawings: [] });
+    useMapStore.getState().setRestoredAgentState(true);
+    expect(useMapStore.getState()).toMatchObject({
+      restoredAgentState: true,
+      selection: [],
+      drawings: [],
+    });
   });
 });

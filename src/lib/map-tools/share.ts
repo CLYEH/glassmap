@@ -20,6 +20,9 @@
  *   c  [lng, lat] camera centre     z  zoom
  *   b  bearing (omitted when 0)     p  pitch (omitted when 0)
  *   s  [feature id, …]              (omitted when empty)
+ *   su [feature id, …]              (the ids of `s` the human selected;
+ *                                    omitted when none, so a map the agent
+ *                                    selected alone encodes as it always did)
  *   d  [drawing, …]                 a  [annotation, …]
  *   t  [tier-2 category name, …]    (v2; omitted when none is loaded)
  *
@@ -60,6 +63,17 @@
  * own link now promising less than the one they were sent. Both sides converge
  * the moment the mirror carries categories in both directions.
  *
+ * `su` is the one key that is *not* versioned, and deliberately so. It only
+ * ever narrows a claim: without it a reader knows the selection came from the
+ * link and nothing more, with it the reader also knows which of those ids the
+ * sender's own screen recorded as human-selected. A build that ignores it (any
+ * build shipped so far — unknown keys are dropped) restores exactly the map it
+ * would have restored anyway, so bumping the version would refuse links for a
+ * field whose absence costs a reader nothing. The price, accepted on the
+ * record: `su`-less is one wire state covering both "an older link" and "a new
+ * link with no human-selected ids", so **every `su`-less selection's
+ * attribution is presumed, not proven** — see `restoredAgentStateOf`.
+ *
  * Decoding is tolerant on purpose — links get pasted, truncated and hand-edited.
  * A payload whose version is unknown, not base64url, not JSON, or has no camera
  * comes back as `{ error }`. Everything past that is best effort: an item that
@@ -69,7 +83,13 @@
  * build can add fields without breaking this one.
  */
 import type { Position } from "geojson";
-import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import type {
+  Annotation,
+  Drawing,
+  LngLat,
+  MapView,
+  SelectionSource,
+} from "@/lib/store/map-store";
 import { isTier2Category, sortedCategories, type Tier2Category } from "@/lib/store/tier2";
 import { round5 } from "./state";
 import {
@@ -121,6 +141,13 @@ export type ShareAnnotation = Omit<Annotation, "id">;
 export interface ShareState {
   view: MapView;
   selection: readonly string[];
+  /**
+   * The ids of `selection` this page recorded as human-selected
+   * (`MapToolStore.getSelectionSources`). Optional, and intersected with
+   * `selection` before it is written: a map the agent selected alone must
+   * encode to exactly the bytes it did before this key existed.
+   */
+  userSelected?: readonly string[];
   drawings: readonly ShareDrawing[];
   annotations: readonly ShareAnnotation[];
   /**
@@ -134,6 +161,14 @@ export interface ShareState {
 export interface DecodedShareState {
   view: MapView;
   selection: string[];
+  /**
+   * Present only when the link carried `su`, and that difference is the whole
+   * point: `undefined` means the link said nothing about who selected these
+   * ids, `[]` means it said "none of them was me". A reader that collapsed the
+   * two would claim knowledge the wire never carried
+   * (`selectionAttributionExplicit`).
+   */
+  userSelected?: string[];
   drawings: ShareDrawing[];
   annotations: ShareAnnotation[];
   /** Empty for a v1 link, and for a v2 link that declared nothing this build knows. */
@@ -164,6 +199,7 @@ interface WirePayload {
   b?: number;
   p?: number;
   s?: string[];
+  su?: string[];
   d?: WireDrawing[];
   a?: WireAnnotation[];
   t?: string[];
@@ -332,6 +368,18 @@ export function encodeShareState(input: ShareState): string {
   );
   if (selection.length) payload.s = [...new Set(selection)];
 
+  // Intersect-only, and ordered by `s`: `su` is an annotation *of* the
+  // selection, so an id that is not selected has nothing to annotate, and two
+  // maps holding the same selection must produce the same link whatever order
+  // their clicks happened in (the address-bar mirror rewrites on any string
+  // difference). Omitted when empty, which is what keeps an agent-only map's
+  // link byte-identical to the one this codec has always written.
+  if (payload.s && input.userSelected?.length) {
+    const human = new Set(input.userSelected);
+    const userSelected = payload.s.filter((id) => human.has(id));
+    if (userSelected.length) payload.su = userSelected;
+  }
+
   const drawings = input.drawings.map(encodeDrawing).filter((d): d is WireDrawing => d !== null);
   if (drawings.length) payload.d = drawings;
 
@@ -463,6 +511,16 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
     ),
   ];
 
+  // `su` is read only as an annotation of what `s` already carried: ids the
+  // link marks as human-selected but never selected are noise, and a link that
+  // does not carry the key at all leaves `userSelected` undefined rather than
+  // empty — the difference every "who selected this?" sentence is built on.
+  let userSelected: string[] | undefined;
+  if (Array.isArray(payload.su)) {
+    const human = new Set(payload.su.filter((id): id is string => typeof id === "string"));
+    userSelected = selection.filter((id) => human.has(id));
+  }
+
   const rawDrawings = Array.isArray(payload.d) ? payload.d : [];
   const drawings = rawDrawings
     .map(decodeDrawing)
@@ -484,7 +542,76 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
   // vocabulary"). A count limit on top of that could only ever be dead code.
   const categories = sortedCategories(rawCategories.filter(isTier2Category));
 
-  return { view, selection, drawings, annotations, categories };
+  return {
+    view,
+    selection,
+    ...(userSelected ? { userSelected } : {}),
+    drawings,
+    annotations,
+    categories,
+  };
+}
+
+// --------------------------------------------------- what a link can be told
+
+/**
+ * The ids of `selection` a page recorded as human-selected — what
+ * `ShareState.userSelected` takes, from what the store holds.
+ *
+ * Both link writers use it (the tool that hands a URL out and the address-bar
+ * mirror), because a link the human copies from the bar and a link the agent
+ * printed must say the same thing about the same map.
+ */
+export function userSelectedIds(
+  selection: readonly string[],
+  sources: Readonly<Record<string, SelectionSource>>,
+): string[] {
+  return selection.filter((id) => sources[id] === "user");
+}
+
+/**
+ * Whether the link stated who selected its ids, rather than leaving it to be
+ * inferred. False for every link written before `su` existed, and for one whose
+ * sender simply had no human-selected ids — the codec cannot tell those apart,
+ * and neither can anything reading this.
+ *
+ * It is the evidence bit for copy, not for behaviour: a surface may *act* on
+ * the presumption below, but a sentence that names the agent needs this to be
+ * true, or it is claiming a fact the wire never carried.
+ */
+export function selectionAttributionExplicit(decoded: DecodedShareState): boolean {
+  return decoded.userSelected !== undefined;
+}
+
+/**
+ * Whether the map this link restores already contains agent work — computed
+ * from what the wire carries, nothing else.
+ *
+ * Two kinds of evidence, and they are not equally strong:
+ *
+ *  - **Proven.** A drawing or a note with `source: "agent"`. Provenance has
+ *    ridden every link since the codec shipped, so this is a fact.
+ *  - **Presumed.** A non-empty selection the link does not attribute wholly to
+ *    the human. `su`-less means unknown, and unknown is read as "the agent
+ *    selected these" on purpose: the two errors are not symmetric. Crediting
+ *    the human for the agent's work hides that an agent was ever here — the
+ *    harmful error — while over-crediting the agent only over-announces a
+ *    capability the page is built to show. It is also the direction the codec
+ *    already leans (a drawing with no `o` decodes as "agent").
+ *
+ * What it drives: a page that boots true is already in agent mode, so the
+ * awakening has no crossing to play (`src/lib/awaken/`), and the restored-state
+ * chrome says an agent has been here. What it must NOT drive is any sentence
+ * that says the agent selected a specific feature — for that,
+ * `selectionAttributionExplicit` has to be true as well.
+ */
+export function restoredAgentStateOf(decoded: DecodedShareState): boolean {
+  if (decoded.drawings.some((d) => d.source === "agent")) return true;
+  if (decoded.annotations.some((a) => a.source === "agent")) return true;
+  if (decoded.selection.length === 0) return false;
+  // Attributed, and attributed entirely to the human: the one selection that
+  // is evidence of no agent at all.
+  return decoded.userSelected?.length !== decoded.selection.length;
 }
 
 /** Byte length of a string as it travels in a URL; the number get_share_link reports. */

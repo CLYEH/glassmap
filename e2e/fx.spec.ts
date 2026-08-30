@@ -95,6 +95,108 @@ async function recordFxTransitions(
   }, ms);
 }
 
+/** What `armFxClock` accumulates and `waitForFxCycle` reads back. */
+interface FxClockState {
+  startedAt?: number;
+  startedPlaying?: string;
+  clearedAt?: number;
+  viewportChildren?: number;
+  overlayChildren?: number;
+}
+
+/** What `waitForFxCycle` resolves with once a cycle completes (or times out). */
+interface FxCycle {
+  lifetimeMs: number | null;
+  startedPlaying: string | null;
+  viewportChildren: number | null;
+  overlayChildren: number | null;
+}
+
+/**
+ * Arms a persistent `MutationObserver` on `fx-viewport`'s `data-fx-count`,
+ * from before the tool call that starts the effect, recording -- entirely on
+ * the browser's own `performance.now()` -- the instant the first effect
+ * begins ("0" -> non-"0"), the `data-fx-playing` value at that same instant,
+ * and the instant the surface next fully clears (-> "0") together with
+ * `fx-viewport`'s and `fx-overlay`'s `childElementCount` read inside that
+ * same synchronous callback.
+ *
+ * Everything the test needs to confirm -- that the effect started under the
+ * right name, and how long it stayed -- is captured here in one browser-side
+ * observer rather than as two separate Node-side `expect()` polls: on a busy
+ * machine, two sequential IPC round trips ("did it start with the right
+ * name", then "has it cleared") can straddle an effect that is honestly only
+ * ~1100ms long, each one arriving late enough that the *other* half of the
+ * check already looks wrong (observed locally under `--repeat-each` even
+ * without CI's extra load) -- a false failure of the harness, not the
+ * product. Pairs with `waitForFxCycle`, which reads the result back;
+ * splitting arm/read (rather than one `evaluate` spanning the tool call)
+ * mirrors `awakening.spec.ts`'s `armWakingClock` / `stateAfterWaking` split
+ * for the same reason: the observer has to exist in the page *before*
+ * `callTool` fires, and `callTool` itself is a Node-side call this helper
+ * cannot wrap.
+ */
+async function armFxClock(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __fxClock?: FxClockState };
+    w.__fxClock = {};
+    const viewport = document.querySelector<HTMLElement>('[data-testid="fx-viewport"]');
+    const overlay = document.querySelector<HTMLElement>('[data-testid="fx-overlay"]');
+    if (!viewport) return;
+    new MutationObserver(() => {
+      const clock = w.__fxClock!;
+      const count = viewport.dataset.fxCount ?? "0";
+      if (count !== "0" && clock.startedAt === undefined) {
+        clock.startedAt = performance.now();
+        clock.startedPlaying = viewport.dataset.fxPlaying ?? "";
+      } else if (count === "0" && clock.startedAt !== undefined && clock.clearedAt === undefined) {
+        clock.clearedAt = performance.now();
+        clock.viewportChildren = viewport.childElementCount;
+        clock.overlayChildren = overlay?.childElementCount ?? -1;
+      }
+    }).observe(viewport, { attributes: true, attributeFilter: ["data-fx-count"] });
+  });
+}
+
+/**
+ * Waits, on the browser's own clock, for `armFxClock`'s observer to see a
+ * full start -> clear cycle, then returns the browser-measured lifetime, the
+ * name it started under, and the child counts recorded at the clearing
+ * instant. Not a Node-side `expect.poll`, for the same reason
+ * `awakening.spec.ts`'s `waitForAwake` exists: a poll's own Node<->browser
+ * round trips are real time spent *inside* the budget being measured, and on
+ * a busy CI runner (many Playwright workers, many Chromium processes, this
+ * call's own tool concurrently playing T-83's 1.8s awakening choreography on
+ * the main thread) that overhead was measured to be enough to fail a check
+ * the effect's own browser-clock lifetime passed comfortably. `null` fields
+ * mean the cycle never completed inside `timeoutMs`, on the browser's own
+ * clock -- a genuine finding, not a measurement artifact.
+ */
+async function waitForFxCycle(page: Page, timeoutMs: number): Promise<FxCycle> {
+  return page.evaluate((timeoutMs) => {
+    return new Promise<FxCycle>((resolve) => {
+      const w = window as unknown as { __fxClock?: FxClockState };
+      const deadline = performance.now() + timeoutMs;
+      const check = () => {
+        const clock = w.__fxClock;
+        if (clock?.startedAt !== undefined && clock.clearedAt !== undefined) {
+          resolve({
+            lifetimeMs: clock.clearedAt - clock.startedAt,
+            startedPlaying: clock.startedPlaying ?? null,
+            viewportChildren: clock.viewportChildren ?? null,
+            overlayChildren: clock.overlayChildren ?? null,
+          });
+        } else if (performance.now() >= deadline) {
+          resolve({ lifetimeMs: null, startedPlaying: null, viewportChildren: null, overlayChildren: null });
+        } else {
+          requestAnimationFrame(check);
+        }
+      };
+      check();
+    });
+  }, timeoutMs);
+}
+
 test.describe("FX layer (T-72)", () => {
   test("ON path: a read tool plays, then clears within the 2.5s window with zero residue", async ({
     page,
@@ -102,26 +204,56 @@ test.describe("FX layer (T-72)", () => {
     await page.goto("/");
     await waitForTools(page);
 
+    const viewport = page.getByTestId("fx-viewport");
+
+    // Armed before the call, on the browser's own clock (T-85's
+    // `waitForAwake` pattern) -- not a pair of Node-side `expect()` polls,
+    // whose own IPC round trips would be spent *inside* the budget this test
+    // measures, and which can straddle an honestly ~1100ms effect entirely
+    // (each round trip arriving late enough that the OTHER half of the check
+    // already looks wrong -- observed locally under `--repeat-each`, not
+    // only on CI). This first live call also plays T-83's 1.8s awakening
+    // choreography concurrently (a separate surface, `body[data-awaken]`,
+    // that this test never reads): on a slow shared CI runner that
+    // main-thread work can starve this effect's own rAF callbacks too, which
+    // is exactly why a Node-side poll measured this as a real failure (T-85
+    // finding 3) even though the effect's own browser-clock lifetime stayed
+    // inside the law. Timing entirely inside the page removes the IPC
+    // overhead from the measurement; genuine main-thread contention still
+    // shows up, honestly, inside the budget below.
+    await armFxClock(page);
+
     const result = await callTool(page, "get_map_state");
     expect(result.error).toBeUndefined();
 
-    const viewport = page.getByTestId("fx-viewport");
-    const overlay = page.getByTestId("fx-overlay");
+    const cycle = await waitForFxCycle(page, 2500);
 
-    // Live while it runs: exactly one name, since only one call was made.
-    await expect(viewport).toHaveAttribute("data-fx-playing", "get_map_state");
-    await expect(viewport).toHaveAttribute("data-fx-count", "1");
+    // It actually started, under the one name this single call should
+    // produce -- not "there was nothing to time" passing by luck -- captured
+    // at the same browser-clock instant the lifetime below is measured from.
+    expect(cycle.lifetimeMs, `fx cycle never cleared within 2.5s: ${JSON.stringify(cycle)}`).not.toBeNull();
+    expect(cycle.startedPlaying).toBe("get_map_state");
 
     // The ≤2s law plus real margin: `get_map_state`'s own effect (viewfinder)
-    // declares 1100ms, well inside the 2.5s ceiling this asserts.
-    await expect(viewport).toHaveAttribute("data-fx-count", "0", { timeout: 2500 });
-    await expect(viewport).toHaveAttribute("data-fx-playing", "");
+    // declares 1100ms, well inside the 2.5s ceiling this asserts -- measured
+    // on the browser's own clock, so neither the awakening's concurrent main-
+    // thread work nor Node's IPC latency is counted against this budget.
+    expect(cycle.lifetimeMs).toBeLessThanOrEqual(2500);
 
-    // Zero residue: the driver's cleanup runs in the same synchronous step
-    // that flips the count to "0" (driver.ts's `finish` then `announce`), so
-    // by the time the attribute reads "0" the DOM is already clean.
-    expect(await viewport.evaluate((el) => el.childElementCount)).toBe(0);
-    expect(await overlay.evaluate((el) => el.childElementCount)).toBe(0);
+    // Zero residue, read inside the exact same synchronous MutationObserver
+    // tick that saw the count reach "0" (driver.ts's `finish` then
+    // `announce` run together, so the DOM is already clean the instant the
+    // attribute says so) -- no separate round trip in which anything else
+    // (the awakening's own chrome mounting, a later effect) could land a
+    // false-positive child in between.
+    expect(cycle.viewportChildren).toBe(0);
+    expect(cycle.overlayChildren).toBe(0);
+
+    // Final-state consistency check, not a timing budget: by now the surface
+    // has already settled (the browser-clock cycle above proved it), so a
+    // plain Node-side assertion cannot race anything here.
+    await expect(viewport).toHaveAttribute("data-fx-count", "0");
+    await expect(viewport).toHaveAttribute("data-fx-playing", "");
   });
 
   test("concurrency honesty: different target keys coexist instead of preempting each other", async ({
@@ -143,15 +275,31 @@ test.describe("FX layer (T-72)", () => {
     // betting on Playwright's own poll cadence catching a possibly-brief
     // "exactly one left" window (viewfinder's 1100ms and reticle's 1300ms
     // are close enough together that a coarse poll can step right over it).
-    const [transitions] = await Promise.all([
+    //
+    // The two `callTool` calls are dispatched together (`Promise.all`, not a
+    // sequential `await` of the first before the second is sent) rather than
+    // one at a time: this is the first live call on a fresh page, so it also
+    // plays T-83's 1.8s awakening choreography on the main thread, and a
+    // sequential dispatch bets that `get_map_state`'s FULL Node<->browser
+    // round trip -- getTools(), executeTool(), JSON parse, serialise the
+    // reply back -- finishes inside its own ~1100ms effect. Under that main-
+    // thread contention it does not always: reproduced locally, `set_map_view`
+    // was not even sent until after `get_map_state`'s effect had fully
+    // cleared, so the two effects never overlapped and this test's own
+    // premise (assert on an overlap) failed honestly on a harness race, not a
+    // product one. Both assertions stay order-agnostic below (`namesAtBothLive`
+    // is sorted, `oneLeft` accepts either survivor) precisely because the
+    // "disjoint keys coexist" law this test guards never depended on which
+    // call landed first.
+    const [transitions, [first, second]] = await Promise.all([
       recordFxTransitions(page, 2500),
-      (async () => {
-        const first = await callTool(page, "get_map_state");
-        expect(first.error).toBeUndefined();
-        const second = await callTool(page, "set_map_view", { center: CENTER, zoom: 14 });
-        expect(second.error).toBeUndefined();
-      })(),
+      Promise.all([
+        callTool(page, "get_map_state"),
+        callTool(page, "set_map_view", { center: CENTER, zoom: 14 }),
+      ]),
     ]);
+    expect(first.error).toBeUndefined();
+    expect(second.error).toBeUndefined();
 
     // Both were live together at some point, under both their real names.
     const bothLive = transitions.find((t) => t.count === "2");
@@ -285,16 +433,30 @@ test.describe("FX layer (T-72)", () => {
     await page.goto("/?rm=1");
     await waitForTools(page);
 
+    // `?rm=1` only forces FX's own reduced-motion switch (`FxLayer.tsx`'s
+    // `forceReducedMotion`); it does nothing to the awakening choreography,
+    // which reads `prefers-reduced-motion` instead (`choreography.ts:265`)
+    // and is not emulated in this suite. So this first live call still plays
+    // T-83's full 1.8s story on the main thread, same as the ON-path test
+    // above -- the browser-clock pattern is the same fix for the same
+    // reason: a Node-side poll's own IPC round trips would be spent inside
+    // the tight budget this test uses on purpose to discriminate the RM
+    // variant from full motion.
+    await armFxClock(page);
+
     const result = await callTool(page, "get_map_state");
     expect(result.error).toBeUndefined();
 
-    const viewport = page.getByTestId("fx-viewport");
-    // RM_MS is 220ms (driver.ts) -- generous poll headroom here, but still
-    // well under half of get_map_state's own full-motion 1100ms and a small
-    // fraction of the 2s law: if `?rm=1` silently stopped switching in the
-    // reduced-motion variant, this would time out rather than pass by luck.
-    await expect(viewport).toHaveAttribute("data-fx-count", "0", { timeout: 800 });
-    expect(await viewport.evaluate((el) => el.childElementCount)).toBe(0);
+    // RM_MS is 220ms (driver.ts). 800ms is generous headroom against
+    // browser-side jitter but still well under half of get_map_state's own
+    // full-motion 1100ms and a small fraction of the 2s law: if `?rm=1`
+    // silently stopped switching in the reduced-motion variant, this would
+    // time out rather than pass by luck.
+    const cycle = await waitForFxCycle(page, 800);
+    expect(cycle.lifetimeMs, `RM cycle never cleared within 800ms: ${JSON.stringify(cycle)}`).not.toBeNull();
+    expect(cycle.startedPlaying).toBe("get_map_state");
+    expect(cycle.lifetimeMs).toBeLessThanOrEqual(800);
+    expect(cycle.viewportChildren).toBe(0);
   });
 
   test("human-gesture separation: a human note gets its own effect but never a feed row", async ({

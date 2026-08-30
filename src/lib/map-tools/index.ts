@@ -570,7 +570,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
       properties: { categories: categoriesProperty, limit: limitProperty },
@@ -598,6 +598,10 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const matched = queryFeatures(visible, { origin, categories: plan.categories });
       return {
         ...listOutput(matched, origin, lim.limit),
+        // Every distance_m and direction below is measured from here, so the
+        // answer says where "here" is instead of leaving the agent to infer it
+        // from a separate get_map_state — and the page can draw the same point.
+        origin: { lng: round5(origin[0]), lat: round5(origin[1]) },
         // A per-category tally of what is on screen, so "what am I looking at?"
         // is one call rather than one call per category. Only worth its tokens
         // once there are POI categories to choose between.
@@ -610,7 +614,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
     inputSchema: {
       type: "object",
       properties: {
@@ -634,6 +638,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ("error" in resolved) return resolved;
       return {
         ...listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit),
+        // What the search was measured from, echoed even when nothing matched:
+        // an empty page still has an origin, and a caller that passed `near`
+        // as a name or an id gets to see the coordinate it resolved to.
+        origin: { lng: round5(resolved.origin[0]), lat: round5(resolved.origin[1]) },
+        // Only when the query was actually constrained by one - a search with
+        // no near/radius_m searched everything, and echoing a radius there
+        // would claim a bound that was never applied.
+        ...(resolved.radius_m !== undefined ? { radius_m: resolved.radius_m } : {}),
         ...resolved.disclosure,
       };
     },

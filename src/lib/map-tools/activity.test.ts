@@ -7,8 +7,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { createMapTools } from "./index";
-import { ACTIVITY_SUMMARY_TOOLS, withActivity } from "./activity";
+import { ACTIVITY_SUMMARY_TOOLS, describeCall, withActivity } from "./activity";
 import {
+  ACTIVITY_FX_HIT_LIMIT,
   ACTIVITY_LIMIT,
   createMemoryToolStore,
   type Drawing,
@@ -332,11 +333,25 @@ describe("summary copy", () => {
     expect(last(store).summary).toBe("Read the camera — 2,063 features loaded");
   });
 
-  it("describe_surroundings says the district it found, in the data's own words", async () => {
-    // OSM and human text in a summary is the point: "Around 大安區" is what
-    // makes the row recognisable to the person looking at the map.
+  it("describe_surroundings names the place it was asked about, not the district around it", async () => {
+    // The row and the map are read together: the page marks the origin this
+    // call resolved to, so a row saying "Around 大安區" beside a mark sitting
+    // on one station is the feed contradicting the screen. The district is a
+    // true fact about the place and still the wrong answer to "where is this
+    // row about?" when the caller named somewhere.
     const { store, byName } = setup();
-    await call(byName.describe_surroundings, { from: "osm:node:2" });
+    await call(byName.describe_surroundings, { from: "Daan Station" });
+    expect(last(store).summary).toMatch(/^Around Daan Station — \d+ features within 500 m$/);
+  });
+
+  it("describe_surroundings falls back to the district when the call named nowhere", async () => {
+    // OSM and human text in a summary is the point: "Around 大安區" is what
+    // makes the row recognisable to the person looking at the map, and a
+    // coordinate or a bare view-centre call has no better word for where it is.
+    const { store, byName } = setup();
+    await call(byName.describe_surroundings, { from: { lng: 121.5436, lat: 25.0334 } });
+    expect(last(store).summary).toMatch(/^Around 大安區 — \d+ features within 500 m$/);
+    await call(byName.describe_surroundings, {});
     expect(last(store).summary).toMatch(/^Around 大安區 — \d+ features within 500 m$/);
   });
 
@@ -358,6 +373,152 @@ describe("summary copy", () => {
     const { store, byName } = setup();
     await call(byName.annotate, { at: "osm:node:2", note: "x".repeat(200) });
     expect(last(store).summary).toBe(`Pinned “${"x".repeat(59)}…” → annotation:1`);
+  });
+});
+
+/**
+ * `fx` is the feed's only non-text field: the geometry the page may draw for a
+ * row. It exists so the human can see *where* a call happened, and it is only
+ * trustworthy while three things hold — it is read from the answer the agent
+ * got, it is absent whenever the answer did not state it, and it never travels
+ * back to the agent. Each test below holds one of those.
+ */
+describe("fx geometry", () => {
+  const fxOf = (store: MemoryToolStore) => last(store).fx;
+
+  it("carries the point a search measured from, the radius it applied and the hits it returned", async () => {
+    // "near Daan Station" is a name; only the tool knows the coordinate it
+    // resolved to, and the page cannot mark a place it has to guess. The three
+    // fields are exactly the three things the effect draws: a centre, a ring
+    // and one mark per result.
+    const { store, byName } = setup();
+    const out = await call(byName.find_features, { near: "Daan Station", categories: ["supermarket"] });
+    expect(fxOf(store)).toEqual({
+      origin: [121.5436, 25.0334],
+      radius_m: 800,
+      hitIds: (out.features as { id: string }[]).map((f) => f.id),
+    });
+  });
+
+  it("leaves out the radius when the search bounded nothing", async () => {
+    // Drawing a ring around a search that had no radius would show the human a
+    // limit the agent never applied — the row would claim a smaller answer
+    // than the one that was given.
+    const { store, byName } = setup();
+    await call(byName.find_features, { query: "Pxmart" });
+    expect(fxOf(store)).toEqual({
+      origin: [VIEW.center[0], VIEW.center[1]],
+      hitIds: ["osm:node:30", "osm:node:32"],
+    });
+  });
+
+  it("still says where an empty search looked", async () => {
+    // "Nothing here" is a fact about a place. The row keeps the origin so the
+    // page can show which place was searched and came back empty.
+    const { store, byName } = setup();
+    await call(byName.find_features, { query: "Shibuya" });
+    expect(fxOf(store)).toEqual({ origin: [VIEW.center[0], VIEW.center[1]] });
+  });
+
+  it(`caps hitIds at ${ACTIVITY_FX_HIT_LIMIT} without capping the answer`, async () => {
+    // The cap is a drawing decision: past a few dozen marks the map is a
+    // smear. It must never look like the search found fewer things, so the
+    // answer the agent reads is untouched and the row still counts them all.
+    const features: GlassMapFeature[] = Array.from({ length: 40 }, (_v, i) => ({
+      type: "Feature",
+      properties: { id: `osm:node:${i}`, name: `Point ${i}`, category: "park", source: "osm" },
+      geometry: { type: "Point", coordinates: [121.5375 + i * 1e-4, 25.0325] },
+    }));
+    const { store, byName } = setup({ features, drawings: [] });
+    const out = await call(byName.find_features, { limit: 40 });
+
+    expect(out.returned).toBe(40);
+    expect(last(store).summary).toBe("Features — found 40");
+    expect(fxOf(store)?.hitIds).toHaveLength(ACTIVITY_FX_HIT_LIMIT);
+    // The kept ids are the first of the page, so the marks are the nearest
+    // results rather than an arbitrary slice of them.
+    expect(fxOf(store)?.hitIds).toEqual(
+      (out.features as { id: string }[]).slice(0, ACTIVITY_FX_HIT_LIMIT).map((f) => f.id),
+    );
+  });
+
+  it("carries where the camera landed, however the caller asked for it", async () => {
+    // A place name, an id and a coordinate all end at one point, and it is the
+    // camera's own new centre — the state the tool returned, not the input.
+    const { store, byName } = setup();
+    await call(byName.set_map_view, { place: "Daan Station", zoom: 15 });
+    expect(fxOf(store)).toEqual({ origin: [121.5436, 25.0334] });
+    await call(byName.set_map_view, { center: { lng: 121.51, lat: 25.05 } });
+    expect(fxOf(store)).toEqual({ origin: [121.51, 25.05] });
+  });
+
+  it("carries both centres of a comparison and the radius they share", async () => {
+    // The shared radius is what makes the two counts comparable; a page
+    // drawing two different circles would be showing a comparison that was
+    // never made.
+    const { store, byName } = setup();
+    await call(byName.compare_areas, { a: "osm:node:2", b: "osm:node:1", radius_m: 500 });
+    expect(fxOf(store)).toEqual({
+      origin: [121.5436, 25.0334],
+      originB: [121.517, 25.0478],
+      radius_m: 500,
+    });
+  });
+
+  it("carries the point describe_surroundings swept and how far it swept", async () => {
+    const { store, byName } = setup();
+    await call(byName.describe_surroundings, { from: "osm:node:2" });
+    expect(fxOf(store)).toEqual({ origin: [121.5436, 25.0334], radius_m: 500 });
+    await call(byName.describe_surroundings, { from: "osm:node:2", radius_m: 250 });
+    expect(fxOf(store)?.radius_m).toBe(250);
+  });
+
+  it("gives no fx to the calls whose geometry is already on the map", async () => {
+    // A drawing, a pin and a measured shape are real objects the page can look
+    // up by the id in refIds; echoing their coordinates into the feed would be
+    // a second copy of the same truth, free to drift from the first.
+    const { store } = await runHappyPath();
+    const byTool = new Map(store.getActivity().map((e) => [e.tool, e]));
+    for (const tool of ["draw_shape", "annotate", "measure", "select_features"]) {
+      expect({ tool, fx: byTool.get(tool)?.fx }).toEqual({ tool, fx: undefined });
+    }
+    expect(byTool.get("draw_shape")?.refIds).toEqual(["drawing:2"]);
+    expect(byTool.get("measure")?.refIds).toEqual(["drawing:1"]);
+    // ...and none to the calls that are about no single place at all.
+    for (const tool of ["get_map_state", "list_features_in_view", "get_share_link"]) {
+      expect({ tool, fx: byTool.get(tool)?.fx }).toEqual({ tool, fx: undefined });
+    }
+  });
+
+  it("never reaches the agent: it is on the row, not in the answer", async () => {
+    // The feed is the page's own view of what happened. Adding a field to a
+    // tool result would put it in the model's context, where it costs tokens
+    // and says nothing the answer does not already say.
+    const { store, byName } = setup();
+    const found = await call(byName.find_features, { near: "Daan Station" });
+    const state = await call(byName.get_map_state);
+    expect(found).not.toHaveProperty("fx");
+    expect(state).not.toHaveProperty("fx");
+    expect(JSON.stringify(state)).not.toContain("fx");
+    expect(fxOf(store)).toBeUndefined(); // ...the row above is get_map_state's.
+    expect(store.getActivity().at(-2)?.fx).toBeDefined();
+  });
+
+  it("invents nothing when the answer has no geometry in it", async () => {
+    // The page degrades to a row with no mark. It must never fall back to the
+    // view centre or to the input's own words: a mark in the wrong place is a
+    // lie about where the agent looked, and the human cannot check it.
+    expect(describeCall("find_features", {}, { total: 0, returned: 0, features: [] }).fx).toBeUndefined();
+    expect(describeCall("set_map_view", { place: "somewhere" }, { zoom: 15 }).fx).toBeUndefined();
+    expect(describeCall("compare_areas", {}, { a: {}, b: {} }).fx).toBeUndefined();
+    // A radius or a page of ids with no point to hang them on is not geometry:
+    // the row would otherwise carry an fx the page could only place by guessing.
+    expect(describeCall("describe_surroundings", { radius_m: 300 }, { total: 0 }).fx).toBeUndefined();
+    expect(
+      describeCall("find_features", {}, { total: 1, returned: 1, features: [{ id: "osm:node:2" }] }).fx,
+    ).toBeUndefined();
+    // A refusal is drawn as nothing at all, whatever it was asked to do.
+    expect(describeCall("find_features", { near: "x" }, { error: "unknown place" }).fx).toBeUndefined();
   });
 });
 

@@ -159,7 +159,47 @@ export interface ActivityEntry {
   at: number;
   /** Ids the call produced or acted on — exactly those named in `summary`. */
   refIds?: string[];
+  /**
+   * Geometry the page may draw for this call, and nothing else.
+   *
+   * This is the one field in the feed that is not text: it lets the page show
+   * *where* a call happened — a ring at the point a search measured from, a
+   * reticle where the camera landed — instead of only saying so in words.
+   * Three rules keep it honest:
+   *
+   *  - it is read from what the tool already answered, never re-derived and
+   *    never guessed, so a row can only point at a place the call really used;
+   *  - it is optional everywhere, so anything drawing from it must degrade to
+   *    nothing rather than invent a coordinate;
+   *  - it never travels back to the agent. Tool results are unchanged by it;
+   *    this is data for the human's own screen.
+   */
+  fx?: ActivityFx;
 }
+
+/** See {@link ActivityEntry.fx}. Coordinates are `[lng, lat]`, round5'd. */
+export interface ActivityFx {
+  /** Where the call acted: a search origin, a camera target, an area's centre. */
+  origin?: [number, number];
+  /** The second centre of a two-place call (compare_areas' `b`). */
+  originB?: [number, number];
+  /** The radius the call actually used, in metres — never one it did not apply. */
+  radius_m?: number;
+  /**
+   * find_features only: the ids of the page it returned, capped at
+   * {@link ACTIVITY_FX_HIT_LIMIT}. A truncation, not a result: the answer's own
+   * `returned` count is the truth, and a page larger than the cap is drawn
+   * partly rather than not at all.
+   */
+  hitIds?: string[];
+}
+
+/**
+ * How many hits one row's `fx` carries. The page draws one mark per hit, and
+ * past a few dozen the marks stop being legible long before the array stops
+ * being cheap — so this caps the drawing, never the answer.
+ */
+export const ACTIVITY_FX_HIT_LIMIT = 30;
 
 /**
  * How many entries the feed keeps. It is a live view of what just happened,

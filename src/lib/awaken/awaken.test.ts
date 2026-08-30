@@ -43,6 +43,7 @@ import {
   encodeShareState,
   restoredAgentStateOf,
   restoredSelectionSources,
+  selectionAttributionExplicit,
   type DecodedShareState,
   type ShareState,
 } from "@/lib/map-tools/share";
@@ -102,6 +103,15 @@ const HUMAN_LINK = link({
   annotations: [],
 });
 
+/** A map the two of them made: the human's id named, the rest the agent's. */
+const MIXED_LINK = link({
+  view: VIEW,
+  selection: ["osm:node:2", "osm:way:10"],
+  userSelected: ["osm:node:2"],
+  drawings: [],
+  annotations: [],
+});
+
 /**
  * The store writes `applyShareHash` performs, in the order it performs them —
  * with the flag write's position as the variable, because that position is the
@@ -110,7 +120,13 @@ const HUMAN_LINK = link({
  */
 function restoreWrites(decoded: DecodedShareState, { flagFirst = true } = {}) {
   const store = useMapStore.getState();
-  const flag = () => store.setRestoredAgentState(restoredAgentStateOf(decoded));
+  // The flag-first block: what the page IS, and what it may SAY. Both are
+  // decode-time facts, and both have to be true of the store before a single
+  // pixel of the restored map exists.
+  const flag = () => {
+    store.setRestoredAgentState(restoredAgentStateOf(decoded));
+    store.setSelectionAttributionExplicit(selectionAttributionExplicit(decoded));
+  };
   if (flagFirst) flag();
   store.setView(decoded.view);
   // The link's `su` is what this page knows about who selected these ids -
@@ -138,6 +154,7 @@ beforeEach(() => {
     activity: [],
     activitySeq: 1,
     restoredAgentState: false,
+    selectionAttributionExplicit: false,
     selection: [],
     selectionSources: {},
     drawings: [],
@@ -354,6 +371,53 @@ describe("awaken trigger: the eleven orderings", () => {
 
     w.completeWaking();
     expect(w.modes).toEqual(["idle", "waking", "awake"]);
+  });
+});
+
+/**
+ * The other bit the restore writes, in the same block and read by nobody here.
+ * It is tested beside the trigger because it is written beside the flag, and
+ * because the two answer different questions: what the page *is* (agent
+ * chrome, no story) versus what the page may *say* about the beads on it. A
+ * surface that took its wording from the flag would print "selected by the
+ * agent" over a map a person made by hand.
+ */
+describe("awaken: the evidence the restore carries beside the flag", () => {
+  const CAMERA_LINK = link({ view: VIEW, selection: [], drawings: [], annotations: [] });
+
+  /** Restore into a clean store and report both bits, as the chrome reads them. */
+  const restored = (decoded: DecodedShareState) => {
+    useMapStore.setState({
+      restoredAgentState: false,
+      selectionAttributionExplicit: false,
+      selection: [],
+      selectionSources: {},
+      drawings: [],
+    });
+    restoreWrites(decoded);
+    const state = useMapStore.getState();
+    return { agent: state.restoredAgentState, explicit: state.selectionAttributionExplicit };
+  };
+
+  it("carries all four combinations, because neither bit can be derived from the other", () => {
+    // Every row is a link somebody can send today. The diagonal is what makes
+    // two fields necessary: a human-made map is not agent state yet proves its
+    // attribution, and a legacy link is agent state on a presumption it cannot
+    // prove — the one that has to hedge to "from a shared link".
+    expect(restored(CAMERA_LINK)).toEqual({ agent: false, explicit: false });
+    expect(restored(HUMAN_LINK)).toEqual({ agent: false, explicit: true });
+    expect(restored(LEGACY_SELECTION_LINK)).toEqual({ agent: true, explicit: false });
+    expect(restored(MIXED_LINK)).toEqual({ agent: true, explicit: true });
+  });
+
+  it("adds a write to the restore without adding an arrival to it", () => {
+    // The block grew by one write, and the law it exists under did not: no
+    // part of a restore may ever be narrated as an agent showing up.
+    const w = watch();
+    restoreWrites(MIXED_LINK);
+    expect(w.modes).toEqual(["idle", "awake"]);
+    expect(w.modes).not.toContain("waking");
+    expect(useMapStore.getState().selectionAttributionExplicit).toBe(true);
   });
 });
 

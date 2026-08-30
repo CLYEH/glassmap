@@ -393,6 +393,34 @@ interface MapStore {
    */
   restoredAgentState: boolean;
   setRestoredAgentState: (restoredAgentState: boolean) => void;
+  /**
+   * Whether the link this page was opened with *stated* who selected its ids —
+   * set by `applyShareHash` from `selectionAttributionExplicit(decoded)`
+   * (`map-tools/share.ts`), false on a page opened without a link.
+   *
+   * The sibling above decides what the page **is**; this decides what it may
+   * **say**. True means the link carried `su`, so the ids it does not name are
+   * the sender's recorded agent selections and a surface may assert "selected
+   * by the agent". False means the wire said nothing — every `su`-less link,
+   * legacy or all-agent, is one indistinguishable state — and the same beads
+   * must hedge to "from a shared link". Evidence known only at decode time,
+   * kept here because the surface that needs it renders long afterwards and
+   * cannot re-read the link.
+   *
+   * **It describes the restore, and nothing else resets it.** A live selection
+   * write has no reason to: `selectionSources` records who selected each id as
+   * it is selected, and a recorded source is the stronger evidence, so copy
+   * asks the record first and falls back to this bit only for ids the page
+   * holds no record for — which after a restore is exactly the complement of
+   * `su`. (That fallback is only sound while every live write records a
+   * source; `MapCanvas`'s click path passes none today, which is T-82/T-83's
+   * to close.) The write is unconditional — false is written as loudly as true
+   * — so if a document ever restores a second link (`useShareHash` applies at
+   * most one per load today) the new link's evidence replaces the old link's
+   * instead of outliving it.
+   */
+  selectionAttributionExplicit: boolean;
+  setSelectionAttributionExplicit: (selectionAttributionExplicit: boolean) => void;
   drawings: Drawing[];
   drawingSeq: number;
   addDrawing: (drawing: Omit<Drawing, "id">) => Drawing;
@@ -436,6 +464,9 @@ export const useMapStore = create<MapStore>((set, get) => ({
     })),
   restoredAgentState: false,
   setRestoredAgentState: (restoredAgentState) => set({ restoredAgentState }),
+  selectionAttributionExplicit: false,
+  setSelectionAttributionExplicit: (selectionAttributionExplicit) =>
+    set({ selectionAttributionExplicit }),
   drawings: [],
   drawingSeq: 1,
   addDrawing: (drawing) => {

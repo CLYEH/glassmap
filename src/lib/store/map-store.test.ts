@@ -216,3 +216,77 @@ describe("restoredAgentState", () => {
     });
   });
 });
+
+/**
+ * The evidence the restored chrome's *copy* is gated on. Its sibling above
+ * decides what the page is; this decides what the page may claim about who
+ * selected the beads on it, and the whole point of it being store state is
+ * that the claim is made by a surface rendered long after the link is gone.
+ */
+describe("selectionAttributionExplicit", () => {
+  beforeEach(() => {
+    useMapStore.setState({
+      selectionAttributionExplicit: false,
+      selection: [],
+      selectionSources: {},
+    });
+  });
+
+  it("is off on a page opened without a link: nothing has stated anything yet", () => {
+    // False is not "the link said no human selected these" - it is "no link
+    // said anything", which is why the copy it gates hedges rather than
+    // asserting the agent.
+    expect(useMapStore.getState().selectionAttributionExplicit).toBe(false);
+  });
+
+  it("takes the link's statement in both directions, so evidence cannot outlive its link", () => {
+    // `applyShareHash` writes it from `selectionAttributionExplicit(decoded)`
+    // unconditionally, false included. A setter that only ever turned it on
+    // would let a `su`-carrying link license "selected by the agent" for the
+    // beads of a `su`-less one restored after it.
+    const store = useMapStore.getState();
+    store.setSelectionAttributionExplicit(true);
+    expect(useMapStore.getState().selectionAttributionExplicit).toBe(true);
+    store.setSelectionAttributionExplicit(false);
+    expect(useMapStore.getState().selectionAttributionExplicit).toBe(false);
+  });
+
+  it("is settable on its own, ahead of the content the restore is about to write", () => {
+    // It rides the flag-first block (src/lib/awaken/index.ts): both bits land
+    // before the view, the selection and the shapes, so no frame of the
+    // restored map is ever rendered with the wrong sentence under it.
+    useMapStore.setState({ restoredAgentState: false, selection: [], drawings: [] });
+    const store = useMapStore.getState();
+    store.setRestoredAgentState(true);
+    store.setSelectionAttributionExplicit(true);
+    expect(useMapStore.getState()).toMatchObject({
+      restoredAgentState: true,
+      selectionAttributionExplicit: true,
+      selection: [],
+      drawings: [],
+    });
+  });
+
+  it("keeps describing the restore when the agent selects live, because the record wins", () => {
+    // The reset rule, and why there is no reset. A live write records its own
+    // per-id source, and a record is stronger evidence than a link's
+    // statement: copy asks `selectionSources` first, so a later selection
+    // cannot make the link's statement wrong. Clearing the bit here would
+    // instead hedge the restored beads whose attribution the sender proved.
+    const store = useMapStore.getState();
+    store.setSelectionAttributionExplicit(true);
+    // The restore: `su` named one of the two ids; the other is the sender's
+    // agent selection, recorded nowhere but implied by the statement.
+    store.setSelection(["osm:node:2", "osm:way:10"], { "osm:node:2": "user" });
+
+    store.setSelection(["osm:node:2", "osm:way:10", "osm:node:3"], "agent");
+    expect(useMapStore.getState().selectionAttributionExplicit).toBe(true);
+    // Three ids, three different answers: two recorded (the record answers),
+    // one still unrecorded (the bit answers, and says the sender attributed
+    // it to their agent).
+    expect(useMapStore.getState().selectionSources).toEqual({
+      "osm:node:2": "user",
+      "osm:node:3": "agent",
+    });
+  });
+});

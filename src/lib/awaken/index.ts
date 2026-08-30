@@ -43,6 +43,14 @@
  *    camera, the selection and every shape would land while this module still
  *    reported "idle", and the agent chrome would snap in afterwards.
  *
+ * The same block carries a second bit this module never reads —
+ * `setSelectionAttributionExplicit(selectionAttributionExplicit(decoded))`,
+ * the evidence the restored chrome's *copy* is gated on (`store/map-store.ts`).
+ * It is here for the same reason: decode-time knowledge, needed by a render
+ * that happens later. Which of the two goes first does not matter — this
+ * module reads only `restoredAgentState`, and a write of the other cannot
+ * change `isAgentState` — but both go before the content.
+ *
  * ## Contracts the UI owns (mirrored from the FX driver, which owns the map's
  * motion; this owns a one-time mode change, so it cannot live in that driver:
  * its product — the agent chrome — persists, and the driver's law is zero

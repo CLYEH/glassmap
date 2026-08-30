@@ -620,6 +620,17 @@ export function restoredSelectionSources(
  * It is the evidence bit for copy, not for behaviour: a surface may *act* on
  * the presumption below, but a sentence that names the agent needs this to be
  * true, or it is claiming a fact the wire never carried.
+ *
+ * **The restore has to carry it into the store**, because the surfaces that
+ * ask are rendered long after the link is gone and nothing can re-read it:
+ * `applyShareHash` writes
+ * `setSelectionAttributionExplicit(selectionAttributionExplicit(decoded))` in
+ * the same flag-first block as
+ * `setRestoredAgentState(restoredAgentStateOf(decoded))`, before any content
+ * write (`store/map-store.ts` holds the field, `src/lib/awaken/index.ts` the
+ * ordering; T-83 wires the component half). Same block, different jobs: the
+ * flag decides the chrome, this decides whether that chrome may say "selected
+ * by the agent" or has to hedge to "from a shared link".
  */
 export function selectionAttributionExplicit(decoded: DecodedShareState): boolean {
   return decoded.userSelected !== undefined;

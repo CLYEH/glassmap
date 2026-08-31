@@ -40,13 +40,14 @@ const number = (n: number) => n.toLocaleString("en-US");
 export function LoadedCategories() {
   const loaded = useMapStore((s) => s.tier2Loaded);
   const features = useMapStore((s) => s.tier2Features);
-  // The browsed category is painted, and the Places dock already names it with
+  // A browsed category is painted, and the Places dock already names it with
   // its count — so it belongs to the painted half of the split, not to this
   // one. What is left here is exactly what the row claims to be: loaded, and
-  // invisible.
-  const browsing = useBrowseStore((s) => s.category);
+  // invisible. Up to three of them can be painted at once, so this is a set
+  // subtraction rather than one name.
+  const browsing = useBrowseStore((s) => s.categories);
   const rows = useMemo(
-    () => loadedCategoryRows(loaded, features).filter((row) => row.category !== browsing),
+    () => loadedCategoryRows(loaded, features).filter((row) => !browsing.includes(row.category)),
     [loaded, features, browsing],
   );
 

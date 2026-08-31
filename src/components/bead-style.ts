@@ -19,7 +19,7 @@ const asLayer = (spec: object) => spec as AddLayerObject;
 /** The selected places, one point each, clustered. */
 export const BEAD_SOURCE = "gm-src-bead";
 
-/** The one category a human is browsing, clustered. Empty unless they asked. */
+/** The categories a human is browsing, clustered. Empty unless they asked. */
 export const BROWSE_SOURCE = "gm-src-browse";
 
 export const BEAD_LAYER = "gm-bead";
@@ -240,13 +240,35 @@ export const beadSourceSpec = () => ({
   },
 });
 
-/** The browse source. Browsing is a human act, so every mark from it is rose. */
+/**
+ * The name of the browsed-category slot a browse point was painted under: its
+ * index in the browsed set, 0-based. Not the category itself, because what the
+ * style has to decide is only ever "do these agree?", and a number the source
+ * can take a min and a max of answers that without the cluster properties
+ * having to be rebuilt every time a person taps a chip.
+ */
+export const BROWSE_SLOT = "slot";
+
+/**
+ * The browse source. Browsing is a human act, so every mark from it is rose.
+ *
+ * `smin`/`smax` are the lowest and highest slot inside a cluster, which makes
+ * "every place in here is the same kind" decidable in the style itself
+ * (`smin === smax`) — the same trick the selection source plays with `user`
+ * against `point_count`, for the same reason: a cluster's colour is a claim
+ * about all of its members, so the style needs an aggregate rather than a
+ * sample.
+ */
 export const browseSourceSpec = () => ({
   type: "geojson" as const,
   data: EMPTY,
   cluster: true,
   clusterRadius: CLUSTER_RADIUS_PX,
   clusterMaxZoom: CLUSTER_MAX_ZOOM,
+  clusterProperties: {
+    smin: ["min", ["get", BROWSE_SLOT]],
+    smax: ["max", ["get", BROWSE_SLOT]],
+  },
 });
 
 const beadIcon = (kind: "bead" | "cluster") => [
@@ -259,6 +281,29 @@ const beadIcon = (kind: "bead" | "cluster") => [
 const clusterIcon = [
   "case",
   ["==", ["get", "user"], ["get", "point_count"]],
+  beadImageId("cluster", "user"),
+  beadImageId("cluster", "agent"),
+];
+
+/**
+ * A counted browse bead: rose while every place under the numeral is the same
+ * kind, teal the moment two categories coalesce into it.
+ *
+ * The owner's mixed-cluster=teal ruling, applied to the axis multi-category
+ * browsing added. A numeral is the loudest mark this map draws and it is read
+ * as "38 of the thing you asked for"; with three categories painted at once,
+ * on the rose that says "you asked for this", that sentence is only true while
+ * the 38 agree. Teal is the map's existing word for "this mark is not one
+ * person's single act", and Ruling 3 already settled which way to err: a mark
+ * that under-claims is the safe error, a mark that over-claims is not.
+ *
+ * The grains keep their rose whatever they hold: the grain field is texture,
+ * and texture makes no claim to be about one kind. The colour only moves where
+ * a number is put on it.
+ */
+const browseClusterIcon = [
+  "case",
+  ["==", ["get", "smin"], ["get", "smax"]],
   beadImageId("cluster", "user"),
   beadImageId("cluster", "agent"),
 ];
@@ -316,7 +361,7 @@ export function buildBeadLayerSpecs(threshold = Number.POSITIVE_INFINITY): AddLa
       source: BROWSE_SOURCE,
       filter: browseBeadFilter(threshold),
       layout: {
-        "icon-image": beadImageId("cluster", "user"),
+        "icon-image": browseClusterIcon,
         "icon-size": clusterIconSize(BROWSE_CLUSTER_RAMP),
         ...NEVER_HIDE,
         ...countLabel(BROWSE_CLUSTER_RAMP),
@@ -423,34 +468,44 @@ export function beadAnchorsToGeoJson(
 }
 
 /**
- * Every loaded place in the browsed category, minus the ones already selected.
+ * Every loaded place in the browsed categories, minus the ones already
+ * selected.
  *
  * The subtraction is what keeps a place from being drawn twice: a selected
  * cafe is a bead, and a bead is a stronger statement than a grain. Without it
  * the same cafe would carry both marks and the count under the numeral would
  * be wrong about how many places are still just "browsable".
  *
- * `null` category means nobody is browsing, and the browse layer is empty —
- * the calm map, byte for byte.
+ * One point per *place*, never per category it matches: a bakery that also
+ * serves coffee is one dot on the map whether the human is browsing bakeries,
+ * cafes or both, or the numeral over it would count a single shop twice. The
+ * `slot` it carries is the first browsed category it matches, in the order the
+ * human asked for them — the kind it was painted under, which is all the style
+ * needs to tell a cluster of one kind from a cluster of several.
+ *
+ * An empty category list means nobody is browsing, and the browse layer is
+ * empty — the calm map, byte for byte.
  */
 export function browsePointsToGeoJson(
   features: readonly MapFeature[],
-  category: Tier2Category | null,
+  categories: readonly Tier2Category[],
   selection: readonly string[] = [],
 ): FeatureCollection {
-  if (!category) return { type: "FeatureCollection", features: [] };
+  if (categories.length === 0) return { type: "FeatureCollection", features: [] };
   const selected = new Set(selection);
   const out: Feature[] = [];
   for (const feature of features) {
     const id = feature.properties.id;
     if (selected.has(id)) continue;
-    if (!featureCategories(feature).includes(category)) continue;
+    const own = featureCategories(feature);
+    const slot = categories.findIndex((category) => own.includes(category));
+    if (slot < 0) continue;
     const at = anchorPosition(feature.geometry);
     if (!at) continue;
     out.push({
       type: "Feature",
       geometry: { type: "Point", coordinates: at },
-      properties: { id },
+      properties: { id, [BROWSE_SLOT]: slot },
     });
   }
   return { type: "FeatureCollection", features: out };

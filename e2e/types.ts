@@ -42,6 +42,10 @@ export interface ToolResult {
   unsearched_categories?: UnsearchedCategoryResult[];
   category_counts?: Record<string, number>;
   matched?: number;
+  // find_features (T-100): what a name search could have found in
+  // point-of-interest categories this session has not fetched.
+  unloaded_matches?: UnloadedMatchResult[];
+  unloaded_matches_omitted?: number;
   // remove_from_map (T-90): every id the caller named, accounted for by
   // bucket. Mirrors `RemoveOutput` in src/lib/map-tools/remove.ts.
   removed?: RemovedResult[];
@@ -116,6 +120,12 @@ export interface UnsearchedCategoryResult {
   category: string;
   /** From the manifest: how many exist in the whole city, without loading any. */
   citywide_count: number;
+}
+
+/** One category holding features matching the query that this session has not loaded. */
+export interface UnloadedMatchResult {
+  category: string;
+  count: number;
 }
 
 /** The point-of-interest slice of map state; see `state.ts`'s Tier2StateOutput. */

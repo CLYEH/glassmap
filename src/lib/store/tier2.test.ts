@@ -863,6 +863,34 @@ describe("the store the app ships", () => {
     expect(zustandToolStore.getRestoreFailures()[0].error).toMatch(/bakery/);
   });
 
+  it("loads a category for the page without ever claiming a link failed", async () => {
+    // The page has two loaders and the difference is not bookkeeping.
+    // `tier2RestoreFailures` is a claim about a *share link*: the page renders
+    // it as "couldn't load cafe for this link" (`ShareRestoreNotice`),
+    // `get_map_state` reports it under `tier2.failed`, and `shareCategories`
+    // keeps declaring a category that failed for a moment in the next link this
+    // page writes — so a recipient downloads the file for it. A search pick has
+    // no link behind it, so it takes `loadTier2Category`: when the file does not
+    // arrive the picker says so itself, and the store records nothing.
+    serveFixture(); // the fixture manifest lists no bakery file
+    const failed = await useMapStore.getState().loadTier2Category("bakery");
+    expect(failed.ok).toBe(false);
+    expect(useMapStore.getState().tier2RestoreFailures).toEqual([]);
+    expect(useMapStore.getState().tier2Pending).toEqual([]);
+
+    // The contrast in one place, so unifying the two loaders cannot pass: the
+    // same failure through the share-restore loader is exactly the state a
+    // linkless page must not be left holding.
+    await useMapStore.getState().restoreTier2Categories(["bakery"]);
+    expect(useMapStore.getState().tier2RestoreFailures.map((f) => f.category)).toEqual(["bakery"]);
+
+    // And a pick that works still discloses itself where every loaded-but-
+    // unpainted category is disclosed: the `poi-loaded` strip reads this list.
+    expect(await useMapStore.getState().loadTier2Category("cafe")).toMatchObject({ ok: true });
+    expect(useMapStore.getState().tier2Loaded).toEqual(["cafe"]);
+    expect(zustandToolStore.getFeatures()).toHaveLength(3);
+  });
+
   it("stops calling a category unloadable the moment its features are in memory", async () => {
     // Reproduced on the live page: a link's cafe file failed, the agent then
     // asked for cafes by name and got all of them, and the page went on saying

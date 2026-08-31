@@ -513,6 +513,40 @@ body[data-fx="off"] .caustic {
   color: var(--text-low);
   white-space: nowrap;
 }
+/* The citywide rows (T-100): places the city has that this page has not
+   fetched. They are answers of a different kind and have to look like it —
+   a hollow dot instead of a filled one, dimmer text, and the words "loads on
+   pick", because accepting one downloads a category file. Never a different
+   colour: colour on this map means provenance, and nobody has acted yet. */
+.search-row.idx .sr-name {
+  color: var(--text-mid);
+}
+.sr-dot.hollow {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.34);
+}
+.sr-dot.rose {
+  background: var(--human);
+}
+.sr-load {
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-low);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.search-row[data-loading] .sr-load {
+  color: var(--human);
+  background: rgba(244, 143, 177, 0.14);
+}
+/* "Browse every café in Taipei": an offer, not a result, so it reads as the
+   Places tray's own chip does — the kind in words, its Chinese name under it,
+   and the manifest's count where a distance would be. */
+.search-row.cat .sr-name {
+  font-weight: 560;
+}
 .sr-d {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -1315,15 +1349,56 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   font-weight: 600;
 }
 
+/* T-101: every row in this panel answers to a click. The row itself is only a
+   container now — two children divide it, so the two gestures cannot fight:
+   `.sel-hit` (fly to the place) takes all the space the ✕ does not, and both
+   are real <button>s, which is where the keyboard, the focus ring and the
+   pointer cursor come from for free (see the base rules at the top). */
 .sel-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 8px;
   border-radius: 8px;
+}
+.sel-hit {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 }
 .sel-row:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+/* The affordance: the part that flies the camera lights up more than the row
+   around it, so "this is the clickable half" is legible before the click. */
+.sel-hit:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+/* An id nothing has loaded: rendered as a span, not a button, because there is
+   nowhere to fly to. It keeps the row's layout and loses every affordance. */
+.sel-hit.off {
+  cursor: default;
+}
+.sel-x {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-low);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+}
+.sel-x:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.07);
 }
 .sel-dot {
   width: 8px;
@@ -1390,11 +1465,37 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   flex-shrink: 0;
   margin-top: 1px;
 }
+/* T-101: the shape/note half that frames the thing on the map. Inset by its own
+   padding so the hover highlight hugs the content instead of the card edge, and
+   spans rather than divs because it lives inside a <button>. */
+.obj-hit {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  margin: -3px;
+  padding: 3px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.obj-hit:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.obj-hit.off {
+  cursor: default;
+}
 .obj-main {
+  display: block;
   min-width: 0;
   flex: 1;
 }
 .obj-title {
+  display: block;
   font-size: 12px;
   font-weight: 570;
   color: var(--text-hi);
@@ -1402,6 +1503,7 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   overflow-wrap: anywhere;
 }
 .obj-meta {
+  display: block;
   margin-top: 2px;
   font-family: var(--font-mono);
   font-size: 10px;

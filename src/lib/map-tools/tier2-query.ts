@@ -21,6 +21,8 @@ import {
   type MapCategory,
   type Tier2Category,
 } from "@/lib/store/tier2";
+import { normaliseName } from "./gazetteer";
+import { matchesName } from "./query";
 
 /**
  * How many features select_features will highlight in one call once a tier-2
@@ -117,4 +119,111 @@ export async function unsearchedForLookup(store: MapToolStore): Promise<Tier2Dis
   await store.loadTier2Manifest();
   const unsearched = toUnsearched(store, store.getLoadedCategories());
   return unsearched.length ? { unsearched_categories: unsearched } : {};
+}
+
+/** One category holding features with this name that this session has not loaded. */
+export interface UnloadedMatch {
+  category: MapCategory;
+  /**
+   * How many features matching the query live in that category and are *not*
+   * already in memory. A floor, never a ceiling: naming the category returns
+   * at least this many (see `unloadedMatches` for the one case where it
+   * returns more).
+   */
+  count: number;
+}
+
+/**
+ * How many categories the disclosure names. It is a pointer to the next call,
+ * not a report: past a handful the agent is reading a table instead of picking
+ * a category, and every row costs tokens on every search. The largest are kept
+ * — a category with more matches is the more likely thing the human meant —
+ * and anything dropped is counted rather than hidden.
+ */
+export const UNLOADED_MATCH_LIMIT = 6;
+
+export interface UnloadedMatchDisclosure {
+  unloaded_matches?: UnloadedMatch[];
+  /** Categories that also matched and did not fit; absent when none were dropped. */
+  unloaded_matches_omitted?: number;
+}
+
+/**
+ * What a *named* search could have found, in the categories it did not search.
+ *
+ * This is the answer to the defect that made the citywide index exist: on a
+ * fresh page, `find_features({query: "starbucks"})` searches the six bundled
+ * datasets, finds nothing, and — before this — said nothing about the 151
+ * Starbucks stores that word reaches in a cafe file it never fetched (152 rows
+ * are Starbucks; one of them is written 星巴克 and nothing else). An agent
+ * cannot see that the map is empty; the honest answer has to carry the reason.
+ *
+ * Four rules, and each one is a promise:
+ *
+ *  - **It never loads a category.** The disclosure is the whole feature: it
+ *    tells the agent what to ask for next and lets it decide. Fetching 2.5 MB
+ *    because someone typed a word would make what is on the map a function of
+ *    what was searched for, which is the determinism `store/tier2.ts` protects.
+ *  - **Names only, matched by `matchesName`** — the same predicate
+ *    `queryFeatures` uses. The index also holds `brand`, `cuisine` and
+ *    `address`, and the human-facing search box is free to match them; a *tool*
+ *    disclosure must not, because `count` is read as "how many I get if I name
+ *    this category", and find_features once loaded matches names and nothing
+ *    else. On the shipped index "coffee" is 354 rows by name and 834 once
+ *    address and cuisine count — mostly `cuisine=coffee_shop`, which 569 rows
+ *    carry citywide. Disclosing the 834 would promise 480 features the
+ *    follow-up call then cannot find.
+ *  - **Already-loaded rows do not count.** A row is skipped when *any* of its
+ *    categories is in memory, because those matches are already in the answer
+ *    above and this field is about what is missing from it. For the handful of
+ *    dual-tagged ids (12 city-wide) that makes `count` a floor: naming the
+ *    other category returns those rows too.
+ *  - **Silence when the index is not here.** Missing, still arriving,
+ *    unreadable, never shipped — all four omit the field, exactly as the
+ *    tier-2 disclosure omits itself on a page with no manifest.
+ *
+ * The load is awaited rather than fired and forgotten, for the reason
+ * `planCategories` awaits its manifest fetch: the same question must get the
+ * same answer twice. A background load would make the first search of a
+ * session quietly weaker than the second, and an agent that cannot see the
+ * screen has no way to notice. The wait is bounded by `httpFetchJson`'s own
+ * timeout, and a failure costs the field and nothing else — never the answer.
+ */
+export async function unloadedMatches(
+  store: MapToolStore,
+  query: string | undefined,
+): Promise<UnloadedMatchDisclosure> {
+  const needle = query ? normaliseName(query) : "";
+  // No query, no promise to make: a search that matched every name has nothing
+  // to say about names elsewhere, and must not pay for the index to say it.
+  if (!needle) return {};
+  await store.loadSearchIndex();
+  const index = store.getSearchIndex();
+  if (!index) return {};
+
+  // The six bundled datasets are in memory on every page, so a row of theirs
+  // could never be "unloaded". They cannot appear in the index today (it is
+  // derived from the 18 tier-2 files) — this is what keeps that true if one
+  // ever does, rather than disclosing a category the map already searched.
+  const loaded = new Set<string>([...FEATURE_CATEGORIES, ...store.getLoadedCategories()]);
+  const counts = new Map<MapCategory, number>();
+  for (const entry of index) {
+    if (entry.categories.some((c) => loaded.has(c))) continue;
+    if (!matchesName(entry.name, entry.nameEn, needle)) continue;
+    // Counted under every category it is filed in, the same rule
+    // `countByCategory` uses: naming either one returns this feature.
+    for (const category of entry.categories) counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  if (counts.size === 0) return {};
+
+  // Biggest first, then alphabetical, so two runs of one query name the same
+  // categories in the same order — including which ones fall off the end.
+  const ranked = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const shown = ranked.slice(0, UNLOADED_MATCH_LIMIT);
+  return {
+    unloaded_matches: shown.map(([category, count]) => ({ category, count })),
+    ...(ranked.length > shown.length
+      ? { unloaded_matches_omitted: ranked.length - shown.length }
+      : {}),
+  };
 }

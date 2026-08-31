@@ -35,6 +35,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeSearchIndex } from "./build-search-index.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "..", "public", "data", "tier2");
@@ -344,6 +345,10 @@ function writeManifestOnly() {
   };
   writeFileSync(join(OUT_DIR, "index.json"), JSON.stringify(manifest, null, 2) + "\n");
   console.log(`index.json written: ${manifestEntries.length} categories.`);
+  // T-100: every 18-file manifest write also refreshes the derived citywide
+  // search index (scripts/build-search-index.mjs), so a re-export can never
+  // forget it.
+  writeSearchIndex();
 }
 
 async function main() {
@@ -415,6 +420,10 @@ async function main() {
     };
     writeFileSync(join(OUT_DIR, "index.json"), JSON.stringify(manifest, null, 2) + "\n");
     console.log(`\nindex.json written: ${manifestEntries.length} categories.`);
+    // T-100: every full 18-file manifest write also refreshes the derived
+    // citywide search index (scripts/build-search-index.mjs), so a re-export
+    // can never forget it.
+    writeSearchIndex();
   }
 
   console.log(ok ? "\nAll checks passed." : "\nSome checks FAILED (see above).");

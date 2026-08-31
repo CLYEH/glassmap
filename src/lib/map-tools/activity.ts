@@ -222,6 +222,12 @@ const SUMMARISERS: Record<string, Summariser> = {
     // this is the landing point whether the caller named a place, an id or a
     // coordinate, and it is the only one of the three the page can draw.
     const fx = withFx({ origin: fxPoint(result.center) });
+    // "Framed", not "Flew to": a fit is the one camera move that can pull back,
+    // and a person watching a district come into view should read a row that
+    // accounts for it rather than one that says the map went closer. The id is
+    // shown as given, exactly as the feature_id row shows the id it was given.
+    const fit = str(input.fit)?.trim();
+    if (fit) return { summary: `Framed ${text(fit)}${at}`, refIds: [fit], ...fx };
     const featureId = str(input.feature_id)?.trim();
     if (featureId) return { summary: `Flew to ${text(featureId)}${at}`, refIds: [featureId], ...fx };
     const place = str(input.place)?.trim();

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createMapTools, PLACE_ZOOM, validateSetMapView } from "./index";
 import { createMemoryToolStore, DEFAULT_VIEW, type MemoryToolStore } from "@/lib/store/map-store";
+import { frameFor, geometryBounds, ROW_FIT_MAX_ZOOM } from "@/lib/geo/frame";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { distanceMeters, featureCenter, type FeatureOutput } from "./output";
-import type { MapStateOutput } from "./state";
+import { round5, type MapStateOutput } from "./state";
 import { DEFAULT_LIMIT, DEFAULT_RADIUS_M, MAX_QUERY_RADIUS_M } from "./query";
 import {
   BROKEN_FEATURES,
@@ -11,6 +12,8 @@ import {
   FIXTURE_FEATURES,
   IN_VIEW_IDS_BY_DISTANCE,
   PX_MART_DAAN,
+  USER_DRAWN_AREA,
+  USER_DRAWN_LINE,
   VIEW,
   VIEW_BOUNDS,
 } from "./test-fixtures";
@@ -439,6 +442,155 @@ describe("set_map_view", () => {
     });
     expect(withCenter.error).toMatch(/either center or place/);
     expect(store.getView()).toEqual(VIEW);
+  });
+});
+
+/**
+ * `fit` — the second half of T-102's reverse parity.
+ *
+ * A human clicking a row in the inspector gets the thing framed: the whole
+ * district, the whole drawn circle, all of it on screen (T-101). An agent
+ * could only ever say "go to this coordinate at this zoom", which for anything
+ * with an extent is a guess — and a wrong guess is invisible to it. `fit` is
+ * the same camera the row click asks for, from the same function
+ * (`lib/geo/frame`), so the two paths cannot frame the same thing differently.
+ */
+describe("set_map_view fit", () => {
+  /** The fixture map with two hand-drawn marks on it: an area and a line. */
+  const drawn = () => mapReady({ drawings: [USER_DRAWN_AREA, USER_DRAWN_LINE] });
+
+  it("frames a drawing exactly as the human's own row click would", async () => {
+    // The parity claim, checked against the shared function rather than a
+    // number: what the tool writes is what `frameFor` returns for the same
+    // extent, the same camera and the same visible rectangle. A tool that
+    // re-derived the maths could pass a "did it zoom in?" test and still
+    // disagree with the human path by half a level.
+    const { store, byName } = drawn();
+    const expected = frameFor(geometryBounds(USER_DRAWN_AREA.geometry)!, VIEW, VIEW_BOUNDS);
+
+    const out = await call(byName.set_map_view, { fit: "drawing:1" });
+
+    expect(out.error).toBeUndefined();
+    expect(store.getView().center).toEqual(expected.center);
+    expect(store.getView().zoom).toBe(expected.zoom);
+    // Independently of the shared function: the polygon is a fraction of the
+    // viewport, so framing it has to move closer, and never past the cap that
+    // keeps a street readable.
+    expect(expected.zoom).toBeGreaterThan(VIEW.zoom);
+    expect(expected.zoom).toBeLessThanOrEqual(ROW_FIT_MAX_ZOOM);
+    // The answer is the new state, so nothing has to be read back.
+    expect(out).toMatchObject({ zoom: round5(expected.zoom) });
+  });
+
+  it("zooms OUT for something bigger than the view, which is what framing means", async () => {
+    // The rule that separates `fit` from every other way to move this camera:
+    // 大安區 is wider than the fixture viewport, so the only way to show it is
+    // to pull back. A "fit" that refused to widen would answer "show me the
+    // district" with one of its street corners - and the agent, which cannot
+    // see the screen, would believe it.
+    const { store, byName } = mapReady();
+    const out = await call(byName.set_map_view, { fit: "district:daan" });
+
+    expect(out.error).toBeUndefined();
+    // The middle of the district's box, not the middle of the old view. Read
+    // off the answer, which is where the agent reads it: the store keeps the
+    // midpoint as computed - the same value the human's row click writes - and
+    // map state is the one place it is rounded.
+    expect(out).toMatchObject({ center: { lng: 121.544, lat: 25.029 } });
+    expect(store.getView().zoom).toBeLessThan(VIEW.zoom);
+  });
+
+  it("treats a point exactly as feature_id does, which is what its description promises", async () => {
+    // A place with no extent has no fit; the honest answer is the one this
+    // tool already gives for an id - fly there, never zoom out - and the
+    // description says the two are the same call. Two stores, one comparison,
+    // so the promise is pinned by behaviour rather than by two constants that
+    // happen to both read 15 today.
+    const viaFit = mapReady();
+    const viaId = mapReady();
+    const fitted = await call(viaFit.byName.set_map_view, { fit: "osm:node:2" });
+    const flown = await call(viaId.byName.set_map_view, { feature_id: "osm:node:2" });
+
+    expect(fitted.error).toBeUndefined();
+    expect(viaFit.store.getView()).toEqual(viaId.store.getView());
+    expect(viaFit.store.getView().zoom).toBe(PLACE_ZOOM);
+    expect(fitted).toEqual(flown);
+  });
+
+  it("answers an unknown drawing id with the ids that do exist", async () => {
+    // The same answer `within` and `measure` give, for the same reason: an id
+    // the tool cannot resolve must never become a camera move to somewhere
+    // plausible, and the agent needs the vocabulary to correct itself in one
+    // step rather than by guessing.
+    const { store, byName } = drawn();
+    const out = await call(byName.set_map_view, { fit: "drawing:9" });
+
+    expect(out.error).toBe("unknown drawing id: drawing:9");
+    expect(out.known_ids).toEqual(["drawing:1", "drawing:2"]);
+    expect(store.getView()).toEqual(VIEW);
+  });
+
+  it("answers an unknown feature id with the words this tool already uses", async () => {
+    const { store, byName } = mapReady();
+    const out = await call(byName.set_map_view, { fit: "osm:node:404" });
+
+    expect(out.error).toBe("unknown feature_id");
+    expect(store.getView()).toEqual(VIEW);
+  });
+
+  it("names both vocabularies when fit is not an id at all", async () => {
+    const { store, byName } = mapReady();
+    for (const bad of [42, "", "   ", null]) {
+      const out = await call(byName.set_map_view, { fit: bad });
+      expect(out.error, String(bad)).toMatch(/fit must be a drawing id .* or the id of a loaded/);
+    }
+    expect(store.getView()).toEqual(VIEW);
+  });
+
+  it("refuses a fit combined with another target, or with a zoom", async () => {
+    // Two contradictions, and neither may be resolved by preference. A fit
+    // beside a center is two cameras; a fit beside a zoom is a frame the
+    // caller has overruled without being told. Both come back with the map
+    // where it was, in the same voice as the tool's existing either/or.
+    const { store, byName } = drawn();
+    const withCenter = await call(byName.set_map_view, {
+      fit: "drawing:1",
+      center: { lng: 121.5, lat: 25 },
+    });
+    const withPlace = await call(byName.set_map_view, { fit: "drawing:1", place: "Daan Station" });
+    const withZoom = await call(byName.set_map_view, { fit: "drawing:1", zoom: 18 });
+
+    expect(withCenter.error).toMatch(/either fit or center\/place\/feature_id/);
+    expect(withPlace.error).toMatch(/either fit or center\/place\/feature_id/);
+    expect(withZoom.error).toMatch(/either fit or zoom/);
+    expect(store.getView()).toEqual(VIEW);
+  });
+
+  it("says the map is not ready rather than framing against a rectangle it does not have", async () => {
+    // A fit is measured against what the human can see. Before the map has
+    // reported a viewport there is no such rectangle, and `frameFor` would
+    // quietly fall back to the point rule - which an agent would read as
+    // "framed" over a district it is standing in the middle of. The refusal is
+    // the one list_features_in_view already gives for the same missing fact.
+    const { store, byName } = mapReady({ bounds: null, drawings: [USER_DRAWN_AREA] });
+    const out = await call(byName.set_map_view, { fit: "drawing:1" });
+
+    expect(out.error).toBe("map not ready");
+    expect(store.getView()).toEqual(VIEW);
+  });
+
+  it("still moves the camera's bearing and pitch while it frames", async () => {
+    // fit decides where the camera is and how close; it says nothing about
+    // which way it faces. Refusing those two as well would make "frame this,
+    // north-up" two calls with a flicker between them.
+    const { store, byName } = drawn();
+    const out = await call(byName.set_map_view, { fit: "drawing:2", bearing: 90, pitch: 30 });
+
+    expect(out.error).toBeUndefined();
+    expect(store.getView().bearing).toBe(90);
+    expect(store.getView().pitch).toBe(30);
+    // drawing:2 is a line - it has an extent, so it is framed like any area.
+    expect(store.getView().center).toEqual([121.535, 25.03]);
   });
 });
 

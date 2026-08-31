@@ -82,6 +82,30 @@ describe("polyline codec: what comes back is what went in", () => {
     expect(decodePolyline(encodePolyline(route))).toEqual(route);
   });
 
+  it("refuses a number it has no digits for, instead of losing it in silence", () => {
+    // The trap this guard exists for, and it is a trap for the *next* caller:
+    // share.ts only ever hands over checked coordinates, so nothing on the wire
+    // today can reach it. Someone packing a bounding box, a zoom or a distance
+    // would have got a shorter list back than they put in, with nothing to tell
+    // them - 1e6 overflowed the shift into a digit that does not exist, join()
+    // rendered it as nothing, and the latitude behind it was then read as a
+    // longitude. NaN was worse: it zigzagged to 0 and came back a real 0.
+    expect(encodePolyline([1e6, 25])).toBe("");
+    expect(encodePolyline([NaN, 25])).toBe("");
+    expect(encodePolyline([121.5, Infinity])).toBe("");
+    // Total, and refused on the way back in: never a shape nobody drew.
+    expect(decodePolyline(encodePolyline([1e6, 25]))).toBeNull();
+
+    // The boundary, in units of 1e-5: six digits carry 2^29 - 1 and no more.
+    expect(roundTrip([0, 0, 5368.70911, 0])).toEqual([0, 0, 5368.70911, 0]);
+    expect(encodePolyline([0, 0, 5368.70912, 0])).toBe("");
+
+    // And the domain is comfortably wider than the map: the widest step two
+    // legal coordinates can be apart is 14 times inside it, so nothing
+    // share.ts can hand over is ever refused.
+    expect(encodePolyline([180, 90, -180, -90])).not.toBe("");
+  });
+
   it("encodes the origin as two zero digits, so the wire form is pinnable", () => {
     // A frozen example: if the alphabet or the digit layout ever changed, every
     // v3 link already sent would decode into a different map, and only a fixed
@@ -116,6 +140,7 @@ describe("polyline codec: strings written by someone else", () => {
     let seed = 20260831;
     const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     const alphabet = "ABYZaz09-_";
+    let read = 0;
     for (let n = 0; n < 500; n++) {
       let text = "";
       for (let i = 0; i < Math.floor(random() * 12); i++) {
@@ -123,7 +148,13 @@ describe("polyline codec: strings written by someone else", () => {
       }
       const out = decodePolyline(text);
       if (out === null) continue;
+      read++;
       expect(out.every((value) => Number.isFinite(value))).toBe(true);
     }
+    // Without this the sweep proves nothing: a decoder that answered `null` to
+    // everything - the easiest way to pass a "never returns NaN" test - would
+    // skip every assertion above and stay green. Measured: 236 of the 500
+    // strings are readable.
+    expect(read).toBeGreaterThan(100);
   });
 });

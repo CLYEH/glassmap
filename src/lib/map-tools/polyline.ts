@@ -28,10 +28,13 @@
  *    make a shape fit changes what the other side sees, and that is the
  *    caller's decision to take out loud, never this module's to take quietly.
  *
- * Nothing here throws, and nothing here validates a coordinate: it takes and
- * returns the flat [lng, lat, lng, lat, …] array `share.ts` already builds, so
- * both wire forms are held to one set of rules in one place. A string this
- * module cannot read at all comes back as `null`.
+ * Nothing here throws, and nothing here decides what a *coordinate* may be:
+ * that stays in `share.ts`, which gates both wire forms behind one range check
+ * so a link cannot smuggle in a shape a tool call would be refused. What this
+ * module does police is its own domain — a difference too wide for its digits,
+ * or a value that is not a number, comes back as `""`, and a string it cannot
+ * read comes back as `null`. Both are total failures on purpose: this codec
+ * will not hand back a shape nobody drew.
  */
 
 /** base64url's alphabet, in its own order; the index *is* the digit's value. */
@@ -53,7 +56,25 @@ const CONTINUES = 0x20;
  */
 const MAX_DIGITS = 6;
 
-function encodeSigned(delta: number, out: string[]): void {
+/**
+ * The widest difference `MAX_DIGITS` can carry, in units of 1e-5 — about 5369
+ * degrees, and 14 times the widest step two legal coordinates can be apart.
+ *
+ * It is derived from the digit budget rather than from the 32-bit shift, and
+ * the two are not the same number: a delta of 2^29 survives `<<` intact but
+ * zigzags to 30 bits plus one, which encodes to a seventh digit that this
+ * module's own decoder then rejects. Bounding at the smaller number is what
+ * keeps encode and decode able to read each other.
+ */
+const MAX_DELTA = 0x1fffffff;
+
+/** False when the difference is outside the domain; see `encodePolyline`. */
+function encodeSigned(delta: number, out: string[]): boolean {
+  // Anything past here corrupts rather than fails: `delta << 1` overflows into
+  // a negative int32, `DIGITS[negative]` is undefined, and `join` renders that
+  // as nothing at all — a value silently gone and the next one read in its
+  // place. NaN is worse still: it zigzags to 0 and decodes as a real 0.
+  if (!Number.isFinite(delta) || Math.abs(delta) > MAX_DELTA) return false;
   // Zigzag first: -1, 1, -2, 2 … become 1, 2, 3, 4, so a step one unit west
   // costs a digit rather than a full-width sign bit.
   let value = delta < 0 ? ~(delta << 1) : delta << 1;
@@ -62,13 +83,26 @@ function encodeSigned(delta: number, out: string[]): void {
     value >>>= 5;
   }
   out.push(DIGITS[value]);
+  return true;
 }
 
 /**
- * [lng, lat, lng, lat, …] as one string. The values are expected to be legal
- * coordinates already (`share.ts` checks them before and after); anything else
- * encodes and decodes back unchanged, which is what makes the round trip
- * testable on its own.
+ * [lng, lat, lng, lat, …] as one string, or `""` — the one string
+ * `decodePolyline` refuses — when a value is not finite or lands further than
+ * `MAX_DELTA` from the one before it on its axis.
+ *
+ * **The domain is a list of coordinates**, and it is narrower than "an array
+ * of numbers": consecutive values have to stay within the digit budget. Every
+ * call from `share.ts` is already gated by the same `isLngLat` check the flat
+ * wire form uses, so the empty return is unreachable from there — it is for the
+ * next caller, the one who reasonably reaches for this to pack a bounding box,
+ * a zoom or a distance and would otherwise get a shorter shape back than they
+ * put in, with no way to tell.
+ *
+ * Empty rather than partial, because that is the failure the layer above
+ * already knows how to report: `share.ts` drops a drawing it cannot rebuild,
+ * and `get_share_link` reads its own link back and tells the human it was
+ * `omitted` instead of promising them a complete map.
  */
 export function encodePolyline(values: readonly number[]): string {
   const out: string[] = [];
@@ -80,7 +114,7 @@ export function encodePolyline(values: readonly number[]): string {
   for (let i = 0; i < values.length; i++) {
     const axis = i % 2;
     const units = Math.round(values[i] * SCALE);
-    encodeSigned(units - previous[axis], out);
+    if (!encodeSigned(units - previous[axis], out)) return "";
     previous[axis] = units;
   }
   return out.join("");

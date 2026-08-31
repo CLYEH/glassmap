@@ -411,6 +411,53 @@ describe("a query with no category says what it did not search", () => {
     expect(TIER2_INDEX.categories.find((c) => c.category === "cafe")?.count).toBe(3);
   });
 
+  it("counts what a query matched, never the rest of the view", async () => {
+    // The one ruling a view-scoped keyword search forces: category_counts
+    // describes the same set as features and total. Two cafes are on screen and
+    // one of them is called 大安, so a tally of the unfiltered view would put
+    // `cafe: 2` beside `total: 5` and a five-item list containing one cafe — one
+    // answer making two claims, with nothing in it to say which was about the
+    // question. The wider tally is one call away; a mistaken "2 cafes here" is
+    // not, because the agent has no reason to doubt it.
+    const { byName } = tier2Ready();
+    await call(byName.find_features, { categories: ["cafe"] });
+    const out = await call(byName.list_features_in_view, { query: "大安" });
+
+    // The loaded cafe named 大安 sorts in among the bundled features by
+    // distance, exactly as it would in find_features: one list, one order.
+    expect(idsOf(out.features)).toEqual([
+      "osm:node:3",
+      "osm:way:10",
+      "osm:node:101",
+      "osm:node:2",
+      "district:daan",
+    ]);
+    expect(out.total).toBe(5);
+    expect(out.category_counts).toEqual({ mrt_station: 2, park: 1, cafe: 1, district: 1 });
+    // The categories that matched nothing are gone rather than listed as zero:
+    // a supermarket and a listing are on screen, and neither is an answer to
+    // this question.
+    expect(out.category_counts).not.toHaveProperty("supermarket");
+    expect(out.category_counts).not.toHaveProperty("listing");
+  });
+
+  it("still admits what it did not search when the query narrowed the screen", async () => {
+    // The disclosure is about the categories this page has never fetched, so a
+    // name filter cannot change what it means: "no bakery matching 大安 in
+    // view" would otherwise be indistinguishable from "no bakery was searched".
+    const { byName } = tier2Ready();
+    const out = await call(byName.list_features_in_view, { query: "大安" });
+    expect(out.unsearched_categories).toEqual(CITYWIDE);
+    expect(out.searched_categories).toEqual([
+      "mrt_station",
+      "park",
+      "school",
+      "supermarket",
+      "listing",
+      "district",
+    ]);
+  });
+
   it("counts loaded POIs in a bare describe_surroundings and compare_areas", async () => {
     const { byName } = tier2Ready();
     await call(byName.find_features, { categories: ["cafe"] });
@@ -759,17 +806,20 @@ describe("what the agent is told about categories", () => {
 
   it("registers no new tool: this is a wider contract, not a bigger surface", async () => {
     /*
-     * The tools that existed before tier-2 answer about POIs too, by taking a
-     * wider `categories` enum. What must never appear is a tool about *loading*:
-     * a load_category, a per-category tool, anything an agent has to call before
-     * it is allowed to ask its question. That would make the fetch the agent's
-     * bookkeeping instead of the map's.
-     *
-     * The claim is that shape, not a number — T-97 later added
-     * get_place_details, which is a different question about one place rather
-     * than a step on the way to asking one.
+     * Two halves of one claim, converged on by two branches independently.
+     * The set half: loading points of interest widens the tools that already
+     * exist instead of adding one of its own — compared against a page with
+     * no tier-2 data at all, never against a number (a hard-coded count only
+     * ever trips up whichever unrelated tool ships next). The shape half:
+     * what must never appear is a tool about *loading* — a load_category, a
+     * per-category tool, anything an agent has to call before it is allowed
+     * to ask its question. That would make the fetch the agent's bookkeeping
+     * instead of the map's. get_place_details (T-97) passes both: it exists
+     * on the tier-2-less page too, and it is a question, not a step.
      */
     const names = Object.keys(tier2Ready().byName);
+    const withoutTier2 = createMapTools(createMemoryToolStore()).map((t) => t.name);
+    expect([...names].sort()).toEqual([...withoutTier2].sort());
     for (const category of TIER2_CATEGORIES) {
       expect(names.some((n) => n.includes(category)), category).toBe(false);
     }

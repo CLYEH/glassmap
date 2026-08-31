@@ -41,7 +41,13 @@ describe("resolveSelection", () => {
     // report.
     const rows = resolveSelection(features, ["osm:node:1", "osm:way:404"]);
     expect(rows).toHaveLength(2);
-    expect(rows[1]).toEqual({ id: "osm:way:404", name: "osm:way:404", category: null, sample: false });
+    expect(rows[1]).toEqual({
+      id: "osm:way:404",
+      name: "osm:way:404",
+      category: null,
+      sample: false,
+      details: [],
+    });
   });
 
   it("flags fabricated listings so the UI can label them", () => {
@@ -66,7 +72,13 @@ describe("resolveSelection", () => {
     it("names a selected POI and reports its category", () => {
       const rows = resolveSelection([], ["osm:node:77"], [poi("osm:node:77")]);
       expect(rows).toEqual([
-        { id: "osm:node:77", name: "cafe osm:node:77", category: "cafe", sample: false },
+        {
+          id: "osm:node:77",
+          name: "cafe osm:node:77",
+          category: "cafe",
+          sample: false,
+          details: [],
+        },
       ]);
     });
 
@@ -95,6 +107,53 @@ describe("resolveSelection", () => {
       expect(resolveSelection(features, ["osm:way:404"], [poi("osm:node:77")])[0].category).toBe(
         null,
       );
+    });
+  });
+
+  /**
+   * The names and tags both human surfaces read. The sidebar shows the pair of
+   * names, the tap card shows the pair plus the tags — one resolution, so the
+   * card and the list can never call the same place two different things.
+   */
+  describe("what a human is shown about a place", () => {
+    it("carries the English name as a second name, not as a replacement", () => {
+      // The name on the door stays the headline. Taipei OSM data is zh-TW
+      // first, and a page that showed only "Kebuke" would name a shop nobody
+      // in the street is looking at.
+      const rows = resolveSelection([], ["a"], [poi("a", { name: "可不可熟成紅茶", nameEn: "Kebuke" })]);
+      expect(rows[0]).toMatchObject({ name: "可不可熟成紅茶", nameEn: "Kebuke" });
+    });
+
+    it("prints one name when both names are the same string", () => {
+      // 32 of the shipped cafes have `name === nameEn`, and a nameless POI is
+      // *given* its English name as the headline — printing it twice would
+      // make the card look broken.
+      expect(resolveSelection([], ["a"], [poi("a", { name: "Fika Fika", nameEn: "Fika Fika" })])[0])
+        .not.toHaveProperty("nameEn");
+      expect(
+        resolveSelection([], ["b"], [poi("b", { name: "", nameEn: "Daan Park" })])[0],
+      ).not.toHaveProperty("nameEn");
+    });
+
+    it("carries the tags the tools return, so the card can show them", () => {
+      // The whole of T-96: `describeFeature` has always put these in the
+      // agent's answer, and the human's own row could not see them.
+      const rows = resolveSelection(
+        [],
+        ["a"],
+        [poi("a", { cuisine: "bubble_tea", opening_hours: "Mo-Su 11:00-23:00" })],
+      );
+      expect(rows[0].details.map((d) => [d.field, d.text])).toEqual([
+        ["cuisine", "bubble_tea"],
+        ["opening_hours", "Mo-Su 11:00-23:00"],
+      ]);
+    });
+
+    it("has nothing to add about a bundled feature or an unknown id", () => {
+      // The six bundled datasets carry none of these tags, and neither does an
+      // id nothing has loaded: both render a card with no details section.
+      expect(resolveSelection(features, ["osm:node:1"])[0].details).toEqual([]);
+      expect(resolveSelection(features, ["osm:way:404"])[0].details).toEqual([]);
     });
   });
 });

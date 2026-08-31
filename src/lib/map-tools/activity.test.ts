@@ -17,8 +17,10 @@ import {
 } from "@/lib/store/map-store";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { GlassMapTool } from "@/lib/webmcp/types";
+import { resetRouteThrottle } from "./route";
 import {
   createGatedTier2Fetch,
+  createRouteFetch,
   createTier2Fetch,
   FIXTURE_FEATURES,
   TIER2_ENRICHED_FILES,
@@ -58,7 +60,14 @@ function setup(over: Parameters<typeof createMemoryToolStore>[0] = {}) {
     drawings: [WIDE_AREA],
     ...over,
   });
-  const tools = createMapTools(store, { getBaseUrl: () => BASE_URL });
+  // plan_route is the one tool that would otherwise reach the network, and its
+  // rate limiter is module state shared by every tools instance: a suite that
+  // did not clear it would be paced by FOSSGIS' one request per second.
+  resetRouteThrottle();
+  const tools = createMapTools(store, {
+    getBaseUrl: () => BASE_URL,
+    routeFetch: createRouteFetch().routeFetch,
+  });
   return { store, tools, byName: Object.fromEntries(tools.map((t) => [t.name, t])) };
 }
 
@@ -83,6 +92,7 @@ const HAPPY_CALLS: { tool: string; input: Record<string, unknown> }[] = [
     tool: "draw_shape",
     input: { type: "circle", center: "osm:node:2", radius_m: 800, label: "10-min walk" },
   },
+  { tool: "plan_route", input: { from: "osm:node:2", to: "osm:node:1" } },
   { tool: "annotate", input: { at: "osm:node:2", note: "Client meeting here 3pm" } },
   // Its own note, taken off again: the one removal that is not a refusal — the
   // hand-drawn WIDE_AREA in this fixture is not the agent's to remove.
@@ -253,6 +263,33 @@ describe("summary copy", () => {
     const { store, byName } = setup();
     await call(byName.draw_shape, { type: "circle", center: "osm:node:2" });
     expect(last(store).summary).toBe("Drew a circle, 800 m → drawing:2");
+  });
+
+  it("plan_route says how far the walk is and what it called it", async () => {
+    // The label is usually the tool's own, built from the two places it
+    // resolved, so the row has to read it out of the answer: a human watching
+    // sees the same words that are on the line drawn on their map. The
+    // distance is the routing service's figure, which is what a person would
+    // repeat out loud - not the length of the simplified line.
+    const { store, byName } = setup();
+    await call(byName.plan_route, { from: "osm:node:2", to: "osm:node:1" });
+    expect(last(store)).toMatchObject({
+      tool: "plan_route",
+      summary: "Planned a walk, 3,830 m — “walk: 大安 → 台北車站” → drawing:2",
+      refIds: ["drawing:2"],
+      readOnly: false,
+      ok: true,
+    });
+  });
+
+  it("plan_route names the walk the caller named", async () => {
+    const { store, byName } = setup();
+    await call(byName.plan_route, {
+      from: "osm:node:2",
+      to: "osm:node:1",
+      label: "morning commute",
+    });
+    expect(last(store).summary).toBe("Planned a walk, 3,830 m — “morning commute” → drawing:2");
   });
 
   it("find_features says what was asked for and how many matched", async () => {
@@ -486,6 +523,35 @@ describe("summary copy", () => {
     });
   });
 
+  it("list_features_in_view quotes the words the search was narrowed by", async () => {
+    // A row reading "Features in view — found 1" beside a screen full of them
+    // is the feed hiding the filter: the human cannot tell a search that found
+    // one thing from a map that has one thing on it. The words are quoted the
+    // way find_features quotes them, because it is the same filter and a
+    // person should not have to learn two notations for it.
+    const { store, byName } = setup();
+    await call(byName.list_features_in_view, { query: "Pxmart" });
+    expect(last(store).summary).toBe("“Pxmart” in view — found 1");
+
+    await call(byName.list_features_in_view, { query: "大安", categories: ["mrt_station"] });
+    expect(last(store).summary).toBe("MRT stations matching “大安” in view — found 2");
+  });
+
+  it("list_features_in_view describes only the filter this tool has", async () => {
+    // The subject is shared with find_features, which also knows `near` and
+    // `within`. Neither is in this tool's schema, so a caller that smuggles one
+    // in must not get a row claiming a circle nobody drew or a place the search
+    // never measured from — the human would go looking for it on the map.
+    const { store, byName } = setup();
+    await call(byName.list_features_in_view, {
+      query: "Pxmart",
+      near: "Daan Station",
+      within: "drawing:1",
+    });
+    expect(last(store).summary).toBe("“Pxmart” in view — found 1");
+    expect(last(store).refIds).toBeUndefined();
+  });
+
   it("compare_areas names both places as the tool resolved them, not as they were typed", async () => {
     const { store, byName } = setup();
     await call(byName.compare_areas, { a: "osm:node:2", b: "osm:node:1" });
@@ -603,6 +669,19 @@ describe("fx geometry", () => {
     expect(fxOf(store)).toEqual({ origin: [121.5436, 25.0334] });
     await call(byName.set_map_view, { center: { lng: 121.51, lat: 25.05 } });
     expect(fxOf(store)).toEqual({ origin: [121.51, 25.05] });
+  });
+
+  it("carries both ends of a planned walk, and no radius", async () => {
+    // A route is between two places, and both of them are in the answer
+    // because the tool resolved them - the caller may have named neither. The
+    // radius stays out: nothing about a walk was measured in a circle, and the
+    // page must not ring one.
+    const { store, byName } = setup();
+    await call(byName.plan_route, { from: "osm:node:2", to: "osm:node:1" });
+    expect(fxOf(store)).toEqual({
+      origin: [121.5436, 25.0334],
+      originB: [121.517, 25.0478],
+    });
   });
 
   it("carries both centres of a comparison and the radius they share", async () => {

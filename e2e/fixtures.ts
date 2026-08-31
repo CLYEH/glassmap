@@ -37,7 +37,11 @@ function isAllowedHost(url: string): boolean {
   }
 }
 
-export const test = base.extend<{ pageErrors: string[]; blockedRequests: string[] }>({
+export const test = base.extend<{
+  pageErrors: string[];
+  blockedRequests: string[];
+  mockedExternalHosts: Set<string>;
+}>({
   pageErrors: [
     // Playwright's fixture API conventionally names this second parameter
     // `use`; renamed here so eslint-plugin-react-hooks does not mistake this
@@ -49,6 +53,20 @@ export const test = base.extend<{ pageErrors: string[]; blockedRequests: string[
       expect(errors, "no uncaught page errors").toEqual([]);
     },
     { auto: true },
+  ],
+
+  /**
+   * Hosts a test has deliberately opted into mocking (`plan-route.spec.ts`,
+   * the one spec that intercepts `routing.openstreetmap.de` with a fake OSRM
+   * response). Empty by default -- populated only via `mockExternalHost`, so
+   * every other spec keeps the full protection below with no change of
+   * behaviour.
+   */
+  mockedExternalHosts: [
+    async ({}, provideToTest) => {
+      await provideToTest(new Set<string>());
+    },
+    {},
   ],
 
   /**
@@ -69,9 +87,18 @@ export const test = base.extend<{ pageErrors: string[]; blockedRequests: string[
    * see, so nothing should ever reach `escaped`, but if a future change
    * narrows the pattern or `isAllowedHost` gets a host added to it by
    * mistake, this fails loud instead of quietly leaking a real network call.
+   *
+   * `mockedExternalHosts` is the one deliberate exception: `page.route()`
+   * takes precedence over this fixture's own `context.route()` (Playwright's
+   * own rule), so a spec's mock of e.g. `routing.openstreetmap.de` never
+   * reaches this abort at all -- but the mocked request still fires
+   * `requestfinished` like any fulfilled route, and would otherwise be
+   * indistinguishable from a real leak. A host has to be named explicitly via
+   * `mockExternalHost` before this exception applies, so a *different*,
+   * un-mocked host reaching `escaped` still fails the test.
    */
   blockedRequests: [
-    async ({ context }, provideToTest) => {
+    async ({ context, mockedExternalHosts }, provideToTest) => {
       const blocked: string[] = [];
       const escaped: string[] = [];
 
@@ -83,17 +110,37 @@ export const test = base.extend<{ pageErrors: string[]; blockedRequests: string[
           return route.abort();
         });
         context.on("requestfinished", (request) => {
-          if (!isAllowedHost(request.url())) escaped.push(request.url());
+          const url = request.url();
+          if (!isAllowedHost(url) && !isMockedHost(url, mockedExternalHosts)) escaped.push(url);
         });
       }
 
       await provideToTest(blocked);
 
-      expect(escaped, "no request to a non-localhost host should ever complete").toEqual([]);
+      expect(escaped, "no request to a non-localhost host should ever complete unmocked").toEqual([]);
     },
     { auto: true },
   ],
 });
+
+function isMockedHost(url: string, hosts: ReadonlySet<string>): boolean {
+  try {
+    return hosts.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Declares that this test will deliberately intercept `hostname` with its own
+ * `page.route(...)` (a mocked OSRM response, e.g.) instead of letting
+ * `blockedRequests` abort it. Call it before registering the mock, with the
+ * `mockedExternalHosts` fixture the test itself requested -- see
+ * `plan-route.spec.ts`.
+ */
+export function mockExternalHost(hosts: Set<string>, hostname: string): void {
+  hosts.add(hostname);
+}
 
 /**
  * Applies the same non-localhost block `blockedRequests` puts on the default

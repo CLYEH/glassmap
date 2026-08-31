@@ -58,6 +58,17 @@ export interface ToolResult {
   malformed_error?: string;
   known_ids?: string[];
   known_count?: number;
+  // plan_route (T-94) success responses.
+  label?: string;
+  distance_m?: number;
+  duration_s?: number;
+  points?: number;
+  simplified?: boolean;
+  attribution?: string;
+  from?: { lng: number; lat: number; name?: string };
+  to?: { lng: number; lat: number; name?: string };
+  /** Which of two named ends a resolution error is about ("from" | "to"). */
+  field?: string;
 }
 
 /** One id `remove_from_map` actually took off the map. */

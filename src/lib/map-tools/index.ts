@@ -67,6 +67,7 @@ import {
   resolveNear,
   validateCategories,
   validateLimit,
+  validateQuery,
   validateRadius,
 } from "./query";
 import {
@@ -77,6 +78,14 @@ import {
   utf8Bytes,
 } from "./share";
 import { ANNOTATION_PREFIX, DRAWING_PREFIX, knownMarkIds, removeFromMap } from "./remove";
+import {
+  defaultRouteLabel,
+  httpRouteFetch,
+  planWalk,
+  ROUTE_ATTRIBUTION,
+  routeRefusal,
+  type RouteFetch,
+} from "./route";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -110,6 +119,12 @@ export interface DrawShapeInput {
   label?: unknown;
 }
 
+export interface PlanRouteInput {
+  from?: unknown;
+  to?: unknown;
+  label?: unknown;
+}
+
 export interface AnnotateInput {
   at?: unknown;
   note?: unknown;
@@ -138,6 +153,7 @@ export interface GetPlaceDetailsInput {
 }
 
 export interface ListFeaturesInViewInput {
+  query?: unknown;
   categories?: unknown;
   limit?: unknown;
 }
@@ -215,6 +231,15 @@ const categoriesProperty = {
   items: { type: "string", enum: [...FEATURE_CATEGORIES, ...TIER2_CATEGORIES] },
   description: CATEGORIES_DESCRIPTION,
 };
+
+/**
+ * How a name is matched, in the words find_features has always used. Shared
+ * because the matching really is the same code (`queryFeatures`): a schema that
+ * described it twice could describe it differently, and an agent would have to
+ * guess which of the two tools folds case, or a hyphen, or an English name.
+ * What each tool adds after this sentence is only *where* it looks.
+ */
+const QUERY_MATCHING = "Case-insensitive substring of the local or English name.";
 
 const limitProperty = {
   type: "integer",
@@ -362,11 +387,8 @@ async function resolveQueryInput(
   const rad = validateRadius(input.radius_m);
   if ("error" in rad) return { error: rad.error };
 
-  let query: string | undefined;
-  if (input.query !== undefined) {
-    if (typeof input.query !== "string") return { error: "query must be a string" };
-    query = input.query.trim() || undefined;
-  }
+  const q = validateQuery(input.query);
+  if ("error" in q) return { error: q.error };
 
   let within: Polygon | MultiPolygon | undefined;
   if (input.within !== undefined) {
@@ -399,7 +421,7 @@ async function resolveQueryInput(
     origin,
     radius_m,
     categories: plan.categories,
-    query,
+    query: q.query,
     within,
     limit: lim.limit,
     disclosure: plan.disclosure,
@@ -443,6 +465,13 @@ export interface MapToolsOptions {
    * defaults to the current page when there is one.
    */
   getBaseUrl?: () => string;
+  /**
+   * How plan_route reaches the routing service, defaulting to the live FOSSGIS
+   * one. Injected for the same reason the store's `tier2FetchJson` is: the unit
+   * suite must be able to serve a route - and a refusal, and a timeout -
+   * without a network.
+   */
+  routeFetch?: RouteFetch;
 }
 
 /**
@@ -457,6 +486,7 @@ function currentBaseUrl(): string {
 
 export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}): GlassMapTool[] {
   const getBaseUrl = opts.getBaseUrl ?? currentBaseUrl;
+  const routeFetch = opts.routeFetch ?? httpRouteFetch;
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
@@ -588,10 +618,17 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Pass query to search the screen by name - the same match find_features makes, scoped to what is in view, and combining with categories rather than replacing it, so \"which of the cafes on screen is a Louisa?\" is one call. Called without categories it also returns category_counts - how many of each category the answer covers, which is the same set features and total describe, so with a query only the features that matched it are counted - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
-      properties: { categories: categoriesProperty, limit: limitProperty },
+      properties: {
+        query: {
+          type: "string",
+          description: `${QUERY_MATCHING} Only the features already in view are searched; omit to list every feature in view. Combines with categories instead of replacing it.`,
+        },
+        categories: categoriesProperty,
+        limit: limitProperty,
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -601,6 +638,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ("error" in cats) return { error: cats.error };
       const lim = validateLimit(inp.limit);
       if ("error" in lim) return { error: lim.error };
+      const q = validateQuery(inp.query);
+      if ("error" in q) return { error: q.error };
 
       const bounds = store.getBounds();
       if (!bounds) return { error: "map not ready" };
@@ -615,7 +654,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const b = featureBounds(f);
         return b ? boundsIntersect(b, bounds) : false;
       });
-      const matched = queryFeatures(visible, { origin, categories: plan.categories });
+      // The same engine find_features uses, on the visible slice: the two tools
+      // must not disagree about whether "matching 森林" includes the station.
+      const matched = queryFeatures(visible, {
+        origin,
+        categories: plan.categories,
+        query: q.query,
+      });
       return {
         ...listOutput(matched, origin, lim.limit),
         // Every distance_m and direction below is measured from here, so the
@@ -625,6 +670,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // A per-category tally of what is on screen, so "what am I looking at?"
         // is one call rather than one call per category. Only worth its tokens
         // once there are POI categories to choose between.
+        //
+        // Counted over `matched`, which is the set `total` and `features` above
+        // describe — never over the unfiltered view. A query narrows the tally
+        // with everything else: an answer reading `total: 1` beside
+        // `category_counts: {cafe: 9}` would be one answer making two claims,
+        // and the agent has no third field to tell it which one was about its
+        // question. The unfiltered tally is still one call away — ask without
+        // the query — while a mistaken "9 cafes here" cannot be walked back.
         ...(plan.tier2Available > 0 ? { category_counts: countByCategory(matched) } : {}),
         ...plan.disclosure,
       };
@@ -640,8 +693,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       properties: {
         query: {
           type: "string",
-          description:
-            "Case-insensitive substring of the local or English name. Omit to match every name.",
+          description: `${QUERY_MATCHING} Omit to match every name.`,
         },
         categories: categoriesProperty,
         near: nearProperty,
@@ -956,6 +1008,109 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       });
 
       return { drawing_id: drawing.id, ...measure, state: describeState(store) };
+    },
+  };
+
+  const planRoute: GlassMapTool<PlanRouteInput> = {
+    name: "plan_route",
+    description:
+      "Plan a walk between two places and draw it on the map as a line the human can see. Walking only: the route is on foot, and there is no driving, cycling or transit profile here. It comes from the OpenStreetMap-based routing service run by FOSSGIS (routing.openstreetmap.de), which is the one thing on this map fetched at the moment you ask: when it cannot answer, nothing is drawn, the map is unchanged and the answer says so plainly rather than guessing a line. Both ends take the same three forms as anywhere else - a coordinate, a feature id from an earlier call, or a place name. Returns the drawing id, the service's own distance in metres and duration in seconds, both ends as it resolved them, and the new map state. What it leaves behind is an ordinary drawing: measure gives its length and remove_from_map takes it off again. A line has no inside, so find_features({within}) and select_features({within}) cannot be asked what is inside a route - measure it for its length, or draw a circle somewhere along it to ask what is near it. A route with more points than the map can redraw is simplified, and simplified says so; distance_m is always the service's figure for the real walk, not the drawn line's.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: pointProperty(
+          'Where the walk starts: a coordinate, a feature id such as "osm:node:123", or a place name such as "Daan Station". If a name matches several places nothing is drawn and the answer lists the candidates.',
+        ),
+        to: pointProperty("Where the walk ends, in any of the same three forms as from."),
+        label: {
+          type: "string",
+          maxLength: MAX_LABEL_CHARS,
+          description: `Short name shown on the map and in map state (at most ${MAX_LABEL_CHARS} characters). Omit it and the walk is named after the two places, e.g. "walk: 大安 → 台北車站".`,
+        },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+    // The line, its distance and its duration come from a third-party service,
+    // and the state it returns carries labels the human typed.
+    annotations: { untrustedContentHint: true },
+    execute: async (input, opts) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      // The only tool whose window is seconds wide and ends in a write, which
+      // is what makes the caller's signal worth reading here: a client that
+      // gave up must not find a shape on its map that no answer ever mentioned.
+      // Checked twice - before the request, so a cancelled call costs the
+      // service nothing, and again before the drawing, which is the moment the
+      // map would otherwise change behind the client's back. The request in
+      // flight is not itself cancelled: `RouteFetch` takes a url and nothing
+      // else, and widening that contract is a change to every injected fetch
+      // rather than a fix to this one.
+      const cancelled = () => opts?.signal?.aborted === true;
+      const givenUp = () => ({
+        error: routeRefusal("the caller cancelled this call before the route could be drawn"),
+        state: state(),
+      });
+
+      // Everything free happens before the request: one of the service's
+      // seconds must not be spent on a call that was never going to be drawn.
+      const label = validateOptionalText(inp.label, "label", MAX_LABEL_CHARS);
+      if ("error" in label) return { error: label.error, state: state() };
+      if (inp.from === undefined || inp.to === undefined) {
+        return {
+          error: "plan_route needs both from and to: where the walk starts and where it ends",
+          state: state(),
+        };
+      }
+      // Which end failed matters: the agent has to know which of the two names
+      // to ask the human about, exactly as compare_areas says for a and b.
+      const from = resolvePoint(store, inp.from, "from");
+      if ("error" in from) return { ...from, field: "from", state: state() };
+      const to = resolvePoint(store, inp.to, "to");
+      if ("error" in to) return { ...to, field: "to", state: state() };
+      if (from.point[0] === to.point[0] && from.point[1] === to.point[1]) {
+        // A line with no extent is invisible to the human and still counts as a
+        // drawing, so it would report a route nobody can see. Same refusal
+        // draw_shape makes for a shape that encloses nothing.
+        return {
+          error: "from and to are the same point; there is no walk to draw",
+          state: state(),
+        };
+      }
+
+      if (cancelled()) return givenUp();
+      const walk = await planWalk(from.point, to.point, routeFetch);
+      if ("error" in walk) return { error: walk.error, state: state() };
+      // The seconds the service took are the seconds a client had to give up
+      // in, so this is where a phantom drawing would come from.
+      if (cancelled()) return givenUp();
+
+      const text = label.text ?? defaultRouteLabel(from.name, to.name);
+      const drawing = store.addDrawing({
+        source: "agent",
+        kind: "line",
+        label: text,
+        geometry: { type: "LineString", coordinates: walk.coordinates },
+      });
+
+      return {
+        drawing_id: drawing.id,
+        // The label is echoed because it is often not the caller's: a default
+        // built from two names is something only this call knows.
+        label: text,
+        distance_m: walk.distance_m,
+        duration_s: walk.duration_s,
+        points: walk.coordinates.length,
+        // Only when it happened: a line that arrived whole must not carry a
+        // caveat about detail it never lost.
+        ...(walk.simplified ? { simplified: true } : {}),
+        // Where the walk really starts and ends, as the names resolved - the
+        // one thing an agent that typed a name cannot check for itself.
+        from: { lng: from.point[0], lat: from.point[1], ...(from.name ? { name: from.name } : {}) },
+        to: { lng: to.point[0], lat: to.point[1], ...(to.name ? { name: to.name } : {}) },
+        attribution: ROUTE_ATTRIBUTION,
+        state: describeState(store),
+      };
     },
   };
 
@@ -1439,6 +1594,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     findFeatures as GlassMapTool,
     selectFeatures as GlassMapTool,
     drawShape as GlassMapTool,
+    planRoute as GlassMapTool,
     annotate as GlassMapTool,
     removeFromMapTool as GlassMapTool,
     describeSurroundings as GlassMapTool,

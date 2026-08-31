@@ -272,8 +272,19 @@ export function Inspector() {
                   data-category={row.category ?? undefined}
                 >
                   <SelectedDot category={row.category} />
-                  <span className="sel-name" title={row.name}>
-                    {row.name}
+                  <span className="sel-main">
+                    <span className="sel-name" title={row.name}>
+                      {row.name}
+                    </span>
+                    {/* The English name the data carries, under the local one —
+                        the same pair the tap card shows, so the two surfaces
+                        name the same place the same way. Omitted when the data
+                        has none, or when it is the line above (selection-model). */}
+                    {row.nameEn ? (
+                      <span className="sel-name-en" data-testid="sidebar-name-en" title={row.nameEn}>
+                        {row.nameEn}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="sel-cat">
                     {row.category ? categorySingular(row.category) : "not loaded"}

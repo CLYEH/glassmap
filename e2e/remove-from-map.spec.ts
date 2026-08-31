@@ -265,9 +265,9 @@ test.describe("remove_from_map (T-90)", () => {
         id: humanDrawingId,
         kind: "drawing",
         source: "user",
-        reason: expect.stringContaining("tap it on the map and press Remove"),
       },
     ]);
+    expect(out.refused_reason).toContain("tap it on the map and press Remove");
     expect(out.refused_count).toBe(1);
 
     // Still there: the tool's word for it, and the map's.
@@ -313,7 +313,8 @@ test.describe("remove_from_map (T-90)", () => {
 
     expect(out.error).toBeUndefined();
     expect(out.removed).toEqual([{ id: goodId, kind: "drawing", source: "agent", label: "loop" }]);
-    expect(out.malformed_ids?.map((m) => m.id)).toEqual(["Drawing:1"]);
+    expect(out.malformed_ids).toEqual(["Drawing:1"]);
+    expect(out.malformed_error).toContain("drawing:");
     expect(out.malformed_count).toBe(1);
     expect(out.unknown_ids).toEqual([unknownId]);
     expect(out.unknown_count).toBe(1);

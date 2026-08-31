@@ -29,9 +29,13 @@ export interface MarkState {
 
 /**
  * How many departed marks are kept. A removal is planned on the very next store
- * write, so one batch (the tool's own cap of 20) would do; twice that leaves
- * room for a second call landing between the two, and bounds a long session's
- * memory at a few hundred bytes. This is a buffer, not a history.
+ * write, and the effect only ever draws the ids the activity row echoes (the
+ * first 20), so 40 covers that with room for a second call landing in between,
+ * and bounds a long session's memory at a few hundred bytes. One call CAN
+ * remove more — the tool accepts up to 100 ids — and a batch past 40 evicts
+ * the older ghosts, degrading the dissolve to a feed-row glow. Accepted: the
+ * dissolve is a courtesy, never the record, and a wrong picture would be
+ * worse than a missing one. This is a buffer, not a history.
  */
 export const GHOST_LIMIT = 40;
 

@@ -48,10 +48,14 @@ export interface ToolResult {
   removed_count?: number;
   refused?: RefusedResult[];
   refused_count?: number;
+  /** One sentence for every refusal — hoisted out of the entries (SF2). */
+  refused_reason?: string;
   not_selected?: string[];
   not_selected_count?: number;
-  malformed_ids?: MalformedResult[];
+  malformed_ids?: string[];
   malformed_count?: number;
+  /** One sentence naming the accepted id forms — hoisted likewise. */
+  malformed_error?: string;
   known_ids?: string[];
   known_count?: number;
 }
@@ -70,13 +74,6 @@ export interface RefusedResult {
   id: string;
   kind: "drawing" | "annotation";
   source: "user";
-  reason: string;
-}
-
-/** An id that looked like a mark id but was not written as one. */
-export interface MalformedResult {
-  id: string;
-  error: string;
 }
 
 /** A category that exists city-wide but was not part of this answer. */

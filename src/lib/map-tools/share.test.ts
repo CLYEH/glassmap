@@ -418,39 +418,50 @@ describe("get_share_link", () => {
      * refuses a hand-drawn shape on purpose, so "remove one of the 2 drawings"
      * over two of the human's outlines would send the agent into a refusal loop
      * instead of to the one person who can press Remove.
+     *
+     * Eight traced outlines per case, not one: the v3 wire fits a single
+     * 500-point ring in a link, so overflowing honestly now takes a pile — and
+     * the 7+1 mixes are what let both singular forms ("the one drawing you
+     * made", "their one") be exercised with the drawings genuinely at fault.
      */
-    const ring = Array.from({ length: MAX_SHAPE_POINTS }, (_, i) => [
-      121.5 + Math.cos((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
-      25 + Math.sin((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
-    ]);
-    const outline = (source: "agent" | "user", id: string) => ({
-      id,
-      source,
-      kind: "polygon" as const,
-      geometry: { type: "Polygon" as const, coordinates: [[...ring, ring[0]]] },
-    });
+    const outline = (n: number, source: "agent" | "user"): ShareDrawing & { id: string } => {
+      const ring = Array.from({ length: MAX_SHAPE_POINTS }, (_, i) => [
+        121.5 + n / 50 + Math.cos((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+        25 + Math.sin((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+      ]);
+      return {
+        id: `drawing:${n + 1}`,
+        source,
+        kind: "polygon",
+        geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
+      };
+    };
+    const pile = (mineCount: number, total = 8) =>
+      Array.from({ length: total }, (_, n) => outline(n, n < mineCount ? "agent" : "user"));
 
-    const mine = await shareTool({ drawings: [outline("agent", "drawing:1")] }).call();
-    expect(mine.error).toContain("remove_from_map");
+    const mine = await shareTool({ drawings: pile(8) }).call();
+    expect(mine.error).toContain("remove one of the 8 drawings you made with remove_from_map");
     expect(mine.error).not.toMatch(/press Remove/);
 
-    const theirs = await shareTool({ drawings: [outline("user", "drawing:1")] }).call();
-    expect(theirs.error).toMatch(/ask the human to tap it on the map and press Remove/);
+    const theirs = await shareTool({ drawings: pile(0) }).call();
+    expect(theirs.error).toMatch(
+      /all 8 drawings were drawn by hand, so ask the human to tap one on the map and press Remove/,
+    );
     expect(theirs.error).not.toContain("remove_from_map");
 
-    const both = await shareTool({
-      drawings: [outline("agent", "drawing:1"), outline("user", "drawing:2")],
-    }).call();
-    expect(both.error).toContain("remove the one drawing you made with remove_from_map");
-    expect(both.error).toContain("tap their one and press Remove");
+    const oneMine = await shareTool({ drawings: pile(1) }).call();
+    expect(oneMine.error).toContain("remove the one drawing you made with remove_from_map");
+    expect(oneMine.error).toContain("one of their 7 and press Remove");
 
-    // ...and the plural side reads as English too: "one of the 1 drawings" is
-    // the sentence an agent has to act on, and it reads as a bug in the map.
-    const many = await shareTool({
-      drawings: [outline("agent", "drawing:1"), outline("agent", "drawing:2")],
-    }).call();
-    expect(many.error).toContain("remove one of the 2 drawings you made");
-    expect(`${mine.error} ${theirs.error} ${both.error} ${many.error}`).not.toMatch(/ 1 drawings/);
+    // ...and the singular side reads as English too: "one of the 1 drawings"
+    // is the sentence an agent has to act on, and it reads as a bug in the map.
+    const oneTheirs = await shareTool({ drawings: pile(7) }).call();
+    expect(oneTheirs.error).toContain("remove one of the 7 drawings you made");
+    expect(oneTheirs.error).toContain("tap their one and press Remove");
+
+    expect(
+      `${mine.error} ${theirs.error} ${oneMine.error} ${oneTheirs.error}`,
+    ).not.toMatch(/ 1 drawings/);
   });
 
   it("blames the selection, not the shapes, when the selection is what overflowed", async () => {

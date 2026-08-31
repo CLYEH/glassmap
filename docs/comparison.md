@@ -11,7 +11,7 @@ Both arms were driven by the same model (the project orchestrator) against the s
 
 Honesty notes, all biased **against** the WebMCP claim:
 1. At the time of this run (2026-08-28), GlassMap's on-page state overlay showed live center/zoom/**bounds** numbers, and the control agent used them for pixel↔metre math (centring, radius, distances) — a crutch a typical web map does not give a screenshot agent. That overlay has since moved off-screen (the Smoked Glass redesign, PR #36): the visible camera chip now shows only center/zoom, and bounds live in an `aria-hidden` `.gm-machine` block meant for tools and tests, not a screenshot agent.
-2. GlassMap deliberately has no search box (that is the thesis), so the control arm navigates by pan/zoom only. On a map with a search box, task A's navigation would be easier — but tasks B and C would be unchanged.
+2. At the time of this run, GlassMap had no search box, so the control arm navigates by pan/zoom only. (A human search box shipped later, on 2026-08-31 — it searches the loaded data and the citywide name index, and does not change this measurement: the control agent drives the page by screenshots and clicks either way, and tasks B and C never depended on navigation.) On a map with a search box, task A's navigation would be easier — but tasks B and C would be unchanged.
 3. The control agent knew Taipei's geography (where Daan Forest Park is on a citywide view). A model without that prior would need more exploration.
 
 ## Results

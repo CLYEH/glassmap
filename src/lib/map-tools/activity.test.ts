@@ -81,6 +81,9 @@ const HAPPY_CALLS: { tool: string; input: Record<string, unknown> }[] = [
     input: { type: "circle", center: "osm:node:2", radius_m: 800, label: "10-min walk" },
   },
   { tool: "annotate", input: { at: "osm:node:2", note: "Client meeting here 3pm" } },
+  // Its own note, taken off again: the one removal that is not a refusal — the
+  // hand-drawn WIDE_AREA in this fixture is not the agent's to remove.
+  { tool: "remove_from_map", input: { ids: ["annotation:1"] } },
   { tool: "describe_surroundings", input: { from: "osm:node:2" } },
   { tool: "compare_areas", input: { a: "osm:node:2", b: "osm:node:1" } },
   { tool: "measure", input: { target: "drawing:1" } },
@@ -376,6 +379,49 @@ describe("summary copy", () => {
     const { store, byName } = setup({ features });
     await call(byName.get_map_state);
     expect(last(store).summary).toBe("Read the camera — 2,063 features loaded");
+  });
+
+  it("remove_from_map names the one mark it took off, so the human can check the gap", async () => {
+    // The same row the card's own Remove would have earned: what left the map,
+    // and the words that were on it. The id rides in refIds so the page can
+    // play the removal where the shape used to be.
+    const { store, byName } = setup();
+    await call(byName.draw_shape, { type: "circle", center: "osm:node:2", label: "10-min walk" });
+    await call(byName.remove_from_map, { ids: ["drawing:2"] });
+    expect(last(store)).toMatchObject({
+      tool: "remove_from_map",
+      summary: "Removed drawing:2 — “10-min walk”",
+      refIds: ["drawing:2"],
+      readOnly: false,
+      ok: true,
+    });
+  });
+
+  it("remove_from_map counts several, and says what it could not take", async () => {
+    const { store, byName } = setup();
+    await call(byName.draw_shape, { type: "circle", center: "osm:node:2" });
+    await call(byName.annotate, { at: "osm:node:2", note: "here" });
+    await call(byName.remove_from_map, {
+      ids: ["drawing:2", "annotation:1", "osm:node:404", "drawings:9"],
+    });
+    // A malformed mark id and an id nothing answers to are one fact to the
+    // person watching: the agent named something this map does not have.
+    expect(last(store).summary).toBe("Removed 2 marks · 2 unknown ids");
+    expect(last(store).refIds).toEqual(["drawing:2", "annotation:1"]);
+  });
+
+  it("remove_from_map shows a refused removal as a call that happened, not as a refusal", async () => {
+    // The row a human sees when the agent tries to remove their own shape: the
+    // call succeeded, their shape stayed. A top-level error would print
+    // "Refused — ..." and, in a mixed batch, hide the marks that really went.
+    const { store, byName } = setup();
+    await call(byName.remove_from_map, { ids: ["drawing:1"] });
+    expect(last(store)).toMatchObject({
+      tool: "remove_from_map",
+      summary: "Removed nothing · 1 of yours kept",
+      ok: true,
+    });
+    expect(store.getDrawings()).toHaveLength(1);
   });
 
   it("describe_surroundings names the place it was asked about, not the district around it", async () => {

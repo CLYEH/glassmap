@@ -123,14 +123,18 @@ describe("tool contract", () => {
       rejectedBy: ["list_features_in_view", "find_features", "select_features", "compare_areas"],
     },
     { input: { limit: -1 }, rejectedBy: ["list_features_in_view", "find_features"] },
-    { input: { ids: 7 }, rejectedBy: ["select_features"] },
-    { input: { ids: [null] }, rejectedBy: ["select_features"] },
-    { input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) }, rejectedBy: ["select_features"] },
+    { input: { ids: 7 }, rejectedBy: ["select_features", "remove_from_map"] },
+    { input: { ids: [null] }, rejectedBy: ["select_features", "remove_from_map"] },
+    {
+      input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) },
+      rejectedBy: ["select_features", "remove_from_map"],
+    },
     {
       input: {},
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",
@@ -143,6 +147,7 @@ describe("tool contract", () => {
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",
@@ -154,6 +159,7 @@ describe("tool contract", () => {
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",

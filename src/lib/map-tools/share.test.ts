@@ -365,6 +365,39 @@ describe("get_share_link", () => {
     expect(out.bytes!).toBeGreaterThan(MAX_SHARE_URL_BYTES);
   });
 
+  it("tells the agent which shapes it can remove itself and which need the human", async () => {
+    /*
+     * The advice has to be actionable by whoever reads it. remove_from_map
+     * refuses a hand-drawn shape on purpose, so "remove one of the 2 drawings"
+     * over two of the human's outlines would send the agent into a refusal loop
+     * instead of to the one person who can press Remove.
+     */
+    const ring = Array.from({ length: MAX_SHAPE_POINTS }, (_, i) => [
+      121.5 + Math.cos((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+      25 + Math.sin((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+    ]);
+    const outline = (source: "agent" | "user", id: string) => ({
+      id,
+      source,
+      kind: "polygon" as const,
+      geometry: { type: "Polygon" as const, coordinates: [[...ring, ring[0]]] },
+    });
+
+    const mine = await shareTool({ drawings: [outline("agent", "drawing:1")] }).call();
+    expect(mine.error).toContain("remove_from_map");
+    expect(mine.error).not.toMatch(/press Remove/);
+
+    const theirs = await shareTool({ drawings: [outline("user", "drawing:1")] }).call();
+    expect(theirs.error).toMatch(/ask the human to tap one on the map and press Remove/);
+    expect(theirs.error).not.toContain("remove_from_map");
+
+    const both = await shareTool({
+      drawings: [outline("agent", "drawing:1"), outline("user", "drawing:2")],
+    }).call();
+    expect(both.error).toContain("remove one of the 1 drawings you made with remove_from_map");
+    expect(both.error).toContain("their 1");
+  });
+
   it("blames the selection, not the shapes, when the selection is what overflowed", async () => {
     // select_features has no cap: "every supermarket in Taipei" is 208 ids. An
     // agent told to remove drawings there would delete the human's shapes and

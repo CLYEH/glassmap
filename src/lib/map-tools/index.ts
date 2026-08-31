@@ -75,6 +75,7 @@ import {
   userSelectedIds,
   utf8Bytes,
 } from "./share";
+import { ANNOTATION_PREFIX, DRAWING_PREFIX, knownMarkIds, removeFromMap } from "./remove";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -144,6 +145,10 @@ export interface SelectFeaturesInput {
   radius_m?: unknown;
   categories?: unknown;
   replace?: unknown;
+}
+
+export interface RemoveFromMapInput {
+  ids?: unknown;
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -304,9 +309,9 @@ function findDrawing(
 ): { drawing: Drawing } | QueryError {
   const drawings = store.getDrawings();
   // Most recent, like map state: past the cap, the oldest ids are the least
-  // likely to be the one the caller meant.
-  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
-  const known_count = drawings.length;
+  // likely to be the one the caller meant. Shared with remove_from_map, which
+  // answers the same question about the same ids.
+  const { known_ids, known_count } = knownMarkIds(drawings);
   if (typeof value !== "string" || !value.trim()) {
     return { error: `${field} must be a drawing id like "drawing:1"`, known_ids, known_count };
   }
@@ -1003,6 +1008,51 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  const removeFromMapTool: GlassMapTool<RemoveFromMapInput> = {
+    name: "remove_from_map",
+    description:
+      `Take something off the map: a shape or a note an agent put there, or a feature out of the highlighted selection. Ids come in three forms and can be mixed in one call - "${DRAWING_PREFIX}<n>" and "${ANNOTATION_PREFIX}<n>", as map state lists them under drawings and annotations, and the id of a currently selected feature such as "osm:node:123". This never deletes map data. Features and places cannot be removed; naming a selected feature only takes it out of the highlight. Taking a shape or a note off the map is permanent: there is no undo, and the only way back is to draw or pin it again. Shapes and notes the human made themselves - source "user" in map state - are not removed: they come back under refused, and the human takes their own mark off by tapping it on the map and pressing Remove. Everything else in the same call still happens. No per-id problem fails the batch: what could not be removed is accounted for by name under refused, not_selected (a loaded feature that was not highlighted, so there was nothing to take out), unknown_ids and malformed_ids. Returns what was removed and the new map state, so no follow-up read is needed.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_IDS,
+          items: { type: "string" },
+          description: `What to take off the map, in any mix of the three forms: "${DRAWING_PREFIX}<n>" for a shape, "${ANNOTATION_PREFIX}<n>" for a note, or the id of a currently selected feature, which leaves the selection and stays on the map (at most ${MAX_IDS}; repeats count once). There is no "remove everything": an empty array is refused, and clearing the highlight is select_features({ids: []}).`,
+        },
+      },
+      required: ["ids"],
+      additionalProperties: false,
+    },
+    // Echoes the labels and notes it removed, plus map state: human text either way.
+    annotations: { untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      if (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string")) {
+        return {
+          error: `ids must be an array of id strings, e.g. ["${DRAWING_PREFIX}1"]`,
+          state: state(),
+        };
+      }
+      if (inp.ids.length === 0) {
+        // Silently succeeding on an empty list would let "remove the ones we
+        // talked about" report success having removed nothing.
+        return {
+          error:
+            "ids must name at least one thing to remove; to clear the highlight use select_features({ids: []})",
+          state: state(),
+        };
+      }
+      if (inp.ids.length > MAX_IDS) {
+        return { error: `ids must have at most ${MAX_IDS} entries`, state: state() };
+      }
+      return { ...removeFromMap(store, inp.ids as string[]), state: describeState(store) };
+    },
+  };
+
   const describeSurroundings: GlassMapTool<DescribeSurroundingsInput> = {
     name: "describe_surroundings",
     description:
@@ -1276,8 +1326,22 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // 268 of 8192 bytes (measured in share.test.ts, "the whole
         // vocabulary") - about nine selected features - so an answer blaming
         // them would send the agent to unload data that cannot be the reason.
+        //
+        // The shapes are named by source for the same reason: only the agent's
+        // own drawings can be taken off with remove_from_map, and advice that
+        // said "remove one of the 3 drawings" over three hand-drawn outlines
+        // would send the agent into a refusal loop instead of to the one person
+        // who can act.
+        const mine = drawings.filter((d) => d.source === "agent").length;
+        const theirs = drawings.length - mine;
+        const shapes =
+          "Shapes cost by far the most, and a hand-drawn outline far more than a circle: ";
         const advice = drawings.length
-          ? `Shapes cost by far the most, and a hand-drawn outline far more than a circle: remove one of the ${drawings.length} drawings and ask again`
+          ? mine && theirs
+            ? `${shapes}remove one of the ${mine} drawings you made with remove_from_map, or ask the human to tap one of their ${theirs} and press Remove, then ask again`
+            : mine
+              ? `${shapes}remove one of your ${mine} drawings with remove_from_map and ask again`
+              : `${shapes}all ${theirs} drawings were drawn by hand, so ask the human to tap one on the map and press Remove, then ask again`
           : selection.length > 20
             ? `The selection is what costs here: select fewer than ${selection.length} features and ask again`
             : "Remove some of what is on the map and ask again";
@@ -1318,6 +1382,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     selectFeatures as GlassMapTool,
     drawShape as GlassMapTool,
     annotate as GlassMapTool,
+    removeFromMapTool as GlassMapTool,
     describeSurroundings as GlassMapTool,
     compareAreas as GlassMapTool,
     measure as GlassMapTool,

@@ -17,6 +17,7 @@ import type { Position } from "geojson";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { HttpStatusError, TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
+import { SEARCH_INDEX_URL } from "@/lib/store/search-index";
 import type { RouteFetch } from "./route";
 
 type Props = GlassMapFeature["properties"];
@@ -608,3 +609,90 @@ export function createGatedTier2Fetch(files?: Record<string, unknown>): {
   };
   return { fetchJson: gated, requests, release: () => open() };
 }
+
+/**
+ * The citywide search index for this fixture city, in the shipped tuple shape
+ * (public/data/README.md, "Citywide search index (T-100)").
+ *
+ * The first six rows are derived from the category collections above, exactly
+ * as `build-search-index.mjs` derives the real one from the 18 files — an index
+ * that disagreed with the files it indexes would let a disclosure test pass
+ * over a promise the loaded search then breaks. The last five exist only here,
+ * because they are the whole point of the file: names in categories this
+ * fixture ships no file for, which a session can therefore never have loaded.
+ *
+ * The query these rows are built around is "coffee", and the four rows that do
+ * *not* match it are the design:
+ *
+ *  - `osm:node:112` matches only through `cuisine` (`bakery;coffee_shop`),
+ *  - `osm:node:302` only through `brand` ("Coffee Corner"),
+ *  - `osm:node:303` only through `address` ("No. 5, Coffee Lane"),
+ *
+ * and none of the three may ever be counted, because find_features matches
+ * names and nothing else — a disclosure that counted them would promise
+ * features the follow-up call cannot return. `osm:node:304` is the dual-tagged
+ * case (12 ids city-wide): one row filed under two categories, which must count
+ * under both while neither is loaded and vanish entirely once either one is.
+ */
+export const TIER2_SEARCH_INDEX = {
+  generated: "2026-08-31",
+  rows: [
+    ["osm:node:100", "路易莎咖啡", "Louisa Coffee", "Louisa Coffee", "", "106012臺北市大安區羅斯福路二段83之1號1樓", "cafe", 121.5432, 25.0338],
+    ["osm:node:101", "大安", "Daan Coffee", "", "", "", "cafe", 121.5425, 25.0331],
+    ["osm:node:102", "小林咖啡", "Xiaolin Coffee", "", "", "", "cafe", 121.512, 25.0505],
+    ["osm:node:110", "鼎泰豐", "Din Tai Fung", "", "dumpling", "", "restaurant", 121.5361, 25.0331],
+    ["osm:node:111", "越南小吃", "Pho House", "", "vietnamese", "", "restaurant", 121.544, 25.03],
+    ["osm:node:112", "多那之", "Donutes", "", "bakery;coffee_shop", "", "bakery,restaurant", 121.5405, 25.0345],
+    ["osm:node:300", "咖啡酒吧", "Coffee Bar", "", "", "", "bar", 121.53, 25.03],
+    ["osm:node:301", "夜間咖啡", "Night Coffee", "", "", "", "bar", 121.531, 25.031],
+    ["osm:node:302", "阿明早餐", "Aming Breakfast", "Coffee Corner", "", "", "fast_food", 121.532, 25.032],
+    ["osm:node:303", "小吃攤", "Noodle Stall", "", "", "No. 5, Coffee Lane", "fast_food", 121.533, 25.033],
+    ["osm:node:304", "咖啡雙生", "Coffee Twins", "", "", "", "bakery,fast_food", 121.534, 25.034],
+  ],
+};
+
+/** The tier-2 server of `TIER2_FILES`, on a deployment that also ships the index. */
+export const TIER2_FILES_WITH_SEARCH_INDEX: Record<string, unknown> = {
+  ...TIER2_FILES,
+  [SEARCH_INDEX_URL]: TIER2_SEARCH_INDEX,
+};
+
+/** The categories of `TIER2_SEARCH_INDEX_WIDE`, in descending row count. */
+export const WIDE_SEARCH_CATEGORIES = [
+  "restaurant",
+  "cafe",
+  "bar",
+  "bakery",
+  "fast_food",
+  "convenience",
+  "pharmacy",
+  "clinic",
+] as const;
+
+/**
+ * An index where one query hits more categories than a disclosure will list:
+ * eight of them, with 8, 7, … 1 matching rows, so which ones survive the cap
+ * and which are only counted is decided by the data rather than by the order
+ * anything happens to iterate in. Every row matches "wide".
+ */
+export const TIER2_SEARCH_INDEX_WIDE = {
+  generated: "2026-08-31",
+  rows: WIDE_SEARCH_CATEGORIES.flatMap((category, i) =>
+    Array.from({ length: WIDE_SEARCH_CATEGORIES.length - i }, (_, n) => [
+      `osm:node:${4000 + i * 100 + n}`,
+      `寬 ${category} ${n}`,
+      `Wide ${category} ${n}`,
+      "",
+      "",
+      "",
+      category,
+      121.53 + n * 0.0001,
+      25.03 + i * 0.0001,
+    ]),
+  ),
+};
+
+export const TIER2_FILES_WITH_WIDE_SEARCH_INDEX: Record<string, unknown> = {
+  ...TIER2_FILES,
+  [SEARCH_INDEX_URL]: TIER2_SEARCH_INDEX_WIDE,
+};

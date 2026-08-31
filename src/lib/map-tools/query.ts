@@ -139,15 +139,26 @@ export interface QuerySpec {
 }
 
 /**
- * Same folding as place lookup, so find_features({query:"Daan Forest Park"})
- * and set_map_view({place:"Daan Forest Park"}) cannot disagree about whether
- * OSM's "Da-an Forest Park" is a match.
+ * The whole of what `query` matches: the local name and the English one, with
+ * the same folding as place lookup, so find_features({query:"Daan Forest
+ * Park"}) and set_map_view({place:"Daan Forest Park"}) cannot disagree about
+ * whether OSM's "Da-an Forest Park" is a match.
+ *
+ * Taken over names rather than over a feature so that the citywide search index
+ * — which holds names, not features (`store/search-index.ts`) — is matched by
+ * this exact function and not by a copy of it. That is what makes
+ * find_features' `unloaded_matches` count a promise it can keep: the number it
+ * discloses for a category is the number naming that category returns, because
+ * the same predicate decided both.
+ *
+ * `needle` is expected already normalised, as `queryFeatures` normalises it.
  */
-function matchesQuery(feature: MapFeature, needle: string): boolean {
-  const p = feature.properties;
-  return (
-    normaliseName(p.name ?? "").includes(needle) || normaliseName(p.nameEn ?? "").includes(needle)
-  );
+export function matchesName(
+  name: string | undefined,
+  nameEn: string | undefined,
+  needle: string,
+): boolean {
+  return normaliseName(name ?? "").includes(needle) || normaliseName(nameEn ?? "").includes(needle);
 }
 
 /**
@@ -173,7 +184,7 @@ export function queryFeatures(
   for (const feature of features) {
     if (!feature?.properties?.id) continue;
     if (categories && !inCategories(feature, categories)) continue;
-    if (needle && !matchesQuery(feature, needle)) continue;
+    if (needle && !matchesName(feature.properties.name, feature.properties.nameEn, needle)) continue;
     if (spec.within && !featureWithin(spec.within, feature)) continue;
     const center = featureCenter(feature);
     const distance = center ? distanceMeters(spec.origin, center) : Number.POSITIVE_INFINITY;

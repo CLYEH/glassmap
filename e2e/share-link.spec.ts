@@ -384,14 +384,21 @@ test.describe("share link (T-31)", () => {
       .toMatch(/^#v1\./);
     const stableHash = await page.evaluate(() => location.hash);
 
-    // A 500-point ring: share-hash.test.ts's own "stops writing once the map
-    // outgrows a URL" test uses the identical shape to cross MAX_SHARE_URL_BYTES.
+    // Five 500-point rings: share-hash.test.ts's own "stops writing once the
+    // map outgrows a URL" test uses the identical shapes to cross
+    // MAX_SHARE_URL_BYTES. One ring is no longer enough — the v3 polyline wire
+    // (T-95) fits it in a link — but nothing caps how many shapes a map holds.
+    // The margin is thinner than five suggests: THREE rings still fit (7,584
+    // of 8,192 bytes, measured), so do not trim this below four.
     await page.evaluate((ring) => {
-      window.__glassmapStore!.getState().addDrawing({
-        source: "user",
-        kind: "polygon",
-        geometry: { type: "Polygon", coordinates: [ring] },
-      });
+      const store = window.__glassmapStore!.getState();
+      for (let i = 0; i < 5; i += 1) {
+        store.addDrawing({
+          source: "user",
+          kind: "polygon",
+          geometry: { type: "Polygon", coordinates: [ring] },
+        });
+      }
     }, bigRing(500));
 
     expect(SHARE_TOO_LARGE_MESSAGE).toBe("state too large for the link");
@@ -400,12 +407,23 @@ test.describe("share link (T-31)", () => {
     // a truncated one.
     expect(await page.evaluate(() => location.hash)).toBe(stableHash);
 
+    // Removing four rings leaves ONE 500-point ring — a map only the v3
+    // polyline wire can carry. The bar must resume, and with a v3 link: the
+    // budget freeze is about size, never about any one shape, and the way back
+    // under budget is deletion, not truncation.
     await page.evaluate(() => {
-      const store = window.__glassmapStore!.getState();
-      const last = store.drawings.at(-1) as Drawing;
-      store.removeDrawing(last.id);
+      // Re-read getState() each pass: the snapshot's drawings array goes stale
+      // after the first removal, and a stale at(-1) removes the same id twice.
+      for (let i = 0; i < 4; i += 1) {
+        const store = window.__glassmapStore!.getState();
+        const last = store.drawings.at(-1) as Drawing;
+        store.removeDrawing(last.id);
+      }
     });
 
     await expect(page.getByTestId("share-status")).toHaveText("");
+    await expect
+      .poll(() => page.evaluate(() => location.hash))
+      .toMatch(/^#v3\./);
   });
 });

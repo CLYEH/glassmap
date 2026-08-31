@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all eleven tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all twelve tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,14 +33,15 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 
 ## Tools
 
-Three layers, eleven of twelve tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, twelve of thirteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
 ├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape ✅
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
 ├─ find_features ✅                                                   ├─ annotate ✅
-├─ describe_surroundings ✅                                           └─ get_share_link ✅
+├─ describe_surroundings ✅                                           ├─ remove_from_map ✅
+│                                                                     └─ get_share_link ✅
 ├─ measure ✅
 └─ compare_areas ✅
 ```
@@ -56,6 +57,7 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 | `select_features` | Highlights features on the map and in the inspector's Selected list, by explicit ids or the same `query`/`near`/`radius_m`/`categories`/`within` filter `find_features` accepts — but selects every match, not just the first `limit`. | `ids` or filter, `within`, `replace` |
 | `draw_shape` | Draws a circle, polygon or line on the map so the human can see the area being discussed; returns its area (circle/polygon) or length (line) and a `drawing:<n>` id. | `type`, `center`+`radius_m` (circle) or `coordinates` (polygon/line), `label` |
 | `annotate` | Pins a short note to a place on the map, so the human sees what was found where it was found. | `at`, `note`, `icon` |
+| `remove_from_map` | Takes things off the map by id: the agent's own drawings and notes are removed, named features leave the selection, and a shape or note the *human* made is refused per-id — the person who drew it can tap it and press Remove. Every id in the batch is accounted for in exactly one bucket; removal is permanent, with no undo. | `ids` (drawing/annotation/feature ids) |
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
 | `compare_areas` | Compares two places in one call: per-category counts of what's within `radius_m` of each, plus the nearest match of each category on each side; if a place name doesn't resolve, the error names which side (`a` or `b`) failed. | `a`, `b`, `radius_m`, `categories` |
 | `measure` | Measures one drawing or loaded feature: area and perimeter for a circle or polygon, length for a line. A point has no extent and is refused, with a pointer to `find_features` for distances instead. | `target` |
@@ -82,7 +84,7 @@ A few real counts from the manifest (`public/data/tier2/index.json`): `restauran
 
 `select_features` still highlights every match a filter finds, its contract since the tool shipped — but once a point-of-interest category is involved, a filter matching more than 500 of them is refused rather than lighting up half the city: the answer gives the true count and asks for `near`+`radius_m`, `within` or `query` to narrow it. The six bundled categories are exempt from that cap.
 
-A `get_share_link` link carries the *names* of every point-of-interest category the sender had loaded, not their features — the recipient's page fetches the same files itself — so opening the link rebuilds the sender's map, selection included, instead of resolving to features the recipient's session never heard of. A link that names a category is written as `v2`; a link with none still encodes to the exact `v1` bytes it always did, so no existing link breaks.
+A `get_share_link` link carries the *names* of every point-of-interest category the sender had loaded, not their features — the recipient's page fetches the same files itself — so opening the link rebuilds the sender's map, selection included, instead of resolving to features the recipient's session never heard of. A link that names a category is written as `v2`; a link with none still encodes to the exact `v1` bytes it always did, so no existing link breaks. The one exception is a map whose drawings would not fit in a URL at all: their coordinates then travel delta-encoded and the link is written as `v3` — smaller maps keep their old bytes, and every older link still decodes.
 
 Fetching a category file can fail two honestly different ways: a **permanent** failure (this deployment ships no such file — a 404) drops the category and is not retried; a **transient** one (a slow connection, a rate-limited mirror — a 5xx, or a 408/425/429 that means "ask again") keeps the category on the books, including in any share link handed out meanwhile, so the next call simply tries again.
 

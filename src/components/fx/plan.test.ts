@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { DEFAULT_VIEW } from "@/lib/store/map-store";
 import { describeCall } from "@/lib/map-tools/activity";
+import { IMPERATIVE_TOOLS } from "../tool-roster";
 import {
+  DISSOLVE_CAP,
   keysClash,
   originKey,
   planForEntry,
   planForHuman,
   selectAnchors,
   type FxEntry,
+  type FxOutline,
   type FxSource,
 } from "./plan";
 
@@ -51,6 +54,8 @@ function source(patch: Partial<FxSource> = {}): FxSource {
     annotations: [NOTE],
     selection: [],
     anchorOf: (id) => anchors.get(id) ?? null,
+    // Nothing has left this map: a test that wants a ghost says so.
+    ghostOf: () => null,
     ...patch,
   };
 }
@@ -61,28 +66,26 @@ const entry = (patch: Partial<FxEntry> & { tool: string }): FxEntry => ({
   ...patch,
 });
 
+/**
+ * Tools that are deliberately silent on the map. Empty, and it staying empty is
+ * the point: the README promises that every tool call renders a brief effect,
+ * so leaving one out has to be a decision written down here rather than a case
+ * somebody forgot to add to `planForEntry`.
+ */
+const WITHOUT_EFFECT: readonly string[] = [];
+
 describe("the tool → effect registry", () => {
   it("gives every imperative tool an effect, and names it after the tool", () => {
-    // The feed row, the spec, the mockup and `data-fx-name` all say the tool's
-    // name; a second vocabulary here would make a frame unreadable against
-    // shots-v3.
-    const tools = [
-      "get_map_state",
-      "set_map_view",
-      "list_features_in_view",
-      "find_features",
-      "select_features",
-      "draw_shape",
-      "annotate",
-      "describe_surroundings",
-      "compare_areas",
-      "measure",
-      "get_share_link",
-    ];
-    for (const tool of tools) {
-      const plan = planForEntry(entry({ tool, refIds: ["drawing:1"] }), source());
-      expect(plan?.name, tool).toBe(tool);
-    }
+    // Derived from the roster the landing screen prints — which
+    // `tool-roster.test.ts` holds equal to the tools actually registered — so a
+    // twelfth tool cannot ship drawing nothing. The feed row, the spec, the
+    // mockup and `data-fx-name` all say the tool's name; a second vocabulary
+    // here would make a frame unreadable against shots-v3.
+    const expected = IMPERATIVE_TOOLS.filter((tool) => !WITHOUT_EFFECT.includes(tool));
+    const planned = expected.map(
+      (tool) => planForEntry(entry({ tool, refIds: ["drawing:1"] }), source())?.name ?? null,
+    );
+    expect(planned).toEqual([...expected]);
   });
 
   it("plays the pin drop for an agent-submitted add_note form", () => {
@@ -313,8 +316,89 @@ describe("the human trio", () => {
     expect(plan).toMatchObject({
       name: "human_delete",
       keys: ["annotation:1"],
-      geom: { kind: "vanish", positions: [[121.54, 25.03]], closed: false },
+      geom: { kind: "dissolve", shapes: [{ positions: [[121.54, 25.03]], closed: false }] },
     });
+  });
+});
+
+/**
+ * The removal effect, which is the one write whose subject is already gone when
+ * its row arrives. Everything here is about where the geometry comes from: get
+ * that wrong and the tool the page just gained is the only one that animates
+ * nothing.
+ */
+describe("remove_from_map", () => {
+  const ghost: FxOutline = { positions: [[121.55, 25.0334], [121.5436, 25.04]], closed: true };
+
+  it("dissolves a removed shape from the ghost it left, not from the store", () => {
+    // By the time the feed row exists, `drawings` no longer holds the shape —
+    // the same situation the human ✕ is in, answered the same way.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1"] }),
+      source({ drawings: [], ghostOf: (id) => (id === "drawing:1" ? ghost : null) }),
+    );
+    expect(plan).toMatchObject({ name: "remove_from_map", keys: ["drawing:1"] });
+    expect(plan?.geom).toEqual({ kind: "dissolve", shapes: [ghost] });
+  });
+
+  it("fades a deselected place at its own anchor, which is still loaded", () => {
+    // Deselecting takes a feature out of the highlight, not off the map: it has
+    // no ghost, and its position is exactly where it still sits.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(plan?.geom).toEqual({
+      kind: "dissolve",
+      shapes: [{ positions: [[121.6, 25.05]], closed: false }],
+    });
+  });
+
+  it("dissolves a mixed batch together, and skips only what it cannot place", () => {
+    // One call can take a shape, a note and a highlight off at once. An id
+    // neither the ghost memory nor the feature index knows contributes nothing
+    // — never a guessed point, the rule the whole table obeys.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1", "osm:node:1", "gone:9"] }),
+      source({ drawings: [], ghostOf: (id) => (id === "drawing:1" ? ghost : null) }),
+    );
+    expect(plan?.geom).toEqual({
+      kind: "dissolve",
+      shapes: [ghost, { positions: [[121.6, 25.05]], closed: false }],
+    });
+  });
+
+  it("degrades to a feed-row glow when it can place nothing at all", () => {
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:9"] }),
+      source({ drawings: [] }),
+    );
+    expect(plan).toMatchObject({ name: "remove_from_map", geom: { kind: "none" } });
+  });
+
+  it("keys on every id it took off, so the ink still drawing that shape stops", () => {
+    // A `draw_shape` effect animating a shape the next call removes would keep
+    // inking a thing that is no longer on the map.
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1", "gone:9"] }),
+      source({ drawings: [], ghostOf: () => ghost }),
+    );
+    const drawing = planForEntry(
+      entry({ tool: "draw_shape", refIds: ["drawing:1"] }),
+      source(),
+    );
+    expect(removal?.keys).toEqual(["drawing:1", "gone:9"]);
+    expect(keysClash(removal!.keys, drawing!.keys)).toBe(true);
+  });
+
+  it("stops at the cap the tool's own answer is truncated to", () => {
+    const ids = Array.from({ length: DISSOLVE_CAP + 5 }, (_, i) => `drawing:${i}`);
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ids }),
+      source({ drawings: [], ghostOf: () => ghost }),
+    );
+    expect(plan?.geom).toMatchObject({ kind: "dissolve" });
+    expect(plan?.geom.kind === "dissolve" && plan.geom.shapes.length).toBe(DISSOLVE_CAP);
   });
 });
 

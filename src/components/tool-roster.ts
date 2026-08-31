@@ -1,6 +1,6 @@
 /**
  * Every tool this page declares, in the order the landing pitch lists them:
- * the eleven imperative registrations first, then the declarative `add_note`
+ * the twelve imperative registrations first, then the declarative `add_note`
  * form (`AddNoteForm.tsx`), which a WebMCP browser picks up from the markup
  * with no JavaScript registration at all.
  *
@@ -20,6 +20,7 @@ export const IMPERATIVE_TOOLS = [
   "select_features",
   "draw_shape",
   "annotate",
+  "remove_from_map",
   "describe_surroundings",
   "compare_areas",
   "measure",

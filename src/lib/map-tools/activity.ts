@@ -305,6 +305,40 @@ const SUMMARISERS: Record<string, Summariser> = {
     };
   },
 
+  remove_from_map: (_input, result) => {
+    const removed = Array.isArray(result.removed) ? result.removed.map(rec) : [];
+    const ids = removed.map((r) => str(r?.id)).filter((id): id is string => id !== undefined);
+    const count = fin(result.removed_count) ?? ids.length;
+    const first = removed[0];
+    // One mark is named: the id and the words on it are what a reader checks
+    // against the map they are looking at. Several are counted, because a row
+    // listing five ids is a row nobody reads.
+    const only = str(first?.label) ?? str(first?.note);
+    const head =
+      count === 0
+        ? "Removed nothing"
+        : count === 1
+          ? `Removed ${ids[0] ?? "one mark"}${only ? ` — ${quote(only, ACTIVITY_NOTE_CHARS)}` : ""}`
+          : `Removed ${group(count)} marks`;
+    // What the human's own map kept, in their words: a refusal only ever
+    // happens to a shape or a note they made themselves, and the row that does
+    // not say so leaves them watching the agent apparently do nothing.
+    const kept = fin(result.refused_count) ?? 0;
+    // A malformed mark id and an id nothing answers to are one fact to a person
+    // watching: the agent named something this map does not have.
+    const missing = (fin(result.unknown_count) ?? 0) + (fin(result.malformed_count) ?? 0);
+    return {
+      summary: [
+        head,
+        kept ? ` · ${group(kept)} of yours kept` : "",
+        missing ? ` · ${group(missing)} unknown ${missing === 1 ? "id" : "ids"}` : "",
+      ].join(""),
+      // The ids that left the map, so the page can play the removal where each
+      // one was. Already capped by the answer itself.
+      ...(ids.length ? { refIds: ids } : {}),
+    };
+  },
+
   describe_surroundings: (input, result) => {
     // The place the call was about wins over the district it turned out to be
     // in. The row and the map are looked at together: the page marks the

@@ -517,14 +517,18 @@ export default function MapCanvas() {
     };
 
     /**
-     * The browse layer: one category, painted because a human asked to look
-     * around in it. Selected places are left out — they are already beads, and
-     * a place carrying both marks would be counted twice.
+     * The browse layer: up to three categories, painted because a human asked
+     * to look around in them. Selected places are left out — they are already
+     * beads, and a place carrying both marks would be counted twice.
      */
     const applyBrowse = () => {
       const { tier2Features, selection } = store.getState();
-      const category = browse.getState().category;
-      setSourceData(map, BROWSE_SOURCE, browsePointsToGeoJson(tier2Features, category, selection));
+      const categories = browse.getState().categories;
+      setSourceData(
+        map,
+        BROWSE_SOURCE,
+        browsePointsToGeoJson(tier2Features, categories, selection),
+      );
     };
 
     /**
@@ -539,11 +543,15 @@ export default function MapCanvas() {
      * in view" has to mean the same rectangle `bounds` reports and the camera
      * is centred in, or the budget would be spent on clusters sitting under
      * the inspector's glass, where nobody can read a numeral.
+     *
+     * One budget over the whole browsed set, however many categories are in
+     * it: twelve numerals is a fact about the screen, not about a category, so
+     * the largest clusters win the ink whichever kind of place they hold.
      */
     let inkThreshold = Number.POSITIVE_INFINITY;
     const applyInkBudget = () => {
       if (!ready) return;
-      const browsing = browse.getState().category !== null;
+      const browsing = browse.getState().categories.length > 0;
       let next = Number.POSITIVE_INFINITY;
       if (browsing) {
         const counts = new Map<number, number>();
@@ -675,7 +683,7 @@ export default function MapCanvas() {
        * A person's tap on a shape, and the other half of the same door: a
        * drawing is a mark somebody made, so it answers "what is this, and
        * whose?" and offers to take itself off the map. `Remove` is
-       * `removeDrawing` — the writer `undo` and the tools use.
+       * `removeDrawing` — the same writer `remove_from_map` uses.
        *
        * A place under the shape answers first. The fill is 18 % opaque, so a
        * bead inside a drawn circle is plainly visible through it, and a tap
@@ -779,7 +787,7 @@ export default function MapCanvas() {
         applySelectionMarks(state.tier2Features, state.features, state.selection);
         // A place that just became a bead has to stop being a grain, and one
         // that was deselected has to become a grain again.
-        if (browse.getState().category) applyBrowse();
+        if (browse.getState().categories.length > 0) applyBrowse();
       }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
@@ -790,11 +798,13 @@ export default function MapCanvas() {
     });
 
     const unsubscribeBrowse = browse.subscribe((state, previous) => {
-      if (!ready || state.category === previous.category) return;
+      // Identity, not contents: the store writes a new array for every add,
+      // eviction and removal, and never mutates the one it holds.
+      if (!ready || state.categories === previous.categories) return;
       applyBrowse();
       // Leaving browse takes the budget with it; entering re-measures on the
       // `idle` the new data causes.
-      if (!state.category) applyInkBudget();
+      if (state.categories.length === 0) applyInkBudget();
     });
 
     /**

@@ -22,8 +22,12 @@ const CARD_FLIP_PX = 190;
  * can pin a note or draw a shape, and until the card covered them the only way
  * back was a tool call they had no agent to make. Tap it, read who made it,
  * press Remove. `Remove` is `setSelection` minus the id, `removeAnnotation` or
- * `removeDrawing` — the same three writers the tools use, so an undo by hand
- * and an undo by agent leave the store in the same state.
+ * `removeDrawing` — the same three writers `remove_from_map` gives an agent, so
+ * both halves of the gesture leave the store in the same shape. What the two
+ * halves are *allowed* to take off differs, and deliberately: either may drop a
+ * feature out of the highlight, but a shape drawn or a note written by hand is
+ * refused to the agent (`lib/map-tools/remove.ts`), and this button is the only
+ * thing on the page that removes one of those.
  *
  * Not a modal, by construction and by law: it is a positioned card with no
  * backdrop and no focus trap, the map keeps panning and zooming under it, and

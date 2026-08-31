@@ -2,6 +2,7 @@ import { isFeatureCategory } from "@/lib/data/schema";
 import { normaliseName } from "@/lib/map-tools/gazetteer";
 import { distanceMeters, featureCenter } from "@/lib/map-tools/output";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
+import type { SearchIndexStatus } from "@/lib/store/search-index";
 import {
   TIER2_CATEGORIES,
   type MapCategory,
@@ -13,6 +14,8 @@ import { POI_SWATCH } from "./card-model";
 import { categorySingular } from "./category-labels";
 import { sameText } from "./feature-details";
 import { CATEGORY_COLOR } from "./map-style";
+import type { IndexHit } from "./search-index-model";
+import type { CategoryRow } from "./search-vocabulary";
 
 /**
  * The human search box's matcher, ranker and honesty line — everything the box
@@ -47,6 +50,31 @@ import { CATEGORY_COLOR } from "./map-style";
  * ("Da-an" vs "Daan") decides the same way on both sides and only the *field
  * set* differs. Do not unify them in either direction.
  *
+ * ### The same divergence, one level out: the citywide index (T-100)
+ *
+ * Both sides now also read `/data/tier2/search-index.json`, which holds every
+ * point of interest in the city whether or not its category is in memory — and
+ * the field sets diverge there too, harder, for a sharper reason.
+ *
+ *  - **The tool discloses names only.** `unloadedMatches` (`map-tools/
+ *    tier2-query.ts`) answers `find_features` with `{category, count}` for the
+ *    categories it did not search. That `count` is read as *"how many I get if
+ *    I name this category"*, and the call that names it matches names — so
+ *    counting the index's `cuisine` and `address` columns would promise
+ *    features the follow-up call then cannot find. Measured on the shipped
+ *    index: "coffee" is 354 names but 834 rows once cuisine and address count.
+ *    **A tool must not promise what its own loaded search cannot deliver.**
+ *  - **The box is the finder.** It matches all five columns —
+ *    name, English name, brand, cuisine, address — through
+ *    `searchIndexEntries` (`search-index-model.ts`), because there is no
+ *    follow-up call to keep faith with: the row *is* the answer, and picking it
+ *    loads the one category it needs. A person typing a street name or the word
+ *    for coffee gets the 834, and every one of them is a place they can go to.
+ *
+ * The rule that keeps both honest is the same one: say what you can deliver.
+ * The tool's promise is a later call, so it is narrow; the box's promise is the
+ * row under the cursor, so it is wide.
+ *
  * ## `inView` is a ranking hint, not the tool's answer
  *
  * `list_features_in_view` calls a feature visible when its bounding box
@@ -68,6 +96,18 @@ export const SEARCH_LIMIT = 8;
  * index.ts) — restated rather than imported, because that module is the tool
  * registry and nothing on the human path may depend on it. A pick never zooms
  * *out*: a person who has framed a neighbourhood keeps their frame.
+ *
+ * **This is the point half of a two-branch rule, not the whole rule.** The
+ * inspector's row click applies the same "never zoom out" law with an *area*
+ * branch beside it (T-101's `frameFor`): a feature carrying a bounding box is
+ * fitted to it, and only a point falls back to a zoom like this one. What the
+ * dropdown has is a centre and nothing else — a loaded hit is reduced to
+ * `featureCenter`, and a citywide index row holds only `lng`/`lat` by
+ * construction (`store/search-index.ts`) — so the point rule is the only one it
+ * is *able* to apply. Should index rows ever gain a bbox, the widening belongs
+ * in that area branch; this constant is not a decision that areas are zoomed to
+ * rather than fitted, and unifying the two on the strength of it would regress
+ * the inspector.
  */
 export const SEARCH_ZOOM = 15;
 
@@ -227,4 +267,77 @@ export function formatDistance(meters: number): string {
   if (!Number.isFinite(meters)) return "";
   if (meters < 1000) return `${Math.round(meters)} m`;
   return `${(meters / 1000).toFixed(1)} km`;
+}
+
+/**
+ * One row of the dropdown, whichever of the three answers it is.
+ *
+ * `key` is unique across the three kinds, so a place that is both a loaded
+ * feature and an index row (it cannot be today — see `searchIndexEntries` — but
+ * the union does not depend on that) still gets two distinct React keys, and so
+ * a test can address any row by one string.
+ */
+export type SearchRow =
+  | { kind: "loaded"; key: string; hit: SearchHit }
+  | { kind: "index"; key: string; hit: IndexHit }
+  | { kind: "category"; key: string; row: CategoryRow };
+
+/**
+ * The one order the dropdown is read in: what the map is holding, then what the
+ * city has, then what kind of place the words might have meant.
+ *
+ * The precedence is absolute and not a score. A loaded feature outranks every
+ * index row however far away it is, because it is the stronger answer in every
+ * respect a person can act on: it is already on the map, it can be selected and
+ * inspected, its tags are real, and picking it costs nothing. An index row is a
+ * promise that requires a download to keep. Ranking them together by distance
+ * would put a café 200 m away that this page cannot show above one 400 m away
+ * that it can — and the nearer row would be the one that makes the person wait.
+ *
+ * Category rows go last for the same reason read the other way: "browse every
+ * café in Taipei" is the broadest possible answer to a query, so it belongs
+ * under every specific one. It is an offer, not a result.
+ */
+export function composeSearchRows(
+  loaded: readonly SearchHit[],
+  index: readonly IndexHit[],
+  categories: readonly CategoryRow[],
+): SearchRow[] {
+  return [
+    ...loaded.map((hit): SearchRow => ({ kind: "loaded", key: `loaded:${hit.id}`, hit })),
+    ...index.map((hit): SearchRow => ({ kind: "index", key: `index:${hit.id}`, hit })),
+    ...categories.map((row): SearchRow => ({ kind: "category", key: `cat:${row.category}`, row })),
+  ];
+}
+
+/**
+ * What the box says when all three lists came back empty — one sentence per
+ * thing that can actually be true.
+ *
+ * This is the honesty the tools have had since tier-2 shipped, on the human
+ * surface: "nothing matches" and "the file was never fetched" must never look
+ * the same. The citywide index makes one of these sentences newly *strong* —
+ * with the index in hand, a miss really is a miss across all 31,057 points of
+ * interest, and the box may finally say so about the city rather than about its
+ * own memory. Without it, the honest answer is still the narrow one.
+ *
+ * Five states, five sentences, because each one changes what a person should do
+ * next: wait, give up, try a different word, keep typing (the retry), or open
+ * the tray.
+ */
+export function searchEmptyNote(
+  status: SearchIndexStatus,
+  unfetchedCategories: number,
+): string {
+  if (status === "loading") return "Still looking through the rest of Taipei…";
+  if (status === "ready") return "Nothing in Taipei matches that.";
+  if (status === "failed") {
+    return "Nothing loaded matches that — the citywide index did not arrive. Keep typing to try again.";
+  }
+  // `idle` (nobody has asked yet) and `absent` (this build ships no index): the
+  // box can only speak for what it has, so it points at the one thing that
+  // would widen the search, exactly as it did before T-100.
+  return unfetchedCategories > 0
+    ? `Nothing loaded matches that — ${unfetchedCategories} more kinds of place load from the Places tray.`
+    : "Nothing on this map matches that.";
 }

@@ -42,6 +42,7 @@ export type FxName =
   | "find_features"
   | "select_features"
   | "draw_shape"
+  | "plan_route"
   | "annotate"
   | "remove_from_map"
   | "describe_surroundings"
@@ -79,6 +80,12 @@ export type FxGeom =
   | { kind: "find"; shape: FxShape | null; hits: LngLat[] }
   | { kind: "select"; points: LngLat[] }
   | { kind: "path"; positions: LngLat[]; closed: boolean }
+  /**
+   * A walking route: the street-following line the service returned, plus the
+   * two places it runs between. Never closed — a route has a start and an end,
+   * and that is the half of its meaning a bare path cannot carry.
+   */
+  | { kind: "route"; positions: LngLat[]; from: LngLat; to: LngLat }
   | { kind: "measure"; positions: LngLat[]; closed: boolean }
   | { kind: "pin"; at: LngLat; id: string }
   | { kind: "compass"; at: LngLat; radius_m: number }
@@ -297,6 +304,40 @@ export function planForEntry(entry: FxEntry, source: FxSource): FxPlan | null {
         drawing ? [drawing.id] : [],
         path ? { kind: "path", ...path } : { kind: "none" },
       );
+    }
+
+    case "plan_route": {
+      // The line the service actually returned, and nothing else.
+      //
+      // This is the one write whose geometry the page could plausibly fake: the
+      // row echoes both ends (`fx.origin` / `fx.originB` — the same pair
+      // compare_areas carries), so a straight or bowed line between them is
+      // always available to draw. It would be a lie of exactly the kind the
+      // rest of this file refuses. A walking route IS the streets it follows;
+      // compare_areas' tether bows on purpose because "a smooth bow is as far
+      // from a street-following route as a mark on a map can get" (effects.ts).
+      // So when the drawing is not in the store the map stays calm and the feed
+      // row glows alone — the same degradation every other geometry-less call
+      // gets.
+      const drawing = drawingIn(source, refIds);
+      const path = drawing ? outlineOf(drawing) : null;
+      if (!drawing || !path) {
+        return plan("plan_route", drawing ? [drawing.id] : [], { kind: "none" });
+      }
+      // The two ends as the tool resolved the caller's names, which is the one
+      // thing an agent that typed "Daan Station" cannot check for itself. They
+      // are not the same points as the line's: the service snaps each end to
+      // the nearest street it knows, so the marks sit on the places asked for
+      // while the line runs where a person would walk. Without the echo the
+      // line's own ends are the honest answer rather than a guess — a simplified
+      // route keeps its first and last point (`map-tools/route.ts`).
+      const ends = path.positions;
+      const from = echoOrigin(fx, "origin") ?? ends[0];
+      const to = echoOrigin(fx, "originB") ?? ends[ends.length - 1];
+      // Keyed on the artifact, like every other write: two routes out of the
+      // same station are two different lines and must coexist, and a
+      // `remove_from_map` that takes this route off cuts its ink short.
+      return plan("plan_route", [drawing.id], { kind: "route", positions: ends, from, to });
     }
 
     case "measure": {

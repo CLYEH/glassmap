@@ -1,5 +1,5 @@
 /**
- * The fifteen effects: twelve tools, three human actions.
+ * The sixteen effects: thirteen tools, three human actions.
  *
  * Grammar (spec v3, unchanged since v1):
  *  - **read = gaze** — cased deep-teal geometry, transient, zero residue in ≤2 s;
@@ -955,6 +955,150 @@ function inkEffect(name: FxName, ink: string, withVertices: boolean, dur: number
 }
 
 /**
+ * plan_route — "route draw-on". The write that makes a line out of somebody
+ * else's answer, so it is the ink verb again — but a route is not a shape, and
+ * two things say so:
+ *
+ *  - **It has a direction.** The stroke draws from the start towards the
+ *    destination and a cased dot is already sitting at the start when it does,
+ *    so the line reads as a walk being taken rather than an outline being
+ *    closed. The destination dot lands as the pen arrives, with one ring: the
+ *    walk got there.
+ *  - **It is somebody's street data.** The stroke is cased (white under, teal
+ *    over) because it runs along roads the basemap has already drawn in ink,
+ *    where `draw_shape`'s bare stroke would disappear.
+ *
+ * The two dots are the places the caller named, which the service snapped to
+ * the nearest street before routing: mark and line disagree by a few metres on
+ * purpose, and both are what the answer said (see `plan.ts`). Like every other
+ * materialise, the animated stroke hands over to the shipped drawing layer and
+ * leaves nothing of its own behind.
+ */
+interface RouteNodes extends FxNodes {
+  root: SVGGElement;
+  /** Cased pair: white shell under teal ink, both dashed on together. */
+  strokes: [SVGPathElement, SVGPathElement];
+  pen: SVGCircleElement;
+  start: SVGGElement;
+  finish: SVGGElement;
+  arrival: SVGCircleElement;
+  positions: LngLat[];
+  from: LngLat;
+  to: LngLat;
+}
+
+/** The cased place dot the compass centre and the twin origins are also made of. */
+function routeDot(parent: SVGGElement): SVGGElement {
+  const g = svgEl("g", { opacity: 0 }, parent);
+  svgEl("circle", { cx: 0, cy: 0, r: 6, fill: CASE_WHITE, opacity: 0.9 }, g);
+  svgEl("circle", { cx: 0, cy: 0, r: 4, fill: TEAL_DEEP }, g);
+  return g;
+}
+
+const placeAt = (node: SVGElement, point: Pt) =>
+  node.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+
+const routeInk: Effect<RouteNodes> = {
+  dur: 1600,
+  setup(ctx, geom) {
+    if (geom.kind !== "route" || geom.positions.length < 2) return null;
+    if (!ctx.project(geom.from) || !ctx.project(geom.to)) return null;
+    if (geom.positions.some((point) => !ctx.project(point))) return null;
+    const root = mapGroup(ctx, "plan_route");
+    const strokes = casedPair(
+      "path",
+      { d: "", fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round" },
+      root,
+      6,
+      3,
+      TEAL_DEEP,
+    );
+    const arrival = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 5, fill: "none", stroke: TEAL, "stroke-width": 2.4, opacity: 0 },
+      root,
+    );
+    const start = routeDot(root);
+    const finish = routeDot(root);
+    const pen = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 5, fill: TEAL, stroke: CASE_WHITE, "stroke-width": 1.8, opacity: 0 },
+      root,
+    );
+    return {
+      root,
+      strokes,
+      pen,
+      start,
+      finish,
+      arrival,
+      positions: geom.positions,
+      from: geom.from,
+      to: geom.to,
+    };
+  },
+  render(p, n, ctx) {
+    const points = n.positions.map((point) => ctx.project(point));
+    const from = ctx.project(n.from);
+    const to = ctx.project(n.to);
+    if (!from || !to || !points.every((q): q is Pt => q !== null)) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    const walk = walkPath(points, false);
+    const total = walk.total || 1;
+    const drawn = inOutCubic(seg(p, 0.04, 0.74));
+    const d = pathD(points, false);
+    // The stroke leaves as the shipped drawing layer takes over: one walk, one
+    // line on the map, never two.
+    const fade = 1 - seg(p, 0.8, 0.97);
+    for (const stroke of n.strokes) {
+      stroke.setAttribute("d", d);
+      stroke.setAttribute("stroke-dasharray", total.toFixed(1));
+      stroke.setAttribute("stroke-dashoffset", (total * (1 - drawn)).toFixed(1));
+    }
+    setOpacity(n.strokes[0], 0.8 * fade);
+    setOpacity(n.strokes[1], 0.95 * fade);
+    const tip = pointAlong(walk, total * drawn);
+    n.pen.setAttribute("cx", tip.x.toFixed(1));
+    n.pen.setAttribute("cy", tip.y.toFixed(1));
+    setOpacity(n.pen, 0.95 * seg(p, 0.02, 0.08) * (1 - seg(p, 0.7, 0.8)));
+    const ends = 1 - seg(p, 0.86, 1);
+    placeAt(n.start, from);
+    setOpacity(n.start, seg(p, 0, 0.06) * ends);
+    placeAt(n.finish, to);
+    setOpacity(n.finish, seg(p, 0.68, 0.76) * ends);
+    const landing = seg(p, 0.7, 0.92);
+    n.arrival.setAttribute("cx", to.x.toFixed(1));
+    n.arrival.setAttribute("cy", to.y.toFixed(1));
+    n.arrival.setAttribute("r", lerp(5, s(32), outCubic(landing)).toFixed(1));
+    setOpacity(n.arrival, 0.7 * bell(landing));
+  },
+  rm(p, n, ctx) {
+    const points = n.positions.map((point) => ctx.project(point));
+    const from = ctx.project(n.from);
+    const to = ctx.project(n.to);
+    if (!from || !to || !points.every((q): q is Pt => q !== null)) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    const op = bell(p);
+    const d = pathD(points, false);
+    for (const stroke of n.strokes) {
+      stroke.setAttribute("d", d);
+      stroke.removeAttribute("stroke-dasharray");
+    }
+    setOpacity(n.strokes[0], 0.7 * op);
+    setOpacity(n.strokes[1], 0.9 * op);
+    setOpacity(n.pen, 0);
+    setOpacity(n.arrival, 0);
+    placeAt(n.start, from);
+    placeAt(n.finish, to);
+    setOpacity(n.start, op);
+    setOpacity(n.finish, op);
+  },
+  cleanup(n) {
+    n.root.remove();
+  },
+};
+
+/**
  * annotate / human_note — "pin drop". The pin is the shipped DOM marker; the
  * driver writes its anchor, stem and card in, and one ripple marks the landing
  * on the map underneath. Every inline style it wrote is removed on cleanup, so
@@ -1144,6 +1288,7 @@ const EFFECTS: Record<FxName, Effect> = {
   find_features: findPulse as Effect,
   select_features: selectDropIn as Effect,
   draw_shape: inkEffect("draw_shape", TEAL_DEEP, false, 1500) as Effect,
+  plan_route: routeInk as Effect,
   annotate: pinEffect("annotate", TEAL) as Effect,
   remove_from_map: dissolveEffect("remove_from_map", TEAL_DEEP, TEAL) as Effect,
   describe_surroundings: compass as Effect,

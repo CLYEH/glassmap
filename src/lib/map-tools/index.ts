@@ -76,6 +76,14 @@ import {
   utf8Bytes,
 } from "./share";
 import { ANNOTATION_PREFIX, DRAWING_PREFIX, knownMarkIds, removeFromMap } from "./remove";
+import {
+  defaultRouteLabel,
+  httpRouteFetch,
+  planWalk,
+  ROUTE_ATTRIBUTION,
+  routeRefusal,
+  type RouteFetch,
+} from "./route";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -106,6 +114,12 @@ export interface DrawShapeInput {
   center?: unknown;
   radius_m?: unknown;
   coordinates?: unknown;
+  label?: unknown;
+}
+
+export interface PlanRouteInput {
+  from?: unknown;
+  to?: unknown;
   label?: unknown;
 }
 
@@ -438,6 +452,13 @@ export interface MapToolsOptions {
    * defaults to the current page when there is one.
    */
   getBaseUrl?: () => string;
+  /**
+   * How plan_route reaches the routing service, defaulting to the live FOSSGIS
+   * one. Injected for the same reason the store's `tier2FetchJson` is: the unit
+   * suite must be able to serve a route - and a refusal, and a timeout -
+   * without a network.
+   */
+  routeFetch?: RouteFetch;
 }
 
 /**
@@ -452,6 +473,7 @@ function currentBaseUrl(): string {
 
 export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}): GlassMapTool[] {
   const getBaseUrl = opts.getBaseUrl ?? currentBaseUrl;
+  const routeFetch = opts.routeFetch ?? httpRouteFetch;
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
@@ -954,6 +976,109 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  const planRoute: GlassMapTool<PlanRouteInput> = {
+    name: "plan_route",
+    description:
+      "Plan a walk between two places and draw it on the map as a line the human can see. Walking only: the route is on foot, and there is no driving, cycling or transit profile here. It comes from the OpenStreetMap-based routing service run by FOSSGIS (routing.openstreetmap.de), which is the one thing on this map fetched at the moment you ask: when it cannot answer, nothing is drawn, the map is unchanged and the answer says so plainly rather than guessing a line. Both ends take the same three forms as anywhere else - a coordinate, a feature id from an earlier call, or a place name. Returns the drawing id, the service's own distance in metres and duration in seconds, both ends as it resolved them, and the new map state. What it leaves behind is an ordinary drawing: measure gives its length and remove_from_map takes it off again. A line has no inside, so find_features({within}) and select_features({within}) cannot be asked what is inside a route - measure it for its length, or draw a circle somewhere along it to ask what is near it. A route with more points than the map can redraw is simplified, and simplified says so; distance_m is always the service's figure for the real walk, not the drawn line's.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: pointProperty(
+          'Where the walk starts: a coordinate, a feature id such as "osm:node:123", or a place name such as "Daan Station". If a name matches several places nothing is drawn and the answer lists the candidates.',
+        ),
+        to: pointProperty("Where the walk ends, in any of the same three forms as from."),
+        label: {
+          type: "string",
+          maxLength: MAX_LABEL_CHARS,
+          description: `Short name shown on the map and in map state (at most ${MAX_LABEL_CHARS} characters). Omit it and the walk is named after the two places, e.g. "walk: 大安 → 台北車站".`,
+        },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+    // The line, its distance and its duration come from a third-party service,
+    // and the state it returns carries labels the human typed.
+    annotations: { untrustedContentHint: true },
+    execute: async (input, opts) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      // The only tool whose window is seconds wide and ends in a write, which
+      // is what makes the caller's signal worth reading here: a client that
+      // gave up must not find a shape on its map that no answer ever mentioned.
+      // Checked twice - before the request, so a cancelled call costs the
+      // service nothing, and again before the drawing, which is the moment the
+      // map would otherwise change behind the client's back. The request in
+      // flight is not itself cancelled: `RouteFetch` takes a url and nothing
+      // else, and widening that contract is a change to every injected fetch
+      // rather than a fix to this one.
+      const cancelled = () => opts?.signal?.aborted === true;
+      const givenUp = () => ({
+        error: routeRefusal("the caller cancelled this call before the route could be drawn"),
+        state: state(),
+      });
+
+      // Everything free happens before the request: one of the service's
+      // seconds must not be spent on a call that was never going to be drawn.
+      const label = validateOptionalText(inp.label, "label", MAX_LABEL_CHARS);
+      if ("error" in label) return { error: label.error, state: state() };
+      if (inp.from === undefined || inp.to === undefined) {
+        return {
+          error: "plan_route needs both from and to: where the walk starts and where it ends",
+          state: state(),
+        };
+      }
+      // Which end failed matters: the agent has to know which of the two names
+      // to ask the human about, exactly as compare_areas says for a and b.
+      const from = resolvePoint(store, inp.from, "from");
+      if ("error" in from) return { ...from, field: "from", state: state() };
+      const to = resolvePoint(store, inp.to, "to");
+      if ("error" in to) return { ...to, field: "to", state: state() };
+      if (from.point[0] === to.point[0] && from.point[1] === to.point[1]) {
+        // A line with no extent is invisible to the human and still counts as a
+        // drawing, so it would report a route nobody can see. Same refusal
+        // draw_shape makes for a shape that encloses nothing.
+        return {
+          error: "from and to are the same point; there is no walk to draw",
+          state: state(),
+        };
+      }
+
+      if (cancelled()) return givenUp();
+      const walk = await planWalk(from.point, to.point, routeFetch);
+      if ("error" in walk) return { error: walk.error, state: state() };
+      // The seconds the service took are the seconds a client had to give up
+      // in, so this is where a phantom drawing would come from.
+      if (cancelled()) return givenUp();
+
+      const text = label.text ?? defaultRouteLabel(from.name, to.name);
+      const drawing = store.addDrawing({
+        source: "agent",
+        kind: "line",
+        label: text,
+        geometry: { type: "LineString", coordinates: walk.coordinates },
+      });
+
+      return {
+        drawing_id: drawing.id,
+        // The label is echoed because it is often not the caller's: a default
+        // built from two names is something only this call knows.
+        label: text,
+        distance_m: walk.distance_m,
+        duration_s: walk.duration_s,
+        points: walk.coordinates.length,
+        // Only when it happened: a line that arrived whole must not carry a
+        // caveat about detail it never lost.
+        ...(walk.simplified ? { simplified: true } : {}),
+        // Where the walk really starts and ends, as the names resolved - the
+        // one thing an agent that typed a name cannot check for itself.
+        from: { lng: from.point[0], lat: from.point[1], ...(from.name ? { name: from.name } : {}) },
+        to: { lng: to.point[0], lat: to.point[1], ...(to.name ? { name: to.name } : {}) },
+        attribution: ROUTE_ATTRIBUTION,
+        state: describeState(store),
+      };
+    },
+  };
+
   const annotate: GlassMapTool<AnnotateInput> = {
     name: "annotate",
     description:
@@ -1384,6 +1509,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     findFeatures as GlassMapTool,
     selectFeatures as GlassMapTool,
     drawShape as GlassMapTool,
+    planRoute as GlassMapTool,
     annotate as GlassMapTool,
     removeFromMapTool as GlassMapTool,
     describeSurroundings as GlassMapTool,

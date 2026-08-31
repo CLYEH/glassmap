@@ -13,9 +13,11 @@
  * Coordinates are approximate but their relationships are load-bearing, so
  * changing one will change several assertions on purpose.
  */
+import type { Position } from "geojson";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { HttpStatusError, TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
+import type { RouteFetch } from "./route";
 
 type Props = GlassMapFeature["properties"];
 
@@ -210,6 +212,64 @@ export const EAST_DISTRICT = box(
 
 /** In the seam: inside neither polygon, ~81 m from West and ~121 m from East. */
 export const SEAM_POINT: LngLat = [121.5108, 25.005];
+
+// ------------------------------------------------------------ routing fixture
+
+/**
+ * Fractions on purpose: the tool reports whole metres and whole seconds, so
+ * these are the two numbers that prove it rounds rather than truncates
+ * (3830.4 → 3830 down, 2760.6 → 2761 up).
+ */
+export const ROUTE_FIXTURE_DISTANCE = 3830.4;
+export const ROUTE_FIXTURE_DURATION = 2760.6;
+
+/**
+ * A shape point at the precision OSRM really sends (7 decimals). Nothing but
+ * round5 on the way into the store can turn it into [121.5322, 25.04123].
+ */
+export const ROUTE_FIXTURE_BEND: Position = [121.5321987, 25.0412345];
+
+/** The service's answer for a route it found: OSRM's own envelope, verbatim. */
+export function routeOkBody(
+  coordinates: Position[],
+  distance = ROUTE_FIXTURE_DISTANCE,
+  duration = ROUTE_FIXTURE_DURATION,
+) {
+  return {
+    code: "Ok",
+    routes: [{ distance, duration, geometry: { type: "LineString", coordinates } }],
+  };
+}
+
+/** The two coordinates a request asked for, read back out of its URL. */
+export function routeRequestPoints(url: string): [Position, Position] {
+  const path = url.split("?")[0];
+  const pair = path.slice(path.lastIndexOf("/") + 1);
+  const [from, to] = pair.split(";").map((p) => p.split(",").map(Number) as Position);
+  return [from, to];
+}
+
+/**
+ * A routing service with no network. The default answers every request with a
+ * three-point line from where it was asked to where it was asked, so a test can
+ * prove the request carried the points the tool resolved; `answer` replaces it
+ * with a refusal, a malformed body, a huge line or a throw.
+ *
+ * `requests` is the log every rate-limit and "never called the service" test
+ * asserts against.
+ */
+export function createRouteFetch(
+  answer: (from: Position, to: Position) => unknown = (from, to) =>
+    routeOkBody([from, ROUTE_FIXTURE_BEND, to]),
+): { routeFetch: RouteFetch; requests: string[] } {
+  const requests: string[] = [];
+  const routeFetch: RouteFetch = async (url) => {
+    requests.push(url);
+    const [from, to] = routeRequestPoints(url);
+    return answer(from, to);
+  };
+  return { routeFetch, requests };
+}
 
 // ------------------------------------------------------- tier-2 (POI) fixtures
 

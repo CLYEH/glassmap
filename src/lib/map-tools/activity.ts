@@ -296,6 +296,27 @@ const SUMMARISERS: Record<string, Summariser> = {
     };
   },
 
+  plan_route: (_input, result) => {
+    const id = str(result.drawing_id);
+    // The label rather than the caller's two ends: a route is usually named by
+    // the tool itself, from the places it resolved, and that default is the
+    // only description of the walk anyone has. Read from the answer, like
+    // everything else here - the input may carry no name at all.
+    const label = str(result.label)?.trim();
+    return {
+      summary: [
+        `Planned a walk, ${metres(fin(result.distance_m) ?? 0)}`,
+        label ? ` — ${quote(label)}` : "",
+        id ? ` → ${id}` : "",
+      ].join(""),
+      ...(id ? { refIds: [id] } : {}),
+      // Both ends, as the answer states them: the two places a route is
+      // between are what the page has to show to show a route at all, and
+      // compare_areas' second centre is the same field for the same reason.
+      ...withFx({ origin: fxPoint(result.from), originB: fxPoint(result.to) }),
+    };
+  },
+
   annotate: (input, result) => {
     const note = str(input.note)?.trim() ?? "";
     const id = str(result.annotation_id);

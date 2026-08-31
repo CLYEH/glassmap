@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all twelve tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all thirteen tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `plan_route`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,11 +33,12 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 
 ## Tools
 
-Three layers, twelve of thirteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, thirteen of fourteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
 ├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape ✅
+│                                            │                        ├─ plan_route ✅
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
 ├─ find_features ✅                                                   ├─ annotate ✅
 ├─ describe_surroundings ✅                                           ├─ remove_from_map ✅
@@ -56,6 +57,7 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 | `find_features` | Searches every loaded feature, not just what's visible, by name substring, category, distance from a place/feature/coordinate, and whether it's inside a shape on the map — including one a human drew by hand. | `query`, `categories`, `near`, `radius_m`, `within`, `limit` |
 | `select_features` | Highlights features on the map and in the inspector's Selected list, by explicit ids or the same `query`/`near`/`radius_m`/`categories`/`within` filter `find_features` accepts — but selects every match, not just the first `limit`. | `ids` or filter, `within`, `replace` |
 | `draw_shape` | Draws a circle, polygon or line on the map so the human can see the area being discussed; returns its area (circle/polygon) or length (line) and a `drawing:<n>` id. | `type`, `center`+`radius_m` (circle) or `coordinates` (polygon/line), `label` |
+| `plan_route` | Plans a walking route between two places via the keyless FOSSGIS OSRM service (OpenStreetMap data) and draws it as a line the human can see; returns the drawing id, `distance_m` and `duration_s`, says `simplified: true` when the geometry was thinned to fit, and fails honestly — never a fake route — when the service cannot answer. The one tool that talks to an external service; attribution renders on the page. | `from`, `to`, `label` |
 | `annotate` | Pins a short note to a place on the map, so the human sees what was found where it was found. | `at`, `note`, `icon` |
 | `remove_from_map` | Takes things off the map by id: the agent's own drawings and notes are removed, named features leave the selection, and a shape or note the *human* made is refused per-id — the person who drew it can tap it and press Remove. Every id in the batch is accounted for in exactly one bucket; removal is permanent, with no undo. | `ids` (drawing/annotation/feature ids) |
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
@@ -197,7 +199,7 @@ Branching, worktrees, commit and PR conventions are in [CONTRIBUTING.md](./CONTR
 
 ## Architecture
 
-Single Next.js app on Vercel. **No backend, no database, no API keys, no login.**
+Single Next.js app on Vercel. **No backend, no database, no API keys, no login.** One keyless external data service: `plan_route` asks the [FOSSGIS OSRM instance](https://routing.openstreetmap.de/) for walking routes at call time — throttled to their 1 request/second policy, credited on the page for the rest of the session once a route has been planned, and answering with an honest error (map unchanged) when unreachable. Everything else runs on bundled data entirely in the browser; the only other network the app touches is the keyless OpenFreeMap basemap tiles below, which stay display-only.
 
 - [MapLibre GL JS](https://maplibre.org/) with [OpenFreeMap](https://openfreemap.org/) vector tiles (no key required)
 - Bundled GeoJSON under `public/data/` (Taipei MRT stations, districts, parks, schools, supermarkets, sample listings)
@@ -216,7 +218,7 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 
 ## Data and licensing
 
-Six GeoJSON files bundled under `public/data/` and loaded on startup, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API. A further 18 point-of-interest files under `public/data/tier2/` are prepared the same way but loaded lazily, one category at a time, on request — see [City-wide breadth](#city-wide-breadth) above. Full provenance, Overpass queries and export notes for all 24 categories are in [`public/data/README.md`](./public/data/README.md).
+Six GeoJSON files bundled under `public/data/` and loaded on startup, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API; the single runtime exception is the `plan_route` routing request described under [Architecture](#architecture). A further 18 point-of-interest files under `public/data/tier2/` are prepared the same way but loaded lazily, one category at a time, on request — see [City-wide breadth](#city-wide-breadth) above. Full provenance, Overpass queries and export notes for all 24 categories are in [`public/data/README.md`](./public/data/README.md).
 
 | Dataset | Category | Features |
 |---|---|---:|

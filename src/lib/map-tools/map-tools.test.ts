@@ -57,6 +57,7 @@ describe("tool contract", () => {
     expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
     expect(byName.compare_areas.annotations?.readOnlyHint).toBe(true);
     expect(byName.measure.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get_place_details.annotations?.readOnlyHint).toBe(true);
     expect(byName.get_share_link.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
@@ -139,6 +140,7 @@ describe("tool contract", () => {
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     // Not an object at all — some clients pass the raw argument through.
@@ -152,6 +154,7 @@ describe("tool contract", () => {
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     {
@@ -164,6 +167,7 @@ describe("tool contract", () => {
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     { input: { type: "blob", coordinates: [] }, rejectedBy: ["draw_shape"] },

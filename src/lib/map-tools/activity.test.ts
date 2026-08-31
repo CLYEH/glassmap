@@ -19,7 +19,10 @@ import type { GlassMapFeature } from "@/lib/data/schema";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import {
   createGatedTier2Fetch,
+  createTier2Fetch,
   FIXTURE_FEATURES,
+  TIER2_ENRICHED_FILES,
+  TIER2_ENRICHED_INDEX,
   VIEW,
   VIEW_BOUNDS,
 } from "./test-fixtures";
@@ -87,6 +90,7 @@ const HAPPY_CALLS: { tool: string; input: Record<string, unknown> }[] = [
   { tool: "describe_surroundings", input: { from: "osm:node:2" } },
   { tool: "compare_areas", input: { a: "osm:node:2", b: "osm:node:1" } },
   { tool: "measure", input: { target: "drawing:1" } },
+  { tool: "get_place_details", input: { id: "osm:node:2" } },
   { tool: "get_share_link", input: {} },
 ];
 
@@ -132,7 +136,7 @@ describe("activity feed coverage", () => {
         readOnly: byName[entry.tool].annotations?.readOnlyHint === true,
       });
     }
-    expect(store.getActivity().filter((e) => e.readOnly)).toHaveLength(7);
+    expect(store.getActivity().filter((e) => e.readOnly)).toHaveLength(8);
   });
 
   it("writes one short line per call: no geometry, no URLs, no result dumps", async () => {
@@ -494,6 +498,28 @@ describe("summary copy", () => {
     expect(last(store)).toMatchObject({ refIds: ["drawing:1"], readOnly: true });
     expect(last(store).summary).toMatch(/^Measured drawing:1 — [\d,]+ m²$/);
     expect(out.area_m2).toBeGreaterThan(0);
+  });
+
+  it("get_place_details names the place and how much the map had on it", async () => {
+    // The row is for the human, so it says the place, not the id the agent
+    // typed — and it counts what the answer really carried rather than implying
+    // a full card. The zero case has to read as "nobody has tagged this place",
+    // not as a failed call: the tool answered, and the map is simply thin here.
+    const { fetchJson } = createTier2Fetch(TIER2_ENRICHED_FILES, TIER2_ENRICHED_INDEX);
+    const { store, byName } = setup({ tier2FetchJson: fetchJson });
+    await call(byName.find_features, { categories: ["hotel"] });
+
+    await call(byName.get_place_details, { id: "osm:node:120" });
+    expect(last(store)).toMatchObject({
+      tool: "get_place_details",
+      summary: "Looked up 台北W飯店 — 7 details",
+      refIds: ["osm:node:120"],
+      readOnly: true,
+      ok: true,
+    });
+
+    await call(byName.get_place_details, { id: "osm:node:121" });
+    expect(last(store).summary).toBe("Looked up 小客棧 — no details recorded");
   });
 
   it("truncates the human text it echoes instead of letting one row run away", async () => {

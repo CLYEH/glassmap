@@ -758,8 +758,22 @@ describe("what the agent is told about categories", () => {
   });
 
   it("registers no new tool: this is a wider contract, not a bigger surface", async () => {
-    const { byName } = tier2Ready();
-    expect(Object.keys(byName)).toHaveLength(12);
+    /*
+     * The tools that existed before tier-2 answer about POIs too, by taking a
+     * wider `categories` enum. What must never appear is a tool about *loading*:
+     * a load_category, a per-category tool, anything an agent has to call before
+     * it is allowed to ask its question. That would make the fetch the agent's
+     * bookkeeping instead of the map's.
+     *
+     * The claim is that shape, not a number — T-97 later added
+     * get_place_details, which is a different question about one place rather
+     * than a step on the way to asking one.
+     */
+    const names = Object.keys(tier2Ready().byName);
+    for (const category of TIER2_CATEGORIES) {
+      expect(names.some((n) => n.includes(category)), category).toBe(false);
+    }
+    expect(names.filter((n) => /load|fetch|categor/.test(n))).toEqual([]);
   });
 
   it("names the POI category in the activity feed a human reads", async () => {

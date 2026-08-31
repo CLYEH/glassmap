@@ -45,7 +45,44 @@ const CANONICAL_CATEGORIES = [
   "police",
 ].sort();
 
-const ALLOWED_PROPERTY_KEYS = new Set(["id", "name", "category", "nameEn", "cuisine", "brand", "opening_hours"]);
+/** Carried for every category (T-97: public/data/README.md, "Enrichment fields"). */
+const ALLOWED_PROPERTY_KEYS = new Set([
+  "id",
+  "name",
+  "category",
+  "nameEn",
+  "cuisine",
+  "brand",
+  "opening_hours",
+  "address",
+  "phone",
+  "website",
+  "wheelchair",
+]);
+
+/**
+ * Tags the generator extracts for one category each, even where OSM happens to
+ * put them on something else. The allow-list is per category rather than one
+ * flat set because the gating is the claim: `stars` on a restaurant, or
+ * `emergency` on a cafe, is a generator bug that a flat allow-list would wave
+ * through and the tool layer would then quote back to an agent as fact.
+ */
+const CATEGORY_ONLY_KEYS: Record<string, string[]> = {
+  hotel: ["stars"],
+  parking: ["fee", "capacity"],
+  pharmacy: ["dispensing"],
+  place_of_worship: ["religion", "denomination"],
+  hospital: ["emergency"],
+};
+
+/**
+ * The only values `wheelchair` may carry. The generator drops everything else
+ * (`designated` and other free text), and the tool layer deliberately does not
+ * re-check — it reports what the file says. So this is the one place the rule
+ * exists, and an OSM value that is not one of these three must never reach an
+ * answer where it would read as an accessibility verdict rather than a tag.
+ */
+const WHEELCHAIR_VALUES = new Set(["yes", "no", "limited"]);
 
 const ID_PATTERN = /^osm:(node|way|relation):\d+$/;
 
@@ -112,12 +149,27 @@ describe("public/data/tier2/*.geojson contract (T-60)", () => {
       });
 
       it("every property key is in the allow-list and every value is a non-empty string", () => {
+        const allowed = new Set([
+          ...ALLOWED_PROPERTY_KEYS,
+          ...(CATEGORY_ONLY_KEYS[entry.category] ?? []),
+        ]);
         for (const f of collection.features) {
           for (const [key, value] of Object.entries(f.properties)) {
-            expect(ALLOWED_PROPERTY_KEYS.has(key)).toBe(true);
+            expect(allowed.has(key), `${entry.category}.${key}`).toBe(true);
             expect(typeof value).toBe("string");
             expect((value as string).length).toBeGreaterThan(0);
           }
+        }
+      });
+
+      it("wheelchair, when present, is one of yes/no/limited", () => {
+        // The tool layer passes this value straight through to the agent, so
+        // this is the only guard between an unvetted OSM string and an answer
+        // about who can get through the door.
+        for (const f of collection.features) {
+          const wheelchair = f.properties.wheelchair;
+          if (wheelchair === undefined) continue;
+          expect(WHEELCHAIR_VALUES.has(wheelchair as string), String(wheelchair)).toBe(true);
         }
       });
 

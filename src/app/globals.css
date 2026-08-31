@@ -1724,18 +1724,27 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
 /* The tags a place carries: a label column narrow enough to read as a margin
    note, and a value column that wraps rather than clipping — the model has
    already folded anything long (DETAIL_CHARS), and the full value is on the
-   row's `title`. Grows with the fields T-97 adds; nothing here counts rows. */
+   row's `title`. Grows with the fields T-97 adds; nothing here counts rows,
+   and the label column sizes itself to the longest label rather than to a
+   number measured against today's three (Wheelchair alone is 68px). */
 .otm-details {
   margin-top: 7px;
   padding-top: 7px;
   border-top: 1px solid var(--hairline-2);
+  /* One grid for the whole list, not one per row: the column has to be as wide
+     as the *longest* label, or each row would size its own and the values would
+     come out ragged. The rows keep their own box (they carry the title, the
+     data-field and the testid) and borrow these tracks through `subgrid`;
+     where subgrid is missing, a row degrades to label-over-value, which is
+     still readable. */
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(48px, max-content) 1fr;
+  gap: 3px 8px;
 }
 .otm-detail {
   display: grid;
-  grid-template-columns: 48px 1fr;
-  gap: 8px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: baseline;
   font-size: 11px;
 }

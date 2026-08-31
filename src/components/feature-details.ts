@@ -35,10 +35,18 @@ export interface DetailRow {
 /**
  * The order, which is an editorial call rather than the data's: what the place
  * serves, whose sign is over the door, when you can go.
+ *
+ * `dedupe` is opt-in and, today, `brand` only. A brand is the one tag that
+ * *is* a name — it repeats the headline for 6,844 of the 9,631 branded POIs in
+ * the extract — and that is a property of what the tag means, not of how it
+ * happens to be spelled. Applied to every field it would be a silent
+ * data-dependent bug waiting for T-97: a `wheelchair: "yes"` dropped from a
+ * cafe called "Yes" removes a fact somebody plans their afternoon around. A
+ * new field opts in only if it is another name for the place.
  */
-const DETAIL_FIELDS: readonly { field: DetailField; label: string }[] = [
+const DETAIL_FIELDS: readonly { field: DetailField; label: string; dedupe?: true }[] = [
   { field: "cuisine", label: "Cuisine" },
-  { field: "brand", label: "Brand" },
+  { field: "brand", label: "Brand", dedupe: true },
   // No opening_hours parser, deliberately, and this is the decision rather than
   // an omission: the OSM syntax has months, weeks, holidays, sunset offsets and
   // exceptions, and a parser that gets one of them wrong tells a human "open"
@@ -79,10 +87,12 @@ export function sameText(a: string, b: string): boolean {
  * missing tag is the common case and a blank-label layout would be the shape
  * most cards take.
  *
- * `names` are the names the surface has already printed. A value equal to one
- * of them is dropped, because the human is already looking at that string — a
- * "Brand 7-ELEVEN" line under the headline "7-ELEVEN" adds a row and no
- * information. Nothing is hidden by this: the identical string is on the card.
+ * `names` are the names the surface has already printed, and they are compared
+ * against the `dedupe` fields only — `brand`. A brand equal to the headline is
+ * dropped because the human is already looking at that string: "Brand
+ * 7-ELEVEN" under the headline "7-ELEVEN" adds a row and no information, and
+ * nothing is hidden by it. No other tag is a name, so no other tag is silenced
+ * by matching one.
  *
  * `Partial<MapFeatureProperties>` rather than the tier-2 type itself, so the six
  * bundled datasets can be passed through the same call and simply produce
@@ -93,10 +103,10 @@ export function featureDetails(
   names: readonly string[] = [],
 ): DetailRow[] {
   const rows: DetailRow[] = [];
-  for (const { field, label } of DETAIL_FIELDS) {
+  for (const { field, label, dedupe } of DETAIL_FIELDS) {
     const value = properties[field]?.trim();
     if (!value) continue;
-    if (names.some((name) => name && sameText(name, value))) continue;
+    if (dedupe && names.some((name) => name && sameText(name, value))) continue;
     rows.push({ field, label, text: truncate(value, DETAIL_CHARS), full: value });
   }
   return rows;

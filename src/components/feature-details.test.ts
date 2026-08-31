@@ -47,12 +47,31 @@ describe("featureDetails", () => {
     expect(featureDetails({ brand: "Starbucks" }, ["星巴克"]).map((d) => d.field)).toEqual(["brand"]);
   });
 
+  it("silences no field but brand, whatever the place is called", () => {
+    // The dedupe is about what `brand` *means* — another name for the place —
+    // not about string equality in general. A tag that happens to read like
+    // the name is still a fact about the place: a cafe called "Coffee Shop"
+    // still serves coffee, and (T-97) a place called "Yes" is still the one
+    // with the ramp. Dropping those would be a data-dependent silence nobody
+    // could see on the page.
+    expect(featureDetails({ cuisine: "coffee_shop" }, ["coffee_shop"]).map((d) => d.field)).toEqual([
+      "cuisine",
+    ]);
+    expect(
+      featureDetails({ opening_hours: "24/7" }, ["24/7"]).map((d) => d.field),
+    ).toEqual(["opening_hours"]);
+  });
+
   it("folds a long value for the card and keeps the whole of it for the hover", () => {
     // Dense OSM hours run to 88 characters in the shipped extract. The card is
     // 238px wide; the row still has to say *something* readable, and the rest
     // has to remain reachable rather than be destroyed.
     const hours = "Mo-Th 11:00-21:00; Fr 11:00-22:00; Sa 14:00-17:45,19:00-22:00";
     const [row] = featureDetails({ opening_hours: hours });
+    // Literal, not derived from DETAIL_CHARS: the assertions below hold for a
+    // clip of 1 character too, and a card that shows "…" is not a card that
+    // told anyone when the place opens.
+    expect(row.text).toContain("Mo-Th 11:00-21:00; Fr 11:00");
     expect(row.text).toHaveLength(DETAIL_CHARS);
     expect(row.text.endsWith("…")).toBe(true);
     expect(hours.startsWith(row.text.slice(0, -1))).toBe(true);

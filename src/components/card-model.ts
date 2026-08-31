@@ -106,6 +106,42 @@ export function cardProvenance(
 /** A place with no colour of its own: a POI, which the ramp never paints. */
 const POI_SWATCH = "#8fa1b3";
 
+/** Which side of the tap the card hangs on. */
+export type CardPlace = "above" | "below";
+
+/**
+ * The gap the card keeps from the tap point, on either side: the 16px in
+ * `.otm-card`'s own transform (globals.css). Duplicated here because the
+ * decision below is about where the card's top edge lands, and that is
+ * `tap − gap − height`.
+ */
+export const CARD_GAP_PX = 16;
+
+/**
+ * How close to the top of the map the card may come. Not zero: flush against
+ * the edge it slides under the brand bar floating over the canvas.
+ */
+export const CARD_TOP_MARGIN_PX = 8;
+
+/**
+ * Which side of the tap the card hangs on, decided from the card's *measured*
+ * height rather than a constant.
+ *
+ * It used to be a constant — 190px, "roughly the card's own height plus its
+ * offset" — and the details section falsified it the day it landed: a bilingual
+ * card with three tag rows measures 235px, so every tap between 190 and 251
+ * chose "above" and put the name (and the English name under it) off the top of
+ * the map. The number was not merely wrong, it was the wrong *kind* of thing:
+ * any field T-97 adds re-stales it, silently, in the one place a human cannot
+ * see the failure — above the viewport.
+ *
+ * So the caller measures what it actually rendered and asks this. Pure, so the
+ * boundary is a test rather than a screenshot.
+ */
+export function cardPlacement(tapY: number, cardHeight: number): CardPlace {
+  return tapY - CARD_GAP_PX - cardHeight < CARD_TOP_MARGIN_PX ? "below" : "above";
+}
+
 /** How much of a note the card's headline shows before it trails off. */
 export const CARD_NOTE_CHARS = 72;
 

@@ -411,6 +411,53 @@ describe("a query with no category says what it did not search", () => {
     expect(TIER2_INDEX.categories.find((c) => c.category === "cafe")?.count).toBe(3);
   });
 
+  it("counts what a query matched, never the rest of the view", async () => {
+    // The one ruling a view-scoped keyword search forces: category_counts
+    // describes the same set as features and total. Two cafes are on screen and
+    // one of them is called 大安, so a tally of the unfiltered view would put
+    // `cafe: 2` beside `total: 5` and a five-item list containing one cafe — one
+    // answer making two claims, with nothing in it to say which was about the
+    // question. The wider tally is one call away; a mistaken "2 cafes here" is
+    // not, because the agent has no reason to doubt it.
+    const { byName } = tier2Ready();
+    await call(byName.find_features, { categories: ["cafe"] });
+    const out = await call(byName.list_features_in_view, { query: "大安" });
+
+    // The loaded cafe named 大安 sorts in among the bundled features by
+    // distance, exactly as it would in find_features: one list, one order.
+    expect(idsOf(out.features)).toEqual([
+      "osm:node:3",
+      "osm:way:10",
+      "osm:node:101",
+      "osm:node:2",
+      "district:daan",
+    ]);
+    expect(out.total).toBe(5);
+    expect(out.category_counts).toEqual({ mrt_station: 2, park: 1, cafe: 1, district: 1 });
+    // The categories that matched nothing are gone rather than listed as zero:
+    // a supermarket and a listing are on screen, and neither is an answer to
+    // this question.
+    expect(out.category_counts).not.toHaveProperty("supermarket");
+    expect(out.category_counts).not.toHaveProperty("listing");
+  });
+
+  it("still admits what it did not search when the query narrowed the screen", async () => {
+    // The disclosure is about the categories this page has never fetched, so a
+    // name filter cannot change what it means: "no bakery matching 大安 in
+    // view" would otherwise be indistinguishable from "no bakery was searched".
+    const { byName } = tier2Ready();
+    const out = await call(byName.list_features_in_view, { query: "大安" });
+    expect(out.unsearched_categories).toEqual(CITYWIDE);
+    expect(out.searched_categories).toEqual([
+      "mrt_station",
+      "park",
+      "school",
+      "supermarket",
+      "listing",
+      "district",
+    ]);
+  });
+
   it("counts loaded POIs in a bare describe_surroundings and compare_areas", async () => {
     const { byName } = tier2Ready();
     await call(byName.find_features, { categories: ["cafe"] });

@@ -176,9 +176,11 @@ function categoryLabel(value: unknown): string | undefined {
 }
 
 /**
- * What find_features and select_features were asked for, as a noun phrase:
- * "Parks within drawing:1", "Supermarkets near Daan Station", "“sushi”".
- * `within` beats `near` because it names a shape the human can see on the map.
+ * What a search was asked for, as a noun phrase: "Parks within drawing:1",
+ * "Supermarkets near Daan Station", "“sushi”". `within` beats `near` because it
+ * names a shape the human can see on the map. Shared by the three tools that
+ * take the same filter — find_features, select_features and (for its two
+ * fields) list_features_in_view — so one filter is one phrase in the feed.
  */
 function filterSubject(input: Rec): { subject: string; refIds: string[] } {
   const categories = categoryLabel(input.categories);
@@ -229,9 +231,14 @@ const SUMMARISERS: Record<string, Summariser> = {
   },
 
   list_features_in_view: (input, result) => ({
-    summary: `${categoryLabel(input.categories) ?? "Features"} in view — found ${group(
-      fin(result.total) ?? 0,
-    )}`,
+    // The same noun phrase find_features' row is built from, so "Cafes matching
+    // “latte”" reads the same whether the agent searched the screen or the
+    // city. Only the two fields this tool has are offered: a `near` or a
+    // `within` in the input would be a filter it never applied, and a row
+    // claiming one would send a human looking for a circle nobody drew.
+    summary: `${
+      filterSubject({ categories: input.categories, query: input.query }).subject
+    } in view — found ${group(fin(result.total) ?? 0)}`,
   }),
 
   find_features: (input, result) => {

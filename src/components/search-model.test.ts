@@ -97,28 +97,41 @@ describe("searchLoadedFeatures", () => {
     }
   });
 
-  it("puts what you can see first, however much closer the rest is", () => {
-    // The ranking rule that makes the box feel like it is about *this* map:
-    // a match on screen outranks a nearer one that has scrolled off. `far` is
-    // inside the view but at its edge; `near` is 3 km east of the centre.
-    const inViewEdge = place("far", { name: "Match A" }, [121.5225, 25.0525]);
-    const outOfView = place("near", { name: "Match B" }, east(3));
-    const answer = search("match", { tier2Features: [outOfView, inViewEdge] });
-    expect(answer.hits.map((h) => h.id)).toEqual(["far", "near"]);
+  it("puts what you can see first, even when the thing off screen is nearer", () => {
+    // The ranking rule that makes the box feel like it is about *this* map,
+    // and the fixture is chosen so that ONLY that rule can produce the
+    // asserted order: `on-screen` sits in the view's north-east corner at
+    // ~771 m, `off-screen` is ~614 m away but just past the eastern edge
+    // (121.523). Sorted by distance alone the two come back the other way
+    // round, so deleting the `inView` sort key turns this red.
+    const onScreen = place("on-screen", { name: "Match A" }, [121.5228, 25.0528]);
+    const offScreen = place("off-screen", { name: "Match B" }, [121.5236, 25.0478]);
+    const answer = search("match", { tier2Features: [offScreen, onScreen] });
+    expect(answer.hits.map((h) => h.id)).toEqual(["on-screen", "off-screen"]);
     expect(answer.hits.map((h) => h.inView)).toEqual([true, false]);
+    // Stated rather than assumed: the first row really is the further one.
+    expect(answer.hits[0].distanceM).toBeGreaterThan(answer.hits[1].distanceM);
   });
 
-  it("orders each group by distance from the view centre", () => {
+  it("orders each group by distance, without letting a near miss jump the group", () => {
+    // Both keys at once. Within a group distance decides (in-1 before in-2,
+    // near-out before far-out); across groups it does not — `near-out` at
+    // ~614 m is nearer than `in-2` at ~771 m and still sorts below it,
+    // because it is off screen.
     const answer = search("match", {
       tier2Features: [
         place("far-out", { name: "Match" }, east(9)),
-        place("in-2", { name: "Match" }, [121.5205, 25.048]),
-        place("near-out", { name: "Match" }, east(3)),
+        place("in-2", { name: "Match" }, [121.5228, 25.0528]),
+        place("near-out", { name: "Match" }, [121.5236, 25.0478]),
         place("in-1", { name: "Match" }, [121.5185, 25.048]),
       ],
     });
     expect(answer.hits.map((h) => h.id)).toEqual(["in-1", "in-2", "near-out", "far-out"]);
+    expect(answer.hits.map((h) => h.inView)).toEqual([true, true, false, false]);
     expect(answer.hits[0].distanceM).toBeLessThan(answer.hits[1].distanceM);
+    expect(answer.hits[2].distanceM).toBeLessThan(answer.hits[3].distanceM);
+    // The crossing pair, without which the group key would be free to vanish.
+    expect(answer.hits[2].distanceM).toBeLessThan(answer.hits[1].distanceM);
   });
 
   it("ranks by distance alone when the map has not reported a viewport yet", () => {

@@ -45,6 +45,7 @@ export function SearchBox() {
   const tier2Loaded = useMapStore((s) => s.tier2Loaded);
   const bounds = useMapStore((s) => s.bounds);
   const view = useMapStore((s) => s.view);
+  const selection = useMapStore((s) => s.selection);
   const setSelection = useMapStore((s) => s.setSelection);
   const setView = useMapStore((s) => s.setView);
 
@@ -76,17 +77,28 @@ export function SearchBox() {
 
   const choose = useCallback(
     (hit: SearchHit) => {
-      // A person's own act, recorded as one: `"user"` is what keeps the bead
-      // rose, keeps the id in the `su` key of any link this page writes, and
-      // lets the card say "you tapped it" rather than hedging (T-80).
-      setSelection([hit.id], "user");
+      // Appended, never replacing — a search pick is the same human gesture as
+      // a tap on the map, and human gestures accumulate: clearing the map is
+      // its own act (the card's Remove, `select_features({replace: true})`),
+      // not a side effect of finding one more place. A replace would have
+      // thrown away the three places a person had just tapped, and — because
+      // an agent's selection is sometimes the only work a link carries — it
+      // would have erased that evidence from every link written afterwards.
+      // Same write and same dedupe as `tapFeature` in MapCanvas.
+      //
+      // `"user"` is what keeps the bead rose, keeps the id in the `su` key of
+      // any link this page writes, and lets the card say "you tapped it"
+      // rather than hedging (T-80). An id that was already selected keeps
+      // whatever the store already recorded about it — this write did not
+      // select it (`setSelection`'s single-source rule).
+      if (!selection.includes(hit.id)) setSelection([...selection, hit.id], "user");
       // The camera eases because the map mirrors the store (MapCanvas's
       // `applyView` flies to whatever `view` becomes). Never zooms out: a
       // person who framed a neighbourhood keeps their frame.
       setView({ center: hit.center, zoom: Math.max(view.zoom, SEARCH_ZOOM) });
       setOpen(false);
     },
-    [setSelection, setView, view.zoom],
+    [selection, setSelection, setView, view.zoom],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -128,10 +140,10 @@ export function SearchBox() {
           aria-label="Search places on this map"
           role="combobox"
           aria-expanded={showing}
-          // Only when there is a list to control: with no hits the popup is
-          // the honesty note, and pointing at an id nothing renders would be
-          // a broken reference rather than a hint.
-          aria-controls={showing && hits.length > 0 ? "search-results" : undefined}
+          // The popup itself, not the list inside it: with no hits the popup
+          // is the honesty note, and `aria-expanded="true"` pointing at an id
+          // nothing renders would be a dangling reference.
+          aria-controls={showing ? "search-drop" : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeIndex >= 0 && showing ? `search-row-${activeIndex}` : undefined}
           autoComplete="off"
@@ -149,11 +161,10 @@ export function SearchBox() {
       </div>
 
       {showing ? (
-        <div className="search-drop lg deep">
+        <div className="search-drop lg deep" id="search-drop">
           {hits.length > 0 ? (
             <ul
               className="search-list"
-              id="search-results"
               data-testid="search-results"
               data-count={hits.length}
               data-total={answer.total}

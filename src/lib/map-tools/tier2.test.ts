@@ -759,7 +759,13 @@ describe("what the agent is told about categories", () => {
 
   it("registers no new tool: this is a wider contract, not a bigger surface", async () => {
     const { byName } = tier2Ready();
-    expect(Object.keys(byName)).toHaveLength(12);
+    // Compared against the tools of a page that has no tier-2 data at all,
+    // rather than against a number. The claim is that loading points of
+    // interest widens the tools that already exist instead of adding one of
+    // its own; a hard-coded count only ever trips up whichever unrelated tool
+    // ships next, and says nothing about tier-2 when it does.
+    const withoutTier2 = createMapTools(createMemoryToolStore()).map((t) => t.name);
+    expect(Object.keys(byName).sort()).toEqual([...withoutTier2].sort());
   });
 
   it("names the POI category in the activity feed a human reads", async () => {

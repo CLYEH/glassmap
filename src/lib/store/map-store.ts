@@ -16,6 +16,11 @@ import {
   type Tier2RestoreFailure,
   type Tier2RestoreResult,
 } from "./tier2";
+import {
+  createSearchIndexLoader,
+  type SearchIndexEntry,
+  type SearchIndexStatus,
+} from "./search-index";
 
 /** [lng, lat] */
 export type LngLat = [number, number];
@@ -95,6 +100,22 @@ export interface MapToolStore {
    * never throws.
    */
   restoreCategories(categories: readonly Tier2Category[]): Promise<Tier2RestoreResult>;
+  /**
+   * The citywide name index, or null when this page does not have it — not
+   * asked for yet, still arriving, unreadable, or not shipped at all. Four
+   * states, one null, on purpose: every caller degrades the same way (say
+   * less), so telling them apart would only tempt one of them to say something
+   * different about a page that knows nothing either way. Synchronous, like
+   * `getTier2Manifest`, so nothing that reads state can start a request.
+   */
+  getSearchIndex(): readonly SearchIndexEntry[] | null;
+  /**
+   * Fetches `/data/tier2/search-index.json` once per page. Coalesces, never
+   * throws, and answers nothing: what happened is visible only as whether
+   * `getSearchIndex()` returns rows afterwards. See `search-index.ts` for why
+   * a failure is retryable and a 404 is not.
+   */
+  loadSearchIndex(): Promise<void>;
   getSelection(): readonly string[];
   /**
    * Replace the selection, and record who put each id there — in one write,
@@ -372,6 +393,26 @@ interface MapStore {
   /** See `MapToolStore.restoreCategories`; this is the same call, for the page. */
   restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
   /**
+   * See `MapToolStore.loadCategory`; the same call, for the page — one category,
+   * loaded because a person asked for it here and now.
+   *
+   * **Not the loader above, and the difference is the whole reason this exists.**
+   * `restoreTier2Categories` is the *link* path: on a failure it writes
+   * `tier2RestoreFailures`, which is a claim that a shared map cannot be
+   * reproduced here. Everything downstream reads it as exactly that — the page
+   * says "couldn't load cafe for this link" (`ShareRestoreNotice`),
+   * `get_map_state` reports it under `tier2.failed`, and `shareCategories`
+   * keeps declaring a momentarily-failed category in the next link this page
+   * writes, so a recipient downloads its file. A search pick has no link behind
+   * it: routing one through the restore path made a linkless page say a link
+   * had broken. This loader tells its one caller what happened and records
+   * nothing about links — a failure is the picker's own line to say (see
+   * `SearchBox`'s `chooseIndex`). Success is identical on both paths: the
+   * features land in `tier2Features` and the category in `tier2Loaded`, where
+   * the `poi-loaded` strip discloses it.
+   */
+  loadTier2Category: (category: Tier2Category) => Promise<Tier2LoadResult>;
+  /**
    * See `MapToolStore.loadTier2Manifest`; the same call, for the page. The
    * Places tray needs the per-category counts to offer them, and it must ask
    * the same registry the tools ask, or the index would be fetched twice and
@@ -379,6 +420,21 @@ interface MapStore {
    */
   loadTier2Manifest: () => Promise<Tier2ManifestResult>;
   tier2Manifest: Tier2Manifest | null;
+  /**
+   * The citywide name index once it has arrived. Kept out of `features` and
+   * `tier2Features` because it is not features: nothing here is rendered or
+   * selectable (see `search-index.ts`).
+   */
+  searchIndex: readonly SearchIndexEntry[] | null;
+  /**
+   * Which of the five things this page knows about the index. Store state
+   * rather than a loader detail because a surface that offers citywide search
+   * has to be able to say "still loading" and "this build has none" in
+   * different words, and it renders long after the fetch.
+   */
+  searchIndexStatus: SearchIndexStatus;
+  /** See `MapToolStore.loadSearchIndex`; the same call, for the page. */
+  loadSearchIndex: () => Promise<void>;
   selection: string[];
   /** See `MapToolStore.getSelectionSources`: as recorded, pruned to `selection`. */
   selectionSources: Record<string, SelectionSource>;
@@ -459,8 +515,12 @@ export const useMapStore = create<MapStore>((set, get) => ({
   tier2RestoreFailures: [],
   // The loader is created below (it needs this store); read at call time.
   restoreTier2Categories: (categories) => zustandTier2.restoreCategories(categories),
+  loadTier2Category: (category) => zustandTier2.loadCategory(category),
   loadTier2Manifest: () => zustandTier2.loadManifest(),
   tier2Manifest: null,
+  searchIndex: null,
+  searchIndexStatus: "idle",
+  loadSearchIndex: () => zustandSearchIndex.load(),
   selection: [],
   selectionSources: {},
   setSelection: (selection, attribution) =>
@@ -540,6 +600,18 @@ const zustandTier2 = createTier2Registry({
   setRestoreFailures: (tier2RestoreFailures) => useMapStore.setState({ tier2RestoreFailures }),
 });
 
+/**
+ * The one search-index loader the app uses, module-level for the same reason
+ * the tier-2 registry above is: its in-flight promise is what keeps two
+ * concurrent searches from downloading the same 3.5 MB file twice.
+ */
+const zustandSearchIndex = createSearchIndexLoader({
+  fetchJson: (url) => httpFetchJson(url),
+  getStatus: () => useMapStore.getState().searchIndexStatus,
+  set: (searchIndexStatus, searchIndex) =>
+    useMapStore.setState({ searchIndexStatus, searchIndex }),
+});
+
 /** Adapter over the Zustand store for the tool layer. */
 export const zustandToolStore: MapToolStore = {
   getView: () => useMapStore.getState().view,
@@ -556,6 +628,8 @@ export const zustandToolStore: MapToolStore = {
   getPendingCategories: () => useMapStore.getState().tier2Pending,
   getRestoreFailures: () => useMapStore.getState().tier2RestoreFailures,
   restoreCategories: (categories) => zustandTier2.restoreCategories(categories),
+  getSearchIndex: () => useMapStore.getState().searchIndex,
+  loadSearchIndex: () => zustandSearchIndex.load(),
   getSelection: () => useMapStore.getState().selection,
   setSelection: (ids, attribution) => useMapStore.getState().setSelection(ids, attribution),
   getSelectionSources: () => useMapStore.getState().selectionSources,
@@ -576,20 +650,27 @@ export interface MemoryToolStoreInit {
   drawings?: Drawing[];
   annotations?: Annotation[];
   /**
-   * Serves `/data/tier2/index.json` and the category files. Defaults to a 404
-   * for everything, which is a page with no tier-2 data at all — the state the
-   * whole suite runs in unless a test opts in.
+   * Serves `/data/tier2/index.json`, the category files and
+   * `/data/tier2/search-index.json` — everything under `/data/tier2/`, exactly
+   * as one static host does, so a test cannot accidentally give the page a
+   * deployment that has half of it. Defaults to a 404 for everything, which is
+   * a page with no tier-2 data at all — the state the whole suite runs in
+   * unless a test opts in.
    */
   tier2FetchJson?: FetchJson;
 }
 
 /**
- * The in-memory adapter plus the one reader tests need. Activity is
- * write-only on `MapToolStore` because no tool ever reads it back.
+ * The in-memory adapter plus the readers tests need. Both are write-only or
+ * absent on `MapToolStore` because no tool reads them back: activity is for
+ * the page, and the index's status only ever changes what a *surface* says
+ * (the tools degrade to silence either way, so they never ask).
  */
 export interface MemoryToolStore extends MapToolStore {
   /** Oldest first, capped exactly like the Zustand slice. */
   getActivity(): readonly ActivityEntry[];
+  /** Mirrors the Zustand store's `searchIndexStatus`; see `search-index.ts`. */
+  getSearchIndexStatus(): SearchIndexStatus;
 }
 
 /** In-memory adapter for unit tests. */
@@ -624,6 +705,16 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
       tier2RestoreFailures = failures;
     },
   });
+  let searchIndex: readonly SearchIndexEntry[] | null = null;
+  let searchIndexStatus: SearchIndexStatus = "idle";
+  const searchIndexLoader = createSearchIndexLoader({
+    fetchJson: init.tier2FetchJson ?? notFoundFetchJson,
+    getStatus: () => searchIndexStatus,
+    set: (status, entries) => {
+      searchIndexStatus = status;
+      searchIndex = entries;
+    },
+  });
   let selection = [...(init.selection ?? [])];
   // An initial selection is attributed to nobody: nothing told this store who
   // made it. A test that wants a source writes it through `setSelection`.
@@ -648,6 +739,9 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     getPendingCategories: () => tier2Pending,
     getRestoreFailures: () => tier2RestoreFailures,
     restoreCategories: (categories) => tier2.restoreCategories(categories),
+    getSearchIndex: () => searchIndex,
+    loadSearchIndex: () => searchIndexLoader.load(),
+    getSearchIndexStatus: () => searchIndexStatus,
     getSelection: () => selection,
     setSelection: (ids, attribution) => {
       selectionSources = nextSelectionSources(selection, selectionSources, ids, attribution);

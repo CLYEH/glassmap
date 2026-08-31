@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
+import type { SearchIndexStatus } from "@/lib/store/search-index";
 import { TIER2_CATEGORIES, type MapCategory, type MapFeature } from "@/lib/store/tier2";
-import { SEARCH_LIMIT, formatDistance, searchLoadedFeatures } from "./search-model";
+import type { IndexHit } from "./search-index-model";
+import {
+  SEARCH_LIMIT,
+  composeSearchRows,
+  formatDistance,
+  searchEmptyNote,
+  searchLoadedFeatures,
+  type SearchHit,
+} from "./search-model";
+import type { CategoryRow } from "./search-vocabulary";
 
 /** Taipei Main Station, the default view centre. */
 const ORIGIN: LngLat = [121.5175, 25.0478];
@@ -221,6 +231,99 @@ describe("searchLoadedFeatures", () => {
       properties: { id: "broken", name: "Match", category: "cafe", source: "osm" },
     } as unknown as MapFeature;
     expect(search("match", { tier2Features: [broken] }).total).toBe(0);
+  });
+});
+
+/**
+ * The dropdown holds three kinds of answer, and the order they are read in is
+ * a promise about what each one costs. These tests are that promise.
+ */
+describe("composeSearchRows", () => {
+  const loaded = (id: string, distanceM: number): SearchHit => ({
+    id,
+    name: id,
+    category: "cafe",
+    what: "Cafe",
+    swatch: "#888",
+    center: ORIGIN,
+    distanceM,
+    inView: false,
+  });
+  const citywide = (id: string, distanceM: number): IndexHit => ({
+    id,
+    name: id,
+    category: "cafe",
+    what: "Cafe",
+    center: ORIGIN,
+    distanceM,
+    inView: true,
+  });
+  const kind: CategoryRow = { category: "cafe", label: "Cafés", zh: "咖啡廳", count: 2297 };
+
+  it("puts every loaded place above every citywide one, however far away", () => {
+    // The precedence is absolute, not a score. The loaded row is 4 km out and
+    // off screen; the index row is 200 m away and on screen — and the index
+    // row still sorts below it, because accepting it downloads a category file
+    // before the map can show anything. Ranking the two lists together by
+    // distance would make the *nearer* answer the one that makes you wait.
+    const rows = composeSearchRows([loaded("far", 4000)], [citywide("near", 200)], []);
+    expect(rows.map((r) => r.kind)).toEqual(["loaded", "index"]);
+  });
+
+  it("puts the kinds last, because an offer is broader than any result", () => {
+    const rows = composeSearchRows([loaded("a", 10)], [citywide("b", 20)], [kind]);
+    expect(rows.map((r) => r.kind)).toEqual(["loaded", "index", "category"]);
+  });
+
+  it("keys every row uniquely, so one place cannot collide with its own offer", () => {
+    // The index never offers a place whose category is loaded, so this cannot
+    // happen today — the keys do not depend on that staying true.
+    const rows = composeSearchRows([loaded("same", 10)], [citywide("same", 20)], [kind]);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(3);
+  });
+
+  it("is empty only when all three lists are", () => {
+    expect(composeSearchRows([], [], [])).toEqual([]);
+    expect(composeSearchRows([], [], [kind])).toHaveLength(1);
+  });
+});
+
+/**
+ * The empty state is the box's one chance to be honest about its own reach:
+ * "nothing matches" and "the file was never fetched" must never look the same.
+ */
+describe("searchEmptyNote", () => {
+  const note = (status: SearchIndexStatus, unfetched = 18) => searchEmptyNote(status, unfetched);
+
+  it("claims the whole city only once the index is actually in hand", () => {
+    // With 31,057 rows across all 18 categories read, a miss really is a miss
+    // — this is the only state in which the box may say so.
+    expect(note("ready")).toBe("Nothing in Taipei matches that.");
+  });
+
+  it("says it is still looking rather than that it found nothing", () => {
+    // The window between the first keystroke and a 3.5 MB file arriving is
+    // where a premature "no results" would be a lie the person acts on.
+    expect(note("loading")).toContain("Still looking");
+  });
+
+  it("admits a failed index, and points at the retry it actually has", () => {
+    // `loadSearchIndex` retries a failure, and the only retry signal this
+    // surface has is the next keystroke — so the sentence says so.
+    expect(note("failed")).toContain("citywide index did not arrive");
+    expect(note("failed")).toContain("Keep typing");
+  });
+
+  it("falls back to the tray pointer when there is no index to speak for", () => {
+    // `idle` (nobody asked yet) and `absent` (this build ships none) are both
+    // "the box can only speak for what it has" — the pre-T-100 sentence, which
+    // is still the honest one.
+    for (const status of ["idle", "absent"] as const) {
+      expect(note(status)).toBe(
+        "Nothing loaded matches that — 18 more kinds of place load from the Places tray.",
+      );
+      expect(searchEmptyNote(status, 0)).toBe("Nothing on this map matches that.");
+    }
   });
 });
 

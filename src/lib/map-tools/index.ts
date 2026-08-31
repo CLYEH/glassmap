@@ -13,6 +13,8 @@ import {
 import {
   planCategories,
   SELECT_MATCH_LIMIT,
+  unloadedMatches,
+  UNLOADED_MATCH_LIMIT,
   unsearchedForLookup,
   type Tier2Disclosure,
 } from "./tier2-query";
@@ -687,7 +689,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories.",
+      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories. " +
+      `With query, the answer also carries unloaded_matches when the name exists in point-of-interest categories this session has not fetched: {category, count} for each, biggest first, at most ${UNLOADED_MATCH_LIMIT} of them (unloaded_matches_omitted counts any further ones). This is how a search that returned nothing can still tell you where the matches are - the count is city-wide, matched on the local and English name exactly as this tool matches them, so call find_features again with that category in categories to load it and get the features. Nothing is fetched on your behalf: naming the category is still your call.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -708,6 +711,9 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const inp = input ?? {};
       const resolved = await resolveQueryInput(store, inp);
       if ("error" in resolved) return resolved;
+      // Consulted after the categories this call named have loaded, so a
+      // category the caller asked for can never come back as one it is missing.
+      const unloaded = await unloadedMatches(store, resolved.query);
       return {
         ...listOutput(queryFeatures(store.getFeatures(), resolved), resolved.origin, resolved.limit),
         // What the search was measured from, echoed even when nothing matched:
@@ -719,6 +725,10 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // would claim a bound that was never applied.
         ...(resolved.radius_m !== undefined ? { radius_m: resolved.radius_m } : {}),
         ...resolved.disclosure,
+        // What the same name would find in the categories this session has not
+        // loaded. Last, because it is about the calls that could follow rather
+        // than about this one.
+        ...unloaded,
       };
     },
   };

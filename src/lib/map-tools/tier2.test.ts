@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { createMapTools } from "./index";
 import { createMemoryToolStore, type MemoryToolStoreInit } from "@/lib/store/map-store";
 import { TIER2_CATEGORIES, TIER2_INDEX_URL } from "@/lib/store/tier2";
+import { SEARCH_INDEX_URL } from "@/lib/store/search-index";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { FeatureOutput } from "./output";
 import type { MapStateOutput } from "./state";
@@ -81,7 +82,14 @@ function noTier2(over: MemoryToolStoreInit = {}) {
   return { store, byName: Object.fromEntries(tools.map((t) => [t.name, t])) };
 }
 
-const categoryFiles = (requests: string[]) => requests.filter((u) => u !== TIER2_INDEX_URL);
+/**
+ * Everything a search fetched that was a category's *features*. The two small
+ * lookup files are not: the manifest says what exists, and the citywide search
+ * index (T-100) says where a name lives — neither puts a feature in memory, so
+ * neither is what "the search loaded a category" means.
+ */
+const categoryFiles = (requests: string[]) =>
+  requests.filter((u) => u !== TIER2_INDEX_URL && u !== SEARCH_INDEX_URL);
 
 describe("a page that never mentions a POI category", () => {
   /**
@@ -153,6 +161,9 @@ describe("a page that never mentions a POI category", () => {
     await call(byName.find_features, { query: "park" });
     expect(categoryFiles(requests)).toEqual([]);
     expect(requests).toContain(TIER2_INDEX_URL);
+    // And, because it was a named search, the citywide index that says where
+    // that name lives — also small, also not a single feature (T-100).
+    expect(requests).toContain(SEARCH_INDEX_URL);
   });
 });
 
@@ -655,18 +666,20 @@ describe("a category that will not load", () => {
     expect(Object.keys(out)).toEqual(["total", "returned", "features", "origin"]);
   });
 
-  it("asks for a missing index once, however long the conversation is", async () => {
-    // Every bare query calls for the index to know what it skipped, and on a
-    // page with no tier-2 files it will never be there: five questions were
-    // five 404s. "This deployment has no POI data" is an answer, and answers
-    // are remembered.
+  it("asks for a missing lookup file once, however long the conversation is", async () => {
+    // Every bare query calls for the index to know what it skipped, and a
+    // named one calls for the citywide search index to know where the name
+    // lives (T-100). On a page with no tier-2 files neither will ever be there:
+    // five questions were ten 404s. "This deployment has no POI data" is an
+    // answer, and answers are remembered — once per file, not once per
+    // question.
     const { byName, requests } = tier2Ready({}, TIER2_FILES, null);
 
     for (let i = 0; i < 5; i++) {
       expect((await call(byName.find_features, { query: "大安" })).error, `query ${i}`).toBeUndefined();
     }
 
-    expect(requests).toEqual([TIER2_INDEX_URL]);
+    expect(requests).toEqual([TIER2_INDEX_URL, SEARCH_INDEX_URL]);
   });
 });
 

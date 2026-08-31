@@ -452,7 +452,18 @@ test.describe("skip and pointer safety (T-85)", () => {
     // from under the cursor, swallowing the click entirely (choreography.ts's
     // "no-jump contract" comment; reproduced here on purpose, once by
     // accident in redesign-share-provenance.spec.ts).
-    await page.evaluate(() => {
+    // The dispatch AND the "still mid-story" read happen inside the SAME
+    // `evaluate` call, for the same reason `stateAfterWaking` above reads
+    // `performance.now()` and `dataset.awaken` together: a separate
+    // `page.evaluate` after the click would be a second Node<->browser round
+    // trip, and on a busy machine (many Playwright workers, many Chromium
+    // processes under a full-suite run) that trip alone was measured to
+    // sometimes outlast the ~1.2s margin left before the story lands on its
+    // own, reading "awake" and failing a test that had nothing wrong with it
+    // (the suite's own lesson -- timing checks anchor to the browser's clock,
+    // never to a Node-side poll across IPC; the identical fix already applied
+    // three times in fx.spec.ts).
+    const awakenRightAfterClick = await page.evaluate(() => {
       const el = document.querySelector<HTMLElement>('[data-testid="note-toggle"]');
       if (!el) throw new Error("note-toggle not found mid-story");
       const rect = el.getBoundingClientRect();
@@ -466,11 +477,12 @@ test.describe("skip and pointer safety (T-85)", () => {
       for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
         el.dispatchEvent(new MouseEvent(type, opts));
       }
+      return document.body.dataset.awaken;
     });
 
     // Still mid-story: only a keydown may skip it, so the click must not
     // have jumped the page to its end state as a side effect of this press.
-    expect(await page.evaluate(() => document.body.dataset.awaken)).toBe("waking");
+    expect(awakenRightAfterClick).toBe("waking");
     await expect(page.getByTestId("note-popover")).toHaveAttribute("data-open", "true");
   });
 });
@@ -532,5 +544,214 @@ test.describe("T-83 sign-off checks (design2-v5 §8.4)", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("awaken-caption")).toHaveAttribute("data-shown", "false");
     await expect(announce).toHaveText("");
+  });
+});
+
+/**
+ * T-93 -- the manual chrome toggle (`components/panel-store.ts`), the part of
+ * its contract that can only be seen in a real document: the machine's own
+ * lifecycle attribute (`body[data-awaken]`) and the choreography log this
+ * file's own helpers already read. `panel-store.test.ts` proves the pure
+ * precedence table against a bare store; what it cannot see is whether a real
+ * click on the real spark/inspector controls drives that store the way a
+ * person actually would, and whether the Awakening itself -- untouched by
+ * design, per `docs/design/t93-manual-chrome-toggle.md` -- really does treat a
+ * hand-opened or hand-closed preview exactly as a document it has not been
+ * asked about yet.
+ */
+test.describe("manual chrome toggle (T-93)", () => {
+  test("opening the chrome by hand mounts the agent surfaces instantly, spending none of the Awakening", async ({
+    page,
+  }) => {
+    await attachAwakenLog(page);
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+
+    expect(await page.evaluate(() => document.body.dataset.awaken)).toBe("idle");
+
+    await page.getByTestId("agent-spark").click();
+    await expect(page.getByTestId("agent-card")).toBeVisible();
+    await expect(page.getByTestId("chrome-open")).toHaveText("Preview what an agent sees");
+    await page.getByTestId("chrome-open").click();
+
+    // The hand's own attribute, never the machine's: `data-chrome`/`data-awaken`
+    // are unowned by this toggle (panel-store.ts's own law).
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.dataset.panel))
+      .toBe("open");
+    expect(await page.evaluate(() => document.body.dataset.awaken)).toBe("idle");
+
+    await expect(page.getByTestId("sidebar")).toBeVisible();
+    await expect(page.getByTestId("activity-feed")).toBeVisible();
+    await expect(page.getByTestId("activity-pitch")).toBeVisible();
+    // No claim of a live agent over a chrome nobody has called a tool on --
+    // `feedIsLive` (activity-model.ts) gates the pulse on calls, not on
+    // whether the panel is up, so a hand-opened preview must not animate it.
+    expect(await page.getByTestId("activity-feed").getAttribute("data-live")).toBeNull();
+    expect(await page.getByTestId("activity-ticker").getAttribute("data-live")).toBeNull();
+
+    // The corner slot follows chrome visibility, not the machine
+    // (WebMcpBadge.tsx): a hand-opened preview gets the visible dot form, and
+    // the only claim it is allowed to make is registration, never connection
+    // (badge-claim.ts -- zero calls can only ever be "readable").
+    await expect(page.getByTestId("webmcp-status")).toContainText("Agent-readable");
+
+    expect(await awakenLog(page)).not.toContain("waking");
+  });
+
+  test("opening by hand does not spend the Awakening: the first real call still plays it in full", async ({
+    page,
+  }) => {
+    await attachAwakenLog(page);
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+
+    await page.getByTestId("agent-spark").click();
+    await page.getByTestId("chrome-open").click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.dataset.panel))
+      .toBe("open");
+
+    const result = await callTool(page, "get_map_state");
+    expect(result.error).toBeUndefined();
+
+    expect(await waitForAwake(page, 2500)).toBe("awake");
+    expect(await awakenLog(page)).toContain("waking");
+
+    // The panel let go the instant the story began (panel-store.ts's own
+    // subscription to `waking`): a hand-opened preview is not a permanent
+    // override once the machine has something real to show, and the
+    // choreography must have measured the clean human chrome, not the agent
+    // positions the preview had already put on screen.
+    expect(await page.evaluate(() => document.documentElement.dataset.panel)).toBeUndefined();
+    await expect(page.getByTestId("activity-call")).toHaveCount(1);
+  });
+
+  test("a chrome closed by hand before any agent call is beaten by the first arrival (edge case 2)", async ({
+    page,
+  }) => {
+    await attachAwakenLog(page);
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+
+    await page.getByTestId("agent-spark").click();
+    await page.getByTestId("chrome-open").click();
+    await expect(page.getByTestId("sidebar")).toBeVisible();
+
+    await page.getByTestId("chrome-close").click();
+    await expect(page.getByTestId("sidebar")).toHaveCount(0);
+    await expect(page.getByTestId("activity-feed")).toHaveCount(0);
+    // Still idle underneath: this is a preview closed before an agent ever
+    // touched the page, not the "closed over real work" case ruling 2 covers
+    // (panel-store.test.ts's "does not disturb a hand-closed chrome when the
+    // machine merely lands" pins that other half against `waking -> awake`).
+    expect(await page.evaluate(() => document.body.dataset.awaken)).toBe("idle");
+
+    const result = await callTool(page, "get_map_state");
+    expect(result.error).toBeUndefined();
+
+    // The story still plays in full -- it was never spent by the preview --
+    expect(await waitForAwake(page, 2500)).toBe("awake");
+    expect(await awakenLog(page)).toContain("waking");
+
+    // ...and it beats the earlier hand-close: `followMachine()` fires on
+    // every idle -> waking transition regardless of which panel value it is
+    // about to overwrite, so a preview closed before the agent ever arrived
+    // does NOT stay closed against the agent's first real call the way a
+    // close made *after* awake does. This is the edge case the design calls
+    // out by name: the first arrival beats a hand that closed a chrome
+    // nothing had happened in yet.
+    expect(await page.evaluate(() => document.documentElement.dataset.panel)).toBeUndefined();
+    await expect(page.getByTestId("sidebar")).toBeVisible();
+    await expect(page.getByTestId("activity-feed")).toBeVisible();
+  });
+
+  test("the toggle is inert during waking, and a keydown mid-story still lands the story exactly once", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+    await armWakingClock(page);
+
+    const result = await callTool(page, "get_map_state");
+    expect(result.error).toBeUndefined();
+
+    const state = await stateAfterWaking(page, Math.round(AWAKEN_MS / 3));
+    expect(state).toBe("waking");
+
+    const closeToggle = page.getByTestId("chrome-close");
+    await expect(closeToggle).toBeDisabled();
+    await expect(closeToggle).toHaveAttribute("aria-disabled", "true");
+
+    // A keydown mid-story always lands the transition (the skip listener
+    // answers any keydown -- this file's own regression guard above, "any
+    // keydown mid-story lands the transition early"). The toggle being
+    // disabled is what keeps that SAME press from also firing the close it
+    // would otherwise focus/activate: without it, one keypress would both
+    // skip the story AND close the chrome it had just finished arriving,
+    // landing the page in a state that disagrees with itself the instant it
+    // lands.
+    await page.keyboard.press("a");
+    expect(await waitForAwake(page, 800)).toBe("awake");
+
+    // Landed once, cleanly: the panel was never touched by the keypress that
+    // skipped the story, so the chrome the story delivered is still up.
+    expect(await page.evaluate(() => document.documentElement.dataset.panel)).toBeUndefined();
+    await expect(page.getByTestId("sidebar")).toBeVisible();
+    await expect(closeToggle).toBeEnabled();
+    await expect(closeToggle).toHaveAttribute("aria-disabled", "false");
+  });
+
+  test("a manual close does not survive reload: the boot script and machine decide again", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+
+    const drawn = await callTool(page, "draw_shape", {
+      type: "circle",
+      center: CENTER,
+      radius_m: 300,
+      label: "walk radius",
+    });
+    expect(drawn.error).toBeUndefined();
+    expect(await waitForAwake(page, 2500)).toBe("awake");
+
+    await page.getByTestId("chrome-close").click();
+    await expect(page.getByTestId("sidebar")).toHaveCount(0);
+
+    // The same hash-convergence guard the reload test above uses: reloading
+    // before the debounced mirror has written the hash would restore nothing
+    // at all, testing a link the browser never actually had.
+    await expect
+      .poll(async () => {
+        const hash = await page.evaluate(() => location.hash);
+        if (!/^#v\d+\./.test(hash)) return "no versioned hash yet";
+        const decoded = decodeShareState(hash);
+        return "error" in decoded ? `undecodable: ${decoded.error}` : `d${decoded.drawings.length}`;
+      })
+      .toBe("d1");
+
+    await attachAwakenLog(page);
+    await page.reload();
+    await waitForTools(page);
+    await waitForFeatures(page);
+
+    // A manual close is not a fact this store carries anywhere durable, and a
+    // fresh document finds the module override at its default (`null`,
+    // panel-store.ts): the reloaded page boots exactly like any other awake
+    // link, chrome and all -- never the "closed by hand" state the previous
+    // document was left in (the design's own deliberate choice: persisting a
+    // close would let one tap permanently disarm the demo on a judge's
+    // machine).
+    await expect.poll(() => page.evaluate(() => document.body.dataset.awaken)).toBe("awake");
+    expect(await awakenLog(page)).not.toContain("waking");
+    await expect(page.getByTestId("sidebar")).toBeVisible();
+    await expect(page.getByTestId("drawing-count")).toHaveText("1");
   });
 });

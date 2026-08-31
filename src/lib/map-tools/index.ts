@@ -90,7 +90,12 @@ import {
   type RouteFetch,
 } from "./route";
 
-/** Zoom used when the caller names a place instead of a camera position. */
+/**
+ * Zoom used when the caller names a place instead of a camera position — as a
+ * floor, never a reset: see `pointZoom` in set_map_view. The same 15 the human
+ * paths use (`ROW_POINT_ZOOM` in `lib/geo/frame`, `SEARCH_ZOOM` in
+ * `components/search-model`), restated there rather than imported.
+ */
 export const PLACE_ZOOM = 15;
 
 /** Ceiling on an explicit id list; larger sets belong to the filter path. */
@@ -546,7 +551,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const setMapView: GlassMapTool<SetMapViewInput> = {
     name: "set_map_view",
     description:
-      `Move the map camera. Give a place name or a feature id to jump to something by name, fit to frame something whole, or center/zoom/bearing/pitch to position the camera directly. fit takes a drawing id or a feature id and frames that thing against what is currently on screen: an area (a district, a park, a circle or a route) is fitted so all of it is visible, which can zoom OUT when the thing is bigger than the view, while a target with no extent - a point of interest, a pinned note - behaves exactly like feature_id: it flies there and never zooms out past ${PLACE_ZOOM}. fit needs the map to have rendered once; before that it answers "map not ready" rather than guessing how much you can see. Returns the new map state, so no follow-up read is needed.`,
+      `Move the map camera. Give a place name or a feature id to jump to something by name, fit to frame something whole, or center/zoom/bearing/pitch to position the camera directly. place and feature_id fly to the thing at zoom ${PLACE_ZOOM}, or keep the current zoom when it is already closer than that - going to a place never zooms you out; pass zoom to say otherwise. fit takes a drawing id or a feature id and frames that thing against what is currently on screen: an area (a district, a park, a circle or a route) is fitted so all of it is visible, which can zoom OUT when the thing is bigger than the view, while a target with no extent - a point of interest, a pinned note - behaves exactly like feature_id. fit needs the map to have rendered once; before that it answers "map not ready" rather than guessing how much you can see. Returns the new map state, so no follow-up read is needed.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -564,7 +569,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           type: "number",
           minimum: 0,
           maximum: 22,
-          description: `Zoom level: 10 shows a city, 15 a neighbourhood, 18 a building. Defaults to ${PLACE_ZOOM} when place or feature_id is used.`,
+          description: `Zoom level: 10 shows a city, 15 a neighbourhood, 18 a building. With place or feature_id it defaults to ${PLACE_ZOOM} without ever zooming out past the current view - the closer of the two wins - so pass zoom to override, including to pull back. Cannot be combined with fit, which decides its own zoom.`,
         },
         bearing: {
           type: "number",
@@ -589,7 +594,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         fit: {
           type: "string",
           description:
-            'Frame this whole thing: a drawing id as draw_shape returns and map state lists ("drawing:1", including a shape the human drew by hand), or the id of a loaded feature ("district:daan", "osm:way:10"). An area is fitted to what is on screen and may zoom out to get all of it in; a point behaves exactly like feature_id. Cannot be combined with center, place or feature_id, and not with zoom either - the fit is what decides the zoom.',
+            'Frame this whole thing: a drawing id as draw_shape returns and map state lists ("drawing:1", including a shape the human drew by hand), or the id of a loaded feature ("district:daan", "osm:way:10"). An area is fitted to what is on screen and may zoom out to get all of it in; a target with no extent behaves exactly like feature_id, at any starting zoom - the two paths share one rule. Cannot be combined with center, place or feature_id, and not with zoom either - the fit is what decides the zoom.',
         },
       },
       additionalProperties: false,
@@ -627,6 +632,22 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         };
       }
 
+      /**
+       * The zoom a jump to a *point* lands on when the caller named none: a
+       * floor, not a reset. Somebody looking at one building keeps that view
+       * when the agent flies to a shop on the same street — the camera moves,
+       * the scale does not, and an agent that wanted 15 says `zoom: 15`.
+       *
+       * A floor rather than `PLACE_ZOOM` outright since T-102 stage 1's qa
+       * pass: `fit` on a point already worked this way (`frameFor`'s no-extent
+       * branch), as do the human's row click and search pick, so an
+       * unconditional 15 here made the same camera behave two ways depending
+       * on which parameter named the same feature — with the schema promising
+       * they were the same call. Never zooming out is now the rule for every
+       * navigate-to-a-point path on this map, and this was the last exception.
+       */
+      const pointZoom = () => Math.max(store.getView().zoom, PLACE_ZOOM);
+
       let patch: Partial<MapView> = {};
       if (hasCamera) {
         const v = validateSetMapView({
@@ -649,7 +670,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const center = featureCenter(feature);
         if (!center) return { error: "feature has no usable geometry", state: state() };
         patch.center = center;
-        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+        patch.zoom = patch.zoom ?? pointZoom();
       }
 
       if (hasPlace) {
@@ -669,7 +690,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           return { error: "ambiguous place", candidates: resolved.candidates, state: state() };
         }
         patch.center = resolved.entry.center;
-        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+        patch.zoom = patch.zoom ?? pointZoom();
       }
 
       if (hasFit) {

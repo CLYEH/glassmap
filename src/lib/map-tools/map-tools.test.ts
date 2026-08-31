@@ -362,16 +362,64 @@ describe("set_map_view", () => {
   });
 
   it("flies to a named place at neighbourhood zoom without being given coordinates", async () => {
+    // The fixture camera is at zoom 14, below the floor, so the default lands.
     const { store, byName } = mapReady();
     const out = await call(byName.set_map_view, { place: "Daan Station" });
     expect(store.getView().center).toEqual([121.5436, 25.0334]);
     expect(out).toMatchObject({ center: { lng: 121.5436, lat: 25.0334 }, zoom: PLACE_ZOOM });
   });
 
-  it("lets an explicit zoom override the place default", async () => {
+  /**
+   * Going somewhere by name never pulls the camera back (T-102 qa finding).
+   *
+   * `PLACE_ZOOM` is a floor, not a reset, and it has to be: a person looking at
+   * one building keeps that scale when the agent flies to the shop next door,
+   * exactly as they do when they click an inspector row, pick a search result,
+   * or when the agent uses `fit` on the same feature. Until this ruling
+   * `feature_id`/`place` were the one path that silently zoomed out — same
+   * camera, same target, a different answer depending on which parameter named
+   * it, while the schema promised `fit` on a point "behaves exactly like
+   * feature_id". The zoom an agent actually wants is one it can always state.
+   */
+  const deepView = { ...VIEW, zoom: 18 };
+
+  it("keeps a closer view when it flies to a place or an id, instead of resetting to 15", async () => {
+    const byPlace = mapReady({ view: deepView });
+    const byId = mapReady({ view: deepView });
+
+    const place = await call(byPlace.byName.set_map_view, { place: "Daan Station" });
+    const id = await call(byId.byName.set_map_view, { feature_id: "osm:node:2" });
+
+    expect(byPlace.store.getView().zoom).toBe(18);
+    expect(byId.store.getView().zoom).toBe(18);
+    // Both moved: the camera went to the station and stayed at street scale.
+    expect(place).toMatchObject({ center: { lng: 121.5436, lat: 25.0334 }, zoom: 18 });
+    expect(id).toMatchObject({ center: { lng: 121.5436, lat: 25.0334 }, zoom: 18 });
+  });
+
+  it("still climbs to 15 from further out, so a city-wide view lands on the place", async () => {
+    // The other side of a floor: from zoom 10 the station is a dot in a city,
+    // and arriving without zooming in would answer "go there" with nothing.
+    const { store, byName } = mapReady({ view: { ...VIEW, zoom: 10 } });
+    await call(byName.set_map_view, { feature_id: "osm:node:2" });
+    expect(store.getView().zoom).toBe(PLACE_ZOOM);
+  });
+
+  it("lets an explicit zoom win in either direction, including out", async () => {
+    // The floor is a default, not a policy: an agent that means 12 says 12,
+    // from anywhere. Without this the ruling would take away the only way to
+    // pull back while naming a place.
     const { store, byName } = mapReady();
     await call(byName.set_map_view, { place: "Daan Station", zoom: 18 });
     expect(store.getView().zoom).toBe(18);
+
+    const deep = mapReady({ view: deepView });
+    await call(deep.byName.set_map_view, { place: "Daan Station", zoom: 12 });
+    expect(deep.store.getView().zoom).toBe(12);
+
+    const deepById = mapReady({ view: deepView });
+    await call(deepById.byName.set_map_view, { feature_id: "osm:node:2", zoom: 12 });
+    expect(deepById.store.getView().zoom).toBe(12);
   });
 
   it("does not move for an ambiguous place; it asks with candidates", async () => {
@@ -500,21 +548,35 @@ describe("set_map_view fit", () => {
     expect(store.getView().zoom).toBeLessThan(VIEW.zoom);
   });
 
-  it("treats a point exactly as feature_id does, which is what its description promises", async () => {
+  it("treats a point exactly as feature_id does, from BOTH sides of the floor", async () => {
     // A place with no extent has no fit; the honest answer is the one this
     // tool already gives for an id - fly there, never zoom out - and the
-    // description says the two are the same call. Two stores, one comparison,
-    // so the promise is pinned by behaviour rather than by two constants that
-    // happen to both read 15 today.
-    const viaFit = mapReady();
-    const viaId = mapReady();
-    const fitted = await call(viaFit.byName.set_map_view, { fit: "osm:node:2" });
-    const flown = await call(viaId.byName.set_map_view, { feature_id: "osm:node:2" });
+    // description says the two are the same call. Two stores per starting
+    // camera, one comparison, so the promise is pinned by behaviour rather
+    // than by two constants that happen to both read 15 today.
+    //
+    // Both regimes, because only one of them used to work. qa found this while
+    // writing the e2e parity test: from zoom 14 the two agreed, and from 18
+    // `fit` held the floor (18) while `feature_id` reset to 15 - the schema's
+    // "exactly like feature_id" was true only below the floor. Testing one
+    // start is what let that ship; testing both is what keeps it fixed.
+    for (const [label, start] of [
+      ["below the floor", 14],
+      ["above the floor", 18],
+    ] as const) {
+      const view = { ...VIEW, zoom: start };
+      const viaFit = mapReady({ view });
+      const viaId = mapReady({ view });
+      const fitted = await call(viaFit.byName.set_map_view, { fit: "osm:node:2" });
+      const flown = await call(viaId.byName.set_map_view, { feature_id: "osm:node:2" });
 
-    expect(fitted.error).toBeUndefined();
-    expect(viaFit.store.getView()).toEqual(viaId.store.getView());
-    expect(viaFit.store.getView().zoom).toBe(PLACE_ZOOM);
-    expect(fitted).toEqual(flown);
+      expect(fitted.error, label).toBeUndefined();
+      expect(viaFit.store.getView(), label).toEqual(viaId.store.getView());
+      // Byte-equal answers, not merely equal cameras: the two calls are one
+      // rule, so an agent can swap them without reading the difference.
+      expect(fitted, label).toEqual(flown);
+      expect(viaFit.store.getView().zoom, label).toBe(Math.max(start, PLACE_ZOOM));
+    }
   });
 
   it("answers an unknown drawing id with the ids that do exist", async () => {

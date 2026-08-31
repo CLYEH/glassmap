@@ -4,8 +4,9 @@
  * T-101 gave a human's inspector row a camera that respects what it is
  * clicking: an area is framed whole (widening out if it must), a point flies
  * to its coordinate and never zooms out past a floor. Until T-102 an agent
- * had no equivalent -- `feature_id`/`place` always jump to one fixed zoom, so
- * "frame the district I'm standing in" was not expressible at all. `fit`
+ * had no equivalent -- `feature_id`/`place` only ever jump to a point (and,
+ * until this task's own qa pass, jumped to one fixed zoom), so "frame the
+ * district I'm standing in" was not expressible at all. `fit`
  * closes that gap by calling the exact function the row click calls
  * (`frameFor`, `src/lib/geo/frame.ts`), not a re-implementation of it.
  *
@@ -166,9 +167,9 @@ test.describe("set_map_view({fit}) -- point targets (T-102)", () => {
     await waitForLiveMap(page);
 
     // Default zoom is 12 (DEFAULT_VIEW), below PLACE_ZOOM/ROW_POINT_ZOOM (15):
-    // this is the only regime the tool's description and its unit test
-    // ("treats a point exactly as feature_id does") actually exercise -- see
-    // the adversarial test below for the regime they do not.
+    // the regime where both paths climb to the floor. The test below is the
+    // other one -- starting above the floor, where the two used to disagree
+    // and where the unit test's zoom-14 fixture could not look.
     const before = await callTool(page, "get_map_state");
     expect(before.zoom!).toBeLessThan(15);
 
@@ -192,49 +193,36 @@ test.describe("set_map_view({fit}) -- point targets (T-102)", () => {
   });
 
   /**
-   * DEFECT (found while writing this parity test, not by the orchestrator's
-   * brief): `set_map_view`'s own schema says `fit` on a target with no extent
-   * "behaves exactly like feature_id: it flies there and never zooms out past
-   * PLACE_ZOOM" (src/lib/map-tools/index.ts, the `fit` property description,
-   * and the tool description's own sentence). That is only true when the
-   * camera starts at or below PLACE_ZOOM (15) -- which is the only regime the
-   * unit test "treats a point exactly as feature_id does" exercises
-   * (map-tools.test.ts:503, whose fixture VIEW.zoom is 14).
+   * The regime the defect lived in, now the regime that proves the fix.
    *
-   * Above that floor the two paths diverge, because they are not actually the
-   * same rule:
+   * QA found this while writing the parity test above: `set_map_view`'s schema
+   * said `fit` on a target with no extent "behaves exactly like feature_id",
+   * and that was only true starting at or below PLACE_ZOOM (15) -- the only
+   * regime the unit test exercised, because its fixture camera is at 14.
+   * Above the floor the two paths were not the same rule at all:
    *  - `fit` on a point resolves through `frameFor`, whose no-extent branch is
-   *    `Math.max(view.zoom, ROW_POINT_ZOOM)` -- a FLOOR. Starting at zoom 18,
-   *    it stays at 18.
-   *  - `feature_id` (src/lib/map-tools/index.ts, the `hasFeatureId` branch) is
-   *    `patch.zoom = patch.zoom ?? PLACE_ZOOM` -- an unconditional default
-   *    applied whenever the caller did not also pass an explicit `zoom`.
-   *    Starting at zoom 18, it resets to 15.
+   *    `Math.max(view.zoom, ROW_POINT_ZOOM)` -- a FLOOR. From zoom 18 it
+   *    stayed at 18.
+   *  - `feature_id` was `patch.zoom = patch.zoom ?? PLACE_ZOOM` -- an
+   *    unconditional default. From the identical camera it reset to 15, an
+   *    actual zoom-OUT the parity claim never mentioned.
    *
-   * Repro: start at zoom 18 well away from the station; `fit: DAAN_STATION.id`
-   * keeps zoom 18 (correct per the floor rule, and per "never zooms out past
-   * PLACE_ZOOM" read literally -- 18 is not "past" 15 in the zoomed-IN
-   * direction); `feature_id: DAAN_STATION.id` from the identical starting
-   * camera lands on zoom 15 -- an actual zoom-OUT the parity claim does not
-   * mention and the existing unit test cannot see, because its fixture never
-   * starts above the floor.
+   * The orchestrator's ruling (T-102) unified them on the floor rather than
+   * narrowing the promise: `place` and `feature_id` now default to
+   * `Math.max(current zoom, PLACE_ZOOM)` when no explicit `zoom` is passed.
+   * Never zooming out is already the discipline of every other
+   * navigate-to-a-point path on this map -- the inspector row click, the
+   * search pick, `fit` itself -- and this was the last silent exception; an
+   * agent that wants 15 from a closer camera passes `zoom: 15`.
    *
-   * Reported rather than fixed (QA does not touch `src/lib/map-tools/**`):
-   * either widen `feature_id`'s own default to a floor (`Math.max(current,
-   * PLACE_ZOOM)`) to genuinely match `fit`, or narrow the tool description's
-   * claim to "at or below PLACE_ZOOM, fit and feature_id agree" and stop
-   * calling it "exactly like feature_id" without qualification.
-   *
-   * `test.fail()` per CONTRIBUTING.md's rule for a known defect: this keeps
-   * CI green while refusing to let the gap go unrecorded. If a future change
-   * makes the assertion below pass, this test starts FAILING the run --
-   * that is `test.fail()` doing its job, and is the cue to delete this test
-   * and remove the qualifier this comment argues for.
+   * So the `test.fail()` that recorded the defect is gone and the assertion it
+   * guarded is the plain one: from zoom 18, both calls answer byte-for-byte
+   * the same, at 18. If the ruling is ever reverted, this fails here rather
+   * than in a description nobody re-reads.
    */
-  test("known defect: fit on a point does not actually match feature_id once the camera starts past PLACE_ZOOM", async ({
+  test("fit on a point matches feature_id byte for byte, including past PLACE_ZOOM", async ({
     page,
   }) => {
-    test.fail();
     await page.goto("/");
     await waitForTools(page);
     await waitForFeatures(page);
@@ -264,9 +252,14 @@ test.describe("set_map_view({fit}) -- point targets (T-102)", () => {
     expect(viaId.error).toBeUndefined();
 
     expect(viaFit.center).toEqual(viaId.center);
-    // This is the line that currently fails: viaFit.zoom is 18 (the floor
-    // held), viaId.zoom is 15 (feature_id's unconditional default fired).
+    // The line that used to fail: viaFit.zoom was 18 (the floor held) and
+    // viaId.zoom was 15 (feature_id's unconditional default fired). Both are
+    // now 18 -- one rule, stated once, obeyed by both parameters.
     expect(viaFit.zoom).toBe(viaId.zoom);
+    expect(viaFit.zoom).toBe(18);
+    // Byte-equal, not merely equal in the two fields this test names: an agent
+    // swapping one call for the other reads no difference at all.
+    expect(viaFit).toEqual(viaId);
   });
 });
 

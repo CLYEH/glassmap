@@ -1,5 +1,5 @@
 /**
- * The fourteen effects: eleven tools, three human actions.
+ * The fifteen effects: twelve tools, three human actions.
  *
  * Grammar (spec v3, unchanged since v1):
  *  - **read = gaze** — cased deep-teal geometry, transient, zero residue in ≤2 s;
@@ -1022,13 +1022,19 @@ function pinEffect(name: FxName, ink: string): Effect<PinNodes> {
 }
 
 /**
- * human_delete — "dissolve": materialise played backwards. A rose flash names
- * the artifact that is going, then a ghost of it fades and settles out. The
- * artifact itself has already left the store — this is the only effect whose
- * geometry outlives the thing it describes, and it lasts 700 ms.
+ * human_delete / remove_from_map — "dissolve": materialise played backwards. A
+ * flash names each artifact that is going, then a ghost of it fades and settles
+ * out. The artifacts have already left the store — this is the only effect
+ * whose geometry outlives the things it describes, and it lasts 700 ms.
+ *
+ * One gesture can take several marks off at once (`remove_from_map` removes a
+ * batch), so it dissolves a list: one ghost per mark, contracting together
+ * about their shared centre, because they left together. The human's ✕ is the
+ * same effect over a list of one, in rose — the deletion verb, like the drawing
+ * and pinning verbs, is one shape in two inks.
  */
-interface VanishNodes extends FxNodes {
-  root: SVGGElement;
+interface Ghost {
+  node: SVGGElement;
   ghost: SVGPathElement;
   flash: SVGPathElement;
   dot: SVGCircleElement | null;
@@ -1036,62 +1042,98 @@ interface VanishNodes extends FxNodes {
   closed: boolean;
 }
 
-const vanish: Effect<VanishNodes> = {
-  dur: 700,
-  setup(ctx, geom) {
-    if (geom.kind !== "vanish" || geom.positions.length === 0) return null;
-    if (geom.positions.some((at) => !ctx.project(at))) return null;
-    const root = mapGroup(ctx, "human_delete");
-    const ghost = svgEl(
-      "path",
-      { d: "", fill: ROSE_DEEP, "fill-opacity": 0.1, stroke: ROSE_DEEP, "stroke-width": 2.5, "stroke-linejoin": "round" },
-      root,
-    );
-    const flash = svgEl("path", { d: "", fill: "none", stroke: ROSE, "stroke-width": 4, "stroke-linejoin": "round", opacity: 0 }, root);
-    const dot =
-      geom.positions.length === 1
-        ? svgEl("circle", { cx: 0, cy: 0, r: 7, fill: ROSE_DEEP, opacity: 0.9 }, root)
-        : null;
-    return { root, ghost, flash, dot, positions: geom.positions, closed: geom.closed };
-  },
-  render(p, n, ctx) {
-    const points = n.positions.map((at) => ctx.project(at));
-    if (!points.every((q): q is Pt => q !== null)) return hide(n.root);
-    const d = pathD(points, n.closed);
-    n.ghost.setAttribute("d", d);
-    n.flash.setAttribute("d", d);
-    if (n.dot) {
-      n.dot.setAttribute("cx", points[0].x.toFixed(1));
-      n.dot.setAttribute("cy", points[0].y.toFixed(1));
-    }
-    setOpacity(n.flash, 0.9 * bell(seg(p, 0, 0.26)));
-    const gone = inOutCubic(seg(p, 0.22, 0.9));
-    setOpacity(n.root, 1 - gone);
-    const cx = points.reduce((sum, q) => sum + q.x, 0) / points.length;
-    const cy = points.reduce((sum, q) => sum + q.y, 0) / points.length;
-    const scale = 1 - 0.1 * gone;
-    n.root.setAttribute(
-      "transform",
-      `translate(${(cx * (1 - scale)).toFixed(2)} ${(cy * (1 - scale)).toFixed(2)}) scale(${scale.toFixed(4)})`,
-    );
-  },
-  rm(p, n, ctx) {
-    const points = n.positions.map((at) => ctx.project(at));
-    if (!points.every((q): q is Pt => q !== null)) return hide(n.root);
-    const d = pathD(points, n.closed);
-    n.ghost.setAttribute("d", d);
-    n.flash.setAttribute("d", d);
-    if (n.dot) {
-      n.dot.setAttribute("cx", points[0].x.toFixed(1));
-      n.dot.setAttribute("cy", points[0].y.toFixed(1));
-    }
-    setOpacity(n.flash, 0);
-    setOpacity(n.root, 1 - clamp01(p * 1.2));
-  },
-  cleanup(n) {
-    n.root.remove();
-  },
-};
+interface DissolveNodes extends FxNodes {
+  root: SVGGElement;
+  ghosts: Ghost[];
+}
+
+/** Projects one ghost and writes its geometry. Null when the map cannot place it. */
+function placeGhost(g: Ghost, ctx: FxContext): Pt[] | null {
+  const points = g.positions.map((at) => ctx.project(at));
+  if (!points.every((q): q is Pt => q !== null)) {
+    hide(g.node);
+    return null;
+  }
+  g.node.setAttribute("opacity", "1");
+  const d = pathD(points, g.closed);
+  g.ghost.setAttribute("d", d);
+  g.flash.setAttribute("d", d);
+  if (g.dot) {
+    g.dot.setAttribute("cx", points[0].x.toFixed(1));
+    g.dot.setAttribute("cy", points[0].y.toFixed(1));
+  }
+  return points;
+}
+
+function dissolveEffect(name: FxName, ink: string, flashInk: string): Effect<DissolveNodes> {
+  return {
+    dur: 700,
+    setup(ctx, geom) {
+      if (geom.kind !== "dissolve") return null;
+      const shapes = geom.shapes.filter(
+        (shape) => shape.positions.length > 0 && shape.positions.every((at) => ctx.project(at)),
+      );
+      if (shapes.length === 0) return null;
+      const root = mapGroup(ctx, name);
+      const ghosts = shapes.map((shape): Ghost => {
+        const node = svgEl("g", {}, root);
+        const ghost = svgEl(
+          "path",
+          { d: "", fill: ink, "fill-opacity": 0.1, stroke: ink, "stroke-width": 2.5, "stroke-linejoin": "round" },
+          node,
+        );
+        const flash = svgEl("path", { d: "", fill: "none", stroke: flashInk, "stroke-width": 4, "stroke-linejoin": "round", opacity: 0 }, node);
+        // A single position is a note, or a place that left the selection:
+        // there is no outline to fade, so the dot is the mark.
+        const dot =
+          shape.positions.length === 1
+            ? svgEl("circle", { cx: 0, cy: 0, r: 7, fill: ink, opacity: 0.9 }, node)
+            : null;
+        return { node, ghost, flash, dot, positions: shape.positions, closed: shape.closed };
+      });
+      return { root, ghosts };
+    },
+    render(p, n, ctx) {
+      const flash = 0.9 * bell(seg(p, 0, 0.26));
+      let sx = 0;
+      let sy = 0;
+      let count = 0;
+      for (const g of n.ghosts) {
+        const points = placeGhost(g, ctx);
+        if (!points) continue;
+        setOpacity(g.flash, flash);
+        for (const q of points) {
+          sx += q.x;
+          sy += q.y;
+          count += 1;
+        }
+      }
+      if (count === 0) return hide(n.root);
+      const gone = inOutCubic(seg(p, 0.22, 0.9));
+      setOpacity(n.root, 1 - gone);
+      const scale = 1 - 0.1 * gone;
+      const cx = sx / count;
+      const cy = sy / count;
+      n.root.setAttribute(
+        "transform",
+        `translate(${(cx * (1 - scale)).toFixed(2)} ${(cy * (1 - scale)).toFixed(2)}) scale(${scale.toFixed(4)})`,
+      );
+    },
+    rm(p, n, ctx) {
+      let placed = false;
+      for (const g of n.ghosts) {
+        if (!placeGhost(g, ctx)) continue;
+        setOpacity(g.flash, 0);
+        placed = true;
+      }
+      if (!placed) return hide(n.root);
+      setOpacity(n.root, 1 - clamp01(p * 1.2));
+    },
+    cleanup(n) {
+      n.root.remove();
+    },
+  };
+}
 
 // ------------------------------------------------------------------ registry
 
@@ -1103,13 +1145,14 @@ const EFFECTS: Record<FxName, Effect> = {
   select_features: selectDropIn as Effect,
   draw_shape: inkEffect("draw_shape", TEAL_DEEP, false, 1500) as Effect,
   annotate: pinEffect("annotate", TEAL) as Effect,
+  remove_from_map: dissolveEffect("remove_from_map", TEAL_DEEP, TEAL) as Effect,
   describe_surroundings: compass as Effect,
   compare_areas: twinPing as Effect,
   measure: ruler as Effect,
   get_share_link: packToChip as Effect,
   human_draw: inkEffect("human_draw", ROSE_DEEP, true, 1700) as Effect,
   human_note: pinEffect("human_note", ROSE_DEEP) as Effect,
-  human_delete: vanish as Effect,
+  human_delete: dissolveEffect("human_delete", ROSE_DEEP, ROSE) as Effect,
 };
 
 export function fxEffect(name: FxName): Effect | undefined {

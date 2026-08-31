@@ -663,7 +663,7 @@ export default function MapCanvas() {
        * A person's tap on a shape, and the other half of the same door: a
        * drawing is a mark somebody made, so it answers "what is this, and
        * whose?" and offers to take itself off the map. `Remove` is
-       * `removeDrawing` — the writer `undo` and the tools use.
+       * `removeDrawing` — the same writer `remove_from_map` uses.
        *
        * A place under the shape answers first. The fill is 18 % opaque, so a
        * bead inside a drawn circle is plainly visible through it, and a tap

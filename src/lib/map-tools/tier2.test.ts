@@ -759,7 +759,7 @@ describe("what the agent is told about categories", () => {
 
   it("registers no new tool: this is a wider contract, not a bigger surface", async () => {
     const { byName } = tier2Ready();
-    expect(Object.keys(byName)).toHaveLength(11);
+    expect(Object.keys(byName)).toHaveLength(12);
   });
 
   it("names the POI category in the activity feed a human reads", async () => {

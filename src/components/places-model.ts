@@ -1,5 +1,6 @@
+import type { FeatureCategory, GlassMapFeature } from "@/lib/data/schema";
 import { TIER2_CATEGORIES, type Tier2Category } from "@/lib/store/tier2";
-import { TIER2_PLURAL } from "./category-labels";
+import { LEGEND_ORDER, TIER2_PLURAL } from "./category-labels";
 
 /**
  * The Places tray's count format: 497, 1.6k, 13.8k.
@@ -31,3 +32,30 @@ export function trayCount(n: number): string {
 export const TRAY_ORDER: readonly Tier2Category[] = [...TIER2_CATEGORIES].sort((a, b) =>
   TIER2_PLURAL[a].localeCompare(TIER2_PLURAL[b], "en"),
 );
+
+/** One row of the map key: a painted category and how many of it the store holds. */
+export interface KeyRow {
+  category: FeatureCategory;
+  count: number;
+}
+
+/**
+ * The tray's other half: the six painted datasets, counted from the store.
+ *
+ * All six rows, always, in legend order — a key explains the colours the map
+ * *may* paint, so a category the current data happens not to contain is a `0`
+ * rather than a missing line. And because `LEGEND_ORDER` is every
+ * `FeatureCategory` there is, the rows add up to `features.length` exactly:
+ * that is the arithmetic the number on the dock pill rests on, and the reason
+ * point-of-interest features (which live in `tier2Features`, unpainted) can
+ * never be folded in here — a seventh row with no colour on the map would make
+ * both the key and the total false.
+ */
+export function bundledKeyRows(features: readonly GlassMapFeature[]): KeyRow[] {
+  const tally = new Map<FeatureCategory, number>();
+  for (const feature of features) {
+    const category = feature.properties.category;
+    tally.set(category, (tally.get(category) ?? 0) + 1);
+  }
+  return LEGEND_ORDER.map((category) => ({ category, count: tally.get(category) ?? 0 }));
+}

@@ -405,6 +405,25 @@ describe("set_map_view", () => {
     expect(store.getView().zoom).toBe(PLACE_ZOOM);
   });
 
+  it("refuses to fit a target whose geometry cannot be framed, and moves nothing", async () => {
+    // The one uncovered branch the final review found: a drawing or feature
+    // that exists but has no usable extent must refuse by name, not fall
+    // through to a frame of nothing — and the refusal must leave the camera
+    // exactly where it was.
+    const { store, byName } = mapReady({ features: BROKEN_FEATURES });
+    const before = store.getView();
+    const viaFeature = await call(byName.set_map_view, { fit: "broken:null-geometry" });
+    expect(viaFeature.error).toContain("has no usable geometry");
+    store.addDrawing({
+      source: "user",
+      kind: "polygon",
+      geometry: { type: "Polygon", coordinates: [] },
+    });
+    const viaDrawing = await call(byName.set_map_view, { fit: "drawing:1" });
+    expect(viaDrawing.error).toContain("has no usable geometry");
+    expect(store.getView()).toEqual(before);
+  });
+
   it("lets an explicit zoom win in either direction, including out", async () => {
     // The floor is a default, not a policy: an agent that means 12 says 12,
     // from anywhere. Without this the ruling would take away the only way to

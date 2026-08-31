@@ -126,7 +126,7 @@ export interface UnloadedMatch {
   category: MapCategory;
   /**
    * How many features matching the query live in that category and are *not*
-   * already in memory. A floor, never a ceiling: naming the category returns
+   * already in memory. A floor, never a ceiling — as long as the index is not older than the files it indexes (one generator run writes both; a partial --only re-export is the way to break that, and validate() is the guard): naming the category returns
    * at least this many (see `unloadedMatches` for the one case where it
    * returns more).
    */

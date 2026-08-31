@@ -39,7 +39,7 @@ Parallel work is safe only because each area has one owner. Edit outside your ar
 
 | Area | Owner | Paths |
 |---|---|---|
-| Tool layer | `tool-dev` | `src/lib/map-tools/**`, `src/lib/store/**`, their `*.test.ts` |
+| Tool layer | `tool-dev` | `src/lib/map-tools/**`, `src/lib/store/**`, `src/lib/geo/**` (the pure camera/projection math both the tools and the UI frame with — one implementation, imported downward by both), their `*.test.ts` |
 | UI | `map-ui-dev` | `src/components/**`, `src/app/**` |
 | Data | `data-engineer` | `public/data/**`, `scripts/**`, `src/lib/data/**` |
 | Tests | `qa` | `e2e/**`, `playwright.config.ts`, `vitest.config.mts`, new cross-area `*.test.ts` (a unit test co-locates with its subject and belongs to that area's owner) |

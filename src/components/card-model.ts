@@ -104,7 +104,7 @@ export function cardProvenance(
 }
 
 /** A place with no colour of its own: a POI, which the ramp never paints. */
-const POI_SWATCH = "#8fa1b3";
+export const POI_SWATCH = "#8fa1b3";
 
 /** Which side of the tap the card hangs on. */
 export type CardPlace = "above" | "below";

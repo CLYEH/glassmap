@@ -21,6 +21,7 @@ import { FxLayer } from "@/components/fx/FxLayer";
 import { RestoredChip } from "@/components/RestoredChip";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
 import { useAwakenMode } from "@/components/useAwakenMode";
+import { useChromeVisible } from "@/components/useChromeVisible";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
@@ -51,6 +52,14 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * toast says out loud what happened (`components/awaken/`). The panels mount
  * for `waking` because the story needs something to move; the human surfaces
  * stay until `awake` because the story is made of them leaving.
+ *
+ * **The hand (`html[data-panel]`).** Both states can also be asked for: the
+ * spark's card opens the agent chrome on a page no agent has touched, and the
+ * inspector's header closes it over one that is being worked on (T-93,
+ * `components/panel-store.ts`). It is a second fact composed with the mode
+ * rather than a fourth mode, so the machine keeps its one-way life: a manual
+ * open does not spend the Awakening, a manual close is not undone by the
+ * agent's next call, and the panel lets go the instant `waking` begins.
  *
  * `useAwakenController` mounts the one controller this document may have, and
  * it is mounted *here*, in the page, rather than inside `AwakenStage`: React
@@ -83,10 +92,20 @@ export default function Home() {
   useDevStoreHandle();
   useAwakenController();
   const mode = useAwakenMode();
-  /** Is the agent chrome on screen at all — arriving counts. */
-  const agent = mode !== "idle";
-  /** Are the human-only surfaces still there — they leave *during* the story. */
-  const human = mode !== "awake";
+  /**
+   * Is the agent chrome on screen at all — arriving counts, and a hand counts
+   * for more than the machine (`useChromeVisible`, T-93). Everything the lane
+   * displaces reads this same answer, `MapCanvas` included: the corridor
+   * `bounds` describes is the one the panels below actually leave.
+   */
+  const agent = useChromeVisible();
+  /**
+   * Are the human-only surfaces still there — they leave *during* the story,
+   * and they come back when the chrome is closed by hand over an agent's work.
+   * That second clause is what keeps the spark on screen as the one-tap way
+   * back in; without it a manual close would be a one-way door.
+   */
+  const human = mode !== "awake" || !agent;
 
   return (
     <main data-testid="map-page" className="app">

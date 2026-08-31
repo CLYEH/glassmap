@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { isAgentState } from "@/lib/awaken";
 import { useMapStore } from "@/lib/store/map-store";
 import type { Tier2Category } from "@/lib/store/tier2";
 import { MapKey } from "./MapKey";
@@ -48,6 +49,7 @@ export function PlacesDock() {
   const loadManifest = useMapStore((s) => s.loadTier2Manifest);
   const tier2Loaded = useMapStore((s) => s.tier2Loaded);
   const tier2Features = useMapStore((s) => s.tier2Features);
+  const agentState = useMapStore(isAgentState);
   const category = useBrowseStore((s) => s.category);
   const browse = useBrowseStore((s) => s.browse);
   const clear = useBrowseStore((s) => s.clear);
@@ -201,8 +203,15 @@ export function PlacesDock() {
           its own advice is furniture. It survives into `waking` so the
           awakening can fade it out in its first tenth: unmounted on the first
           frame instead, it would vanish with a pop while everything else in
-          the transition travels. */}
-      {mode !== "awake" && category === null && !open ? (
+          the transition travels.
+
+          Gated on the *map's* state and not on which chrome is on screen: a
+          person who closes the agent view (T-93) is looking at a map an agent
+          has drawn on, and a landing hint returning over it would be advice for
+          a page that no longer exists. `isAgentState` is the same sentence the
+          awakening reads (`lib/awaken`), so the hint and the mode cannot
+          disagree about whether anything has happened here. */}
+      {(mode === "waking" || !agentState) && category === null && !open ? (
         <p className="hint lg" data-testid="map-hint">
           Explore Taipei — tap a place, draw a shape, or browse <b>Places</b>.
         </p>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   callCountLabel,
+  feedIsLive,
   formatCallTime,
   groupActivity,
   selectActivity,
@@ -112,5 +113,24 @@ describe("callCountLabel", () => {
     expect(callCountLabel(1)).toBe("1 call");
     expect(callCountLabel(6)).toBe("6 calls");
     expect(callCountLabel(0)).toBe("0 calls");
+  });
+});
+
+describe("feedIsLive — what the pulsing ring is allowed to mean", () => {
+  it("holds still until a call has actually landed here", () => {
+    // The feed can now be on screen with nothing behind it: a restored link
+    // carries agent work and no agent, and since T-93 a person can open the
+    // agent chrome by hand on a map nothing has ever touched. An animated
+    // "live" light over either is a claim the page cannot back — and the
+    // second case is one the old `data-restored` gate did not even cover.
+    expect(feedIsLive(0)).toBe(false);
+  });
+
+  it("animates over the page's own calls, and only those", () => {
+    // `activity` is written by `recordActivity` alone, from the tool
+    // instrumentation and the agent-submitted note form — never by a restore
+    // and never by a human's own hand (`lib/awaken/index.ts`).
+    expect(feedIsLive(1)).toBe(true);
+    expect(feedIsLive(50)).toBe(true);
   });
 });

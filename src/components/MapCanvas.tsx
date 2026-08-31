@@ -10,7 +10,6 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
-import { bootMode } from "@/lib/awaken";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import type { MapFeature } from "@/lib/store/tier2";
 import {
@@ -43,6 +42,7 @@ import {
 import { useBrowseStore } from "./browse-store";
 import { useDrawStore, type DrawMode } from "./draw-store";
 import { setFxMap } from "./fx/map-handle";
+import { readChromeVisible, subscribeChromeVisible } from "./panel-store";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
@@ -121,20 +121,28 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
  * shortened instead of overlaid.
  *
  * Zero in human chrome as well, and for the plainest possible reason: there is
- * no inspector there (`page.tsx` mounts it only once an agent is here), so the
- * whole canvas is the corridor. Read from the store rather than from the DOM
- * because it is the store's answer the chrome is rendered from — the same
- * `bootMode` the page and the awakening use — and a padding measured off a
- * class name would be one render behind whichever of the two moved first.
+ * no inspector there, so the whole canvas is the corridor.
+ *
+ * **It reads exactly the fact that mounts `<Inspector/>`** — `chromeVisible`,
+ * the composition of the awakening's mode and the human's own toggle
+ * (`panel-store.ts`), which `page.tsx` renders from. It used to read
+ * `bootMode(mapStore)`, i.e. "has an agent ever acted", and the two agreed only
+ * for as long as an agent's call was the only thing that could raise the lane.
+ * Since T-93 a person can open the chrome on a virgin page and close it over an
+ * agent's work, and either flip would have left `get_map_state().bounds`
+ * describing a corridor that is not on screen — silently, and self-consistently
+ * enough that `midLng === center.lng` would still have held. One fact, one
+ * answer, is the only version of this that cannot lie.
  *
  * This is the single source of truth for the corridor: `applyPadding` puts the
  * camera centre in it and `pushViewFromMap` publishes its edges as `bounds`,
  * so the two can never describe different rectangles. It does not follow the
  * Hide button, because hiding only empties the panel's body — the glass sheet
- * still covers the lane, so the map under it is still not visible.
+ * still covers the lane, so the map under it is still not visible. Closing the
+ * agent view does move it, because that takes the sheet away entirely.
  */
 function inspectorLane(): number {
-  if (bootMode(useMapStore.getState()) === "idle") return 0;
+  if (!readChromeVisible()) return 0;
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;
@@ -248,15 +256,19 @@ export default function MapCanvas() {
       };
       pushBounds();
       const unsubscribe = store.subscribe((state, previous) => {
-        // The chrome flipping is a corridor change like any other: the
-        // inspector lane appears with the agent, and the rectangle a tool is
-        // told about has to shrink with it.
-        if (state.view !== previous.view || bootMode(state) !== bootMode(previous)) pushBounds();
+        if (state.view !== previous.view) pushBounds();
       });
+      // The chrome coming or going is a corridor change like any other: the
+      // inspector lane arrives with the agent — or with a person asking to see
+      // what one sees — and the rectangle a tool is told about has to shrink
+      // with it. Watched through the derived fact, so a manual toggle (which
+      // writes nothing at all to the map store) moves `bounds` too.
+      const unsubscribeChrome = subscribeChromeVisible(pushBounds);
       window.addEventListener("resize", pushBounds);
       return () => {
         window.removeEventListener("resize", pushBounds);
         unsubscribe();
+        unsubscribeChrome();
       };
     };
 
@@ -737,15 +749,6 @@ export default function MapCanvas() {
 
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.view !== previous.view && !fromMap) applyView(state.view);
-      // The first tool call dresses the page in agent chrome, and the
-      // inspector lane it brings takes 336px of the map with it. The camera
-      // centre has to move into what is left, and `bounds` has to say so —
-      // otherwise the agent's very next `get_map_state` describes a corridor
-      // that stopped existing on its own first call.
-      if (bootMode(state) !== bootMode(previous)) {
-        applyPadding();
-        pushBoundsFromMap();
-      }
       // Whatever took a place off the map — an agent's `select_features`, a
       // restored link replacing the selection, the card's own Remove — the
       // card about it goes with it. Left open it would offer "Remove" for a
@@ -794,6 +797,32 @@ export default function MapCanvas() {
       if (!state.category) applyInkBudget();
     });
 
+    /**
+     * The corridor moved, because the lane came or went.
+     *
+     * Three causes, one subscription: the first tool call dressing the page in
+     * agent chrome, a person opening that chrome to look at it, and a person
+     * closing it to get their map back. The camera centre has to move into what
+     * is left and `bounds` has to say so — otherwise the agent's very next
+     * `get_map_state` describes a corridor that stopped existing.
+     *
+     * It watches the derived answer rather than the map store, because two of
+     * those three causes never touch the map store at all: the store
+     * transitions the old `bootMode`-diff branch watched are exactly the ones a
+     * manual flip does not make. Watching the answer also keeps the no-ops
+     * silent — the panel letting go at `waking` changes two inputs and no
+     * corridor, so it must not republish anything.
+     *
+     * Published synchronously rather than left to the `moveend`/`idle` the
+     * re-padding causes, because a tool call can read `bounds` back in the same
+     * tick as the flip that changed it. (The ink budget re-measures itself over
+     * the new corridor on that `idle`, which is soon enough for a numeral.)
+     */
+    const unsubscribeChrome = subscribeChromeVisible(() => {
+      applyPadding();
+      pushBoundsFromMap();
+    });
+
     // `idle` rather than `moveend`: the budget is a fact about the clusters
     // that are on screen, and after a pan those are still being clustered in
     // the worker when `moveend` fires. `idle` is the first moment the answer
@@ -809,6 +838,7 @@ export default function MapCanvas() {
       unsubscribe();
       unsubscribeDraw();
       unsubscribeBrowse();
+      unsubscribeChrome();
       for (const marker of markers.values()) marker.remove();
       markers.clear();
       try {

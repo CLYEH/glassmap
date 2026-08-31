@@ -55,8 +55,32 @@ export const ROUTE_TIMEOUT_MS = 8_000;
 /** FOSSGIS' published limit: at most one request per second, per user. */
 export const ROUTE_MIN_INTERVAL_MS = 1_000;
 
+/**
+ * The longest a call may wait for its turn under that limit before it is
+ * refused instead.
+ *
+ * Waiting is the right answer to a busy second; waiting *without a bound* is
+ * the failure this module's header warns about, because the queue is what the
+ * fetch timeout cannot see — the sixth call in a burst would sit for five
+ * seconds and the twentieth for twenty, and to the client that is a tool that
+ * simply stopped answering. Past the ceiling the call comes back as a refusal
+ * an agent can act on: it is retryable, it says so, and it costs the service
+ * nothing.
+ */
+export const ROUTE_MAX_WAIT_MS = 5_000;
+
 /** Injected so tests never touch the network; the same shape as `FetchJson`. */
 export type RouteFetch = (url: string) => Promise<unknown>;
+
+/**
+ * Every refusal reads the same way round: what went wrong, then the one thing
+ * the agent has to know before it answers the human — that there is nothing on
+ * the map to look at. Exported because plan_route refuses for one reason this
+ * module cannot see (its caller cancelled), and two spellings of "nothing
+ * happened" would read as two different outcomes.
+ */
+export const routeRefusal = (reason: string) =>
+  `${reason}. Nothing was drawn and the map is unchanged`;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -91,8 +115,10 @@ export const httpRouteFetch: RouteFetch = async (url) => {
 let nextSlotAt = 0;
 
 /**
- * Waits until this call's turn, then returns. It never refuses and it never
- * fires early: a call arriving inside the second waits out the remainder.
+ * Waits until this call's turn, then returns — or refuses, when the turn is
+ * further away than ROUTE_MAX_WAIT_MS. A call inside the second is late, never
+ * lost; a call behind five seconds of queue is told so while the agent is
+ * still listening.
  *
  * The slot is taken synchronously, before the first `await`, so two calls made
  * in the same tick leave in the order they were made rather than racing for
@@ -100,11 +126,24 @@ let nextSlotAt = 0;
  * finishes: the policy is about how often we ask, and a slow answer must not
  * make the next caller wait for it as well.
  */
-export async function reserveRouteSlot(): Promise<void> {
+export async function reserveRouteSlot(): Promise<{ ok: true } | { error: string }> {
   const now = Date.now();
   const at = Math.max(now, nextSlotAt);
+  const wait = at - now;
+  if (wait > ROUTE_MAX_WAIT_MS) {
+    // The queue is deliberately *not* extended here. A refused call that still
+    // booked its second would push everything behind it further out, so one
+    // burst would go on refusing calls made long after it — the queue would
+    // grow by exactly the calls it is rejecting.
+    return {
+      error: routeRefusal(
+        `too many route requests at once: this one would have waited ${Math.round(wait / 1000)}s for its turn, and the routing service allows one request per second. Ask again in a moment`,
+      ),
+    };
+  }
   nextSlotAt = at + ROUTE_MIN_INTERVAL_MS;
-  if (at > now) await new Promise<void>((resolve) => setTimeout(resolve, at - now));
+  if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
+  return { ok: true };
 }
 
 /** Tests only: forget the last request, so a suite is not paced by the policy. */
@@ -156,8 +195,14 @@ export function parseRoute(payload: unknown): ParsedRoute | { error: string } {
   const duration = fin(route.duration);
   // Measuring the line ourselves and calling the number the service's would be
   // a different claim than the one the agent reads out; refuse instead.
-  if (distance === undefined || duration === undefined) {
-    return { error: "its route came back without a distance or a duration" };
+  //
+  // Negative is refused for a different reason than missing: it would pass
+  // every other check in this module and come out the far end as "Planned a
+  // walk, -100 m" in the answer *and* in the feed row a human reads. No walk
+  // is shorter than no walk, so a number that says so is not the service's
+  // answer to this question, whatever produced it.
+  if (distance === undefined || duration === undefined || distance < 0 || duration < 0) {
+    return { error: "its route came back without a usable distance or duration" };
   }
 
   const geometry = rec(route.geometry);
@@ -279,22 +324,17 @@ export interface PlannedWalk {
 }
 
 /**
- * Every refusal reads the same way round: what went wrong, then the one thing
- * the agent has to know before it answers the human — that there is nothing on
- * the map to look at.
- */
-const unchanged = (reason: string) => `${reason}. Nothing was drawn and the map is unchanged`;
-
-/**
  * One walk, or one sentence saying why there is none. Waits for its turn under
- * the rate limit first, so a queued call is late rather than refused.
+ * the rate limit first: a queued call is late rather than refused, unless the
+ * queue itself is longer than an agent can be kept waiting.
  */
 export async function planWalk(
   from: LngLat,
   to: LngLat,
   routeFetch: RouteFetch,
 ): Promise<PlannedWalk | { error: string }> {
-  await reserveRouteSlot();
+  const slot = await reserveRouteSlot();
+  if ("error" in slot) return slot;
 
   let payload: unknown;
   try {
@@ -304,7 +344,7 @@ export async function planWalk(
     // and the agent is the one deciding whether to.
     const timedOut = e instanceof Error && e.name === "TimeoutError";
     return {
-      error: unchanged(
+      error: routeRefusal(
         `the routing service could not be reached: ${
           timedOut ? `no answer after ${ROUTE_TIMEOUT_MS / 1000}s` : message(e)
         }`,
@@ -314,7 +354,9 @@ export async function planWalk(
 
   const parsed = parseRoute(payload);
   if ("error" in parsed) {
-    return { error: unchanged(`the routing service could not plan this walk: ${parsed.error}`) };
+    return {
+      error: routeRefusal(`the routing service could not plan this walk: ${parsed.error}`),
+    };
   }
 
   return {

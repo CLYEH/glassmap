@@ -26,6 +26,7 @@ import { MAX_LABEL_CHARS, MAX_SHAPE_POINTS } from "./shapes";
 import {
   DEFAULT_ROUTE_LABEL,
   ROUTE_ATTRIBUTION,
+  ROUTE_MAX_WAIT_MS,
   ROUTE_MIN_INTERVAL_MS,
   ROUTE_SERVICE_URL,
   ROUTE_TIMEOUT_MS,
@@ -379,8 +380,87 @@ describe("plan_route: when the service cannot answer", () => {
         },
       ],
     };
-    expect((await failsWith(() => noDuration)).error).toMatch(/without a distance or a duration/);
+    expect((await failsWith(() => noDuration)).error).toMatch(/without a usable distance/);
     expect((await failsWith(() => "not json at all")).error).toMatch(/cannot read/);
+  });
+
+  it("refuses a negative distance or duration, which no walk can have", async () => {
+    // The one bad number that would otherwise pass every check in the module
+    // and come out the far end as an answer: "Planned a walk, -100 m", in the
+    // JSON the agent reads *and* in the row a human watches. A service having
+    // a bad moment, a proxy rewriting a body, a mirror with a bug - the tool
+    // does not need to know which to know this is not an answer.
+    const backwards = await failsWith((from, to) =>
+      routeOkBody([from, to], -100, ROUTE_FIXTURE_DURATION),
+    );
+    expect(backwards.error).toMatch(/without a usable distance or duration/);
+    expect(backwards.distance_m).toBeUndefined();
+
+    const negativeTime = await failsWith((from, to) =>
+      routeOkBody([from, to], ROUTE_FIXTURE_DISTANCE, -60),
+    );
+    expect(negativeTime.error).toMatch(/without a usable distance or duration/);
+  });
+});
+
+describe("plan_route: when the caller gives up", () => {
+  /** The same call, with a signal the test controls. */
+  const callWith = async (
+    tool: GlassMapTool,
+    controller: AbortController,
+    input: Record<string, unknown>,
+  ): Promise<ToolResult> => (await tool.execute(input, { signal: controller.signal })) as ToolResult;
+
+  it("draws nothing, and asks nothing, when the call was already cancelled", async () => {
+    // A client that has given up is still owed an answer, and the service is
+    // owed no request at all: this one costs a second of somebody else's rate
+    // limit for a route nobody will read.
+    const { store, byName, requests } = mapReady();
+    const controller = new AbortController();
+    controller.abort();
+    const out = await callWith(byName.plan_route, controller, {
+      from: "osm:node:2",
+      to: "osm:node:1",
+    });
+
+    expect(out.error).toMatch(/cancelled/);
+    expect(out.error).toMatch(/map is unchanged/);
+    expect(out.state?.drawings).toEqual({ count: 0, items: [] });
+    expect(requests).toEqual([]);
+    expect(store.getDrawings()).toEqual([]);
+  });
+
+  it("does not draw a route the caller stopped waiting for", async () => {
+    // The reason this tool reads the signal at all: it is the only one whose
+    // window is seconds wide and ends in a write. A client that cancels
+    // mid-request has no record of this call, so a line appearing on the human's
+    // map afterwards belongs to nobody - it cannot be explained, and the agent
+    // cannot even name the id to remove it.
+    const controller = new AbortController();
+    const requests: string[] = [];
+    const store = createMemoryToolStore({ features: FIXTURE_FEATURES, view: VIEW });
+    resetRouteThrottle();
+    const byName = Object.fromEntries(
+      createMapTools(store, {
+        routeFetch: async (url) => {
+          requests.push(url);
+          // The client gives up while the service is answering.
+          controller.abort();
+          return routeOkBody([DAAN, MAIN]);
+        },
+      }).map((t) => [t.name, t]),
+    );
+    const out = await callWith(byName.plan_route, controller, {
+      from: "osm:node:2",
+      to: "osm:node:1",
+    });
+
+    // The request did go out - it was already in flight - but nothing it
+    // brought back reached the map.
+    expect(requests).toHaveLength(1);
+    expect(out.error).toMatch(/cancelled/);
+    expect(out.drawing_id).toBeUndefined();
+    expect(store.getDrawings()).toEqual([]);
   });
 });
 
@@ -431,6 +511,69 @@ describe("plan_route: FOSSGIS' one request per second", () => {
         [121.535, 25.033],
         [121.53575, 25.0295],
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a call whose turn is further off than an agent can be kept waiting", async () => {
+    // Waiting is right for a busy second and wrong for a busy minute: the fetch
+    // timeout cannot see the queue, so an unbounded wait is the one failure an
+    // agent can neither report nor retry - it just looks like the tool stopped
+    // answering. Past the ceiling it gets a refusal it can act on instead, and
+    // the service is asked nothing.
+    const { store, byName, requests } = mapReady();
+    vi.useFakeTimers();
+    try {
+      resetRouteThrottle();
+      const ask = () => call(byName.plan_route, { from: "osm:node:2", to: "osm:node:1" });
+      // Slots at 0s, 1s ... 5s: the last of them waits exactly the ceiling and
+      // is still served, because the boundary is a wait too long, not one long
+      // enough.
+      const queued = Array.from({ length: ROUTE_MAX_WAIT_MS / ROUTE_MIN_INTERVAL_MS + 1 }, ask);
+      const refused = await ask();
+
+      expect(refused.error).toMatch(/too many route requests at once/);
+      expect(refused.error).toMatch(/Ask again in a moment/);
+      expect(refused.error).toMatch(/map is unchanged/);
+      expect(refused.drawing_id).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(ROUTE_MAX_WAIT_MS);
+      const served = await Promise.all(queued);
+      expect(served.map((o) => o.error)).toEqual(served.map(() => undefined));
+      // Six went out, the seventh never did: a refusal costs the service nothing.
+      expect(requests).toHaveLength(6);
+      expect(store.getDrawings()).toHaveLength(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not push the queue back for a call it refused", async () => {
+    // A refusal that still booked its second would make one burst refuse calls
+    // made long after it: the queue would grow by exactly the calls it is
+    // rejecting. The next free second has to be the one the refused call did
+    // not take.
+    const { byName, requests } = mapReady();
+    vi.useFakeTimers();
+    try {
+      resetRouteThrottle();
+      const ask = () => call(byName.plan_route, { from: "osm:node:2", to: "osm:node:1" });
+      const queued = Array.from({ length: 6 }, ask);
+      expect((await ask()).error).toMatch(/too many route requests at once/);
+
+      await vi.advanceTimersByTimeAsync(ROUTE_MAX_WAIT_MS);
+      await Promise.all(queued);
+      expect(requests).toHaveLength(6);
+
+      // Now at 5s, with the last slot taken at 5s. The next one is 6s - not 7s,
+      // which is where it would be if the refusal had taken a slot of its own.
+      const after = ask();
+      await vi.advanceTimersByTimeAsync(ROUTE_MIN_INTERVAL_MS - 1);
+      expect(requests).toHaveLength(6);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await after).error).toBeUndefined();
+      expect(requests).toHaveLength(7);
     } finally {
       vi.useRealTimers();
     }

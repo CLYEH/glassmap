@@ -81,6 +81,7 @@ import {
   httpRouteFetch,
   planWalk,
   ROUTE_ATTRIBUTION,
+  routeRefusal,
   type RouteFetch,
 } from "./route";
 
@@ -998,9 +999,23 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     // The line, its distance and its duration come from a third-party service,
     // and the state it returns carries labels the human typed.
     annotations: { untrustedContentHint: true },
-    execute: async (input) => {
+    execute: async (input, opts) => {
       const inp = input ?? {};
       const state = () => describeState(store);
+      // The only tool whose window is seconds wide and ends in a write, which
+      // is what makes the caller's signal worth reading here: a client that
+      // gave up must not find a shape on its map that no answer ever mentioned.
+      // Checked twice - before the request, so a cancelled call costs the
+      // service nothing, and again before the drawing, which is the moment the
+      // map would otherwise change behind the client's back. The request in
+      // flight is not itself cancelled: `RouteFetch` takes a url and nothing
+      // else, and widening that contract is a change to every injected fetch
+      // rather than a fix to this one.
+      const cancelled = () => opts?.signal?.aborted === true;
+      const givenUp = () => ({
+        error: routeRefusal("the caller cancelled this call before the route could be drawn"),
+        state: state(),
+      });
 
       // Everything free happens before the request: one of the service's
       // seconds must not be spent on a call that was never going to be drawn.
@@ -1028,8 +1043,12 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         };
       }
 
+      if (cancelled()) return givenUp();
       const walk = await planWalk(from.point, to.point, routeFetch);
       if ("error" in walk) return { error: walk.error, state: state() };
+      // The seconds the service took are the seconds a client had to give up
+      // in, so this is where a phantom drawing would come from.
+      if (cancelled()) return givenUp();
 
       const text = label.text ?? defaultRouteLabel(from.name, to.name);
       const drawing = store.addDrawing({

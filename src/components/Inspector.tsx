@@ -10,9 +10,9 @@ import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
 import { usePanelStore } from "./panel-store";
 import { selectionClaim, type SelectionClaim } from "./restored-model";
-import { useAwakenMode } from "./useAwakenMode";
 import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
+import { useAwakenMode } from "./useAwakenMode";
 import { SHEET_TIER, useMediaQuery } from "./useMediaQuery";
 
 /** Who put it there. Teal = agent, rose = human, as on the map itself. */

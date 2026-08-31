@@ -388,6 +388,8 @@ test.describe("share link (T-31)", () => {
     // map outgrows a URL" test uses the identical shapes to cross
     // MAX_SHARE_URL_BYTES. One ring is no longer enough — the v3 polyline wire
     // (T-95) fits it in a link — but nothing caps how many shapes a map holds.
+    // The margin is thinner than five suggests: THREE rings still fit (7,584
+    // of 8,192 bytes, measured), so do not trim this below four.
     await page.evaluate((ring) => {
       const store = window.__glassmapStore!.getState();
       for (let i = 0; i < 5; i += 1) {

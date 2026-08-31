@@ -131,11 +131,25 @@ export function AgentWhisper() {
             </svg>
             This map is readable
           </h4>
-          <p>
-            Point an AI agent — ChatGPT desktop, at this page — and it sees the map as data, not
-            pixels. The moment it acts, the map wakes: you will see every move it makes, right
-            here.
-          </p>
+          {/* Two sentences for two pages. The invitation is written for a map
+              nothing has touched, and over a chrome closed by hand it would be
+              in the future tense about something that has already happened —
+              the count beside the spark says so. The replacement claims only
+              the past ("has acted"), which is what `activity` proves; whether
+              an agent is still there is not something this page can know. */}
+          {waiting ? (
+            <p data-testid="agent-card-copy">
+              An agent has acted on this map, and its view is closed. The calls beside the spark
+              are the ones you have not seen; reopening shows every one of them, and the map they
+              changed.
+            </p>
+          ) : (
+            <p data-testid="agent-card-copy">
+              Point an AI agent — ChatGPT desktop, at this page — and it sees the map as data, not
+              pixels. The moment it acts, the map wakes: you will see every move it makes, right
+              here.
+            </p>
+          )}
           <div className="spark-try">
             <b>Try asking</b>
             {ASK_CARDS[0].question}

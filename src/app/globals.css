@@ -1065,7 +1065,15 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
 /* Beside Hide, and deliberately not styled like it: Hide collapses this panel's
    body and keeps the lane, this takes the whole agent chrome off the page and
    gives the map back (T-93). The `margin-left: auto` belongs to Hide, which is
-   first — these two travel together as the head's right-hand pair. */
+   first — these two travel together as the head's right-hand pair.
+
+   It costs the summary beside the title most of its width (measured: 136px ->
+   57px at 1440, 130px -> 24px at 1240), and that is the trade taken knowingly.
+   `.insp-sub` is already the element this row yields with — `min-width: 0` and
+   an ellipsis, written for exactly this crowding — and every count in it is
+   repeated in the section heads a line below, whereas a control that only says
+   "Close" would be indistinguishable from the "Hide" next to it, which is the
+   one thing the design says this label may not be. */
 .insp-close {
   background: none;
   border: 1px solid var(--hairline);

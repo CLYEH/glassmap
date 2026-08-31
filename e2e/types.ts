@@ -42,6 +42,41 @@ export interface ToolResult {
   unsearched_categories?: UnsearchedCategoryResult[];
   category_counts?: Record<string, number>;
   matched?: number;
+  // remove_from_map (T-90): every id the caller named, accounted for by
+  // bucket. Mirrors `RemoveOutput` in src/lib/map-tools/remove.ts.
+  removed?: RemovedResult[];
+  removed_count?: number;
+  refused?: RefusedResult[];
+  refused_count?: number;
+  not_selected?: string[];
+  not_selected_count?: number;
+  malformed_ids?: MalformedResult[];
+  malformed_count?: number;
+  known_ids?: string[];
+  known_count?: number;
+}
+
+/** One id `remove_from_map` actually took off the map. */
+export interface RemovedResult {
+  id: string;
+  kind: "drawing" | "annotation" | "selection";
+  source?: "agent" | "user";
+  label?: string;
+  note?: string;
+}
+
+/** A mark `remove_from_map` refused because the human made it. */
+export interface RefusedResult {
+  id: string;
+  kind: "drawing" | "annotation";
+  source: "user";
+  reason: string;
+}
+
+/** An id that looked like a mark id but was not written as one. */
+export interface MalformedResult {
+  id: string;
+  error: string;
 }
 
 /** A category that exists city-wide but was not part of this answer. */

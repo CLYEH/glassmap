@@ -7,6 +7,7 @@ import { useMapStore, type LngLat } from "@/lib/store/map-store";
 import { createFxDriver, type FxDriver, type LiveFx } from "./driver";
 import { seg } from "./easing";
 import { fxEffect } from "./effects";
+import { createGhostMemory } from "./ghosts";
 import { onHumanFx } from "./human-events";
 import { centroidOf, planForEntry, planForHuman, type FxSource } from "./plan";
 import { createFxContext, type FxContext } from "./surfaces";
@@ -122,6 +123,7 @@ export function FxLayer() {
     const forceReducedMotion = params.get("rm") === "1";
     const context: FxContext = createFxContext(viewport, overlay);
     const anchors = makeAnchorIndex();
+    const ghosts = createGhostMemory();
     const rowGlow = makeGlow();
 
     const source = (): FxSource => {
@@ -133,6 +135,7 @@ export function FxLayer() {
         annotations: state.annotations,
         selection: state.selection,
         anchorOf: (id) => index.get(id) ?? null,
+        ghostOf: (id) => ghosts.recall(id),
       };
     };
 
@@ -177,6 +180,10 @@ export function FxLayer() {
     };
 
     const unsubscribeStore = useMapStore.subscribe((state, previous) => {
+      // Before the feed, always: a removal's row is written one store write
+      // after the mark left, so this transition is the last place its outline
+      // exists at all (`ghosts.ts`).
+      ghosts.observe(previous, state);
       if (state.activity !== previous.activity) playNew();
     });
 

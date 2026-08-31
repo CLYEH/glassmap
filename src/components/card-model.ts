@@ -153,8 +153,8 @@ export interface CardSubjects {
  * longer holds it.
  *
  * Null is the answer to the one race a card has: a tool removes the note a
- * human is reading about (`remove_annotation`, `undo`), and the card must stop
- * offering "Remove" for something that is already gone. A selected *place* is
+ * human is reading about (`remove_from_map`), and the card must stop offering
+ * "Remove" for something that is already gone. A selected *place* is
  * different — it stays in `features` after a deselect, so nothing here can see
  * that it left the map, and the map's own selection subscription closes the
  * card instead (`closeFor`, MapCanvas).

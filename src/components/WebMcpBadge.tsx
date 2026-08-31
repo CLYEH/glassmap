@@ -76,7 +76,7 @@ export function WebMcpBadge() {
       <span aria-hidden className="live-dot" />
       <span className="badge-label">{BADGE_LABEL[claim]}</span>
       {/* The protocol rides with the count rather than with the surface list:
-          below 1361px there is no room for the surface, and "12 tools" with no
+          below 1361px there is no room for the surface, and "13 tools" with no
           word for what is reading them is a number about nothing. */}
       <span className="badge-tools">{live ? `${tools} · WebMCP` : tools}</span>
       <span className="badge-surface">{where}</span>

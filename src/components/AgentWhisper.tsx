@@ -143,9 +143,12 @@ export function AgentWhisper() {
               an agent is still there is not something this page can know. */}
           {waiting ? (
             <p data-testid="agent-card-copy">
-              An agent has acted on this map, and its view is closed. The calls beside the spark
-              are the ones you have not seen; reopening shows every one of them, and the map they
-              changed.
+              {/* No mention of "the calls beside the spark": between a close and
+                  the next call the ring is up but the count chip is not, and a
+                  sentence pointing at a chip that is not there would be the
+                  small lie this card exists to avoid. */}
+              An agent has acted on this map, and its view is closed. Reopening shows every call
+              it made, and the map they changed.
             </p>
           ) : (
             <p data-testid="agent-card-copy">

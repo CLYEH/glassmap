@@ -10,6 +10,7 @@ import { LoadedCategories } from "@/components/LoadedCategories";
 import { MarkerStatus } from "@/components/MarkerStatus";
 import { OnTheMapCard } from "@/components/OnTheMapCard";
 import { PlacesDock } from "@/components/PlacesTray";
+import { SearchBox } from "@/components/SearchBox";
 import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
@@ -30,8 +31,9 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 /**
  * The map is the page, and the page has two states.
  *
- * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the three
- * things they can do (Draw, Note, Share), the Places dock — the map's scale on
+ * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the
+ * search box under it, the three things they can do (Draw, Note, Share), the
+ * Places dock — the map's scale on
  * its pill, the key and the browsable city inside it — the attribution, and one
  * whisper in the corner saying the map is also readable by agents. No feed, no
  * tool roster, no "WebMCP live" badge, no inspector lane — a person who came to
@@ -132,6 +134,11 @@ export default function Home() {
         <div className="scrim-bottom" aria-hidden />
 
         <BrandBar />
+        {/* Under the brand in both chromes: "where is X", answered from the
+            loaded data with no agent in the room (T-98). Mounted before the
+            feed and the ticker because it is the fixed point of that column —
+            they arrive below it, and it never moves for them. */}
+        <SearchBox />
         <RestoredChip />
         {agent ? <ActivityFeed /> : null}
         {agent ? <ActivityTicker /> : null}

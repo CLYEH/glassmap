@@ -384,6 +384,156 @@ body[data-fx="off"] .caustic {
   opacity: 0.6;
   flex-shrink: 0;
 }
+/* ---------------------------------------------------- search (T-98)
+   "Where is X" without an agent in the room — the last question this map
+   could only be asked through a tool call.
+
+   It sits under the brand, in the column a person looks for search in, and it
+   is the FIXED point of that column: the agent's own surfaces start below it
+   (`.feed` here, `.ticker` and the two centred chips on the sheet tier) rather
+   than moving it when they arrive. A human surface that jumped 50px because an
+   agent called a tool would be the opposite of what this page claims.
+
+   302px is the feed's own width, so the left column reads as one column in
+   both chromes. Below 921px there is no feed and no lane, and the box takes
+   the full width instead — a phone has no room for a 302px box beside
+   anything, and the row below it (the ticker) has always been full width. */
+.search-box {
+  position: absolute;
+  top: 62px;
+  left: 14px;
+  z-index: 21;
+  width: 302px;
+}
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  color: var(--text-low);
+}
+/* Rose, because focus here is a person acting — the same grammar the drawings
+   and the browsed beads are painted in. It replaces the global teal
+   focus-visible ring on the input itself, which would have said "agent" about
+   the one control on this page that can only ever be a human's. The rest of
+   the stack is `.lg`'s, restated so adding the rim does not drop the glass. */
+.search-box:focus-within .search-field {
+  box-shadow:
+    0 18px 44px rgba(3, 7, 13, 0.46),
+    0 1px 2px rgba(3, 7, 13, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(244, 143, 177, 0.45);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-hi);
+}
+.search-input::placeholder {
+  color: var(--text-low);
+}
+.search-input:focus,
+.search-input:focus-visible {
+  outline: none;
+}
+/* The dropdown hangs from the field and scrolls rather than growing: eight
+   rows plus a foot line is taller than the map on a phone held sideways, and
+   `.map-wrap` clips what overflows it.
+
+   Only the rows scroll, exactly as in the Places tray: the foot line is what
+   the box is being honest with ("488 more", "18 more kinds of place load from
+   the Places tray"), and a disclosure a person has to scroll to find is one
+   they will not read. */
+.search-drop {
+  margin-top: 8px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(368px, calc(100vh - 220px));
+}
+.search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.search-row:hover,
+.search-row.on {
+  background: rgba(255, 255, 255, 0.075);
+}
+.sr-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+/* Name over English name, like the card and the sidebar rows (T-96): one
+   column so the pair reads as one place with two names. */
+.sr-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.sr-name,
+.sr-name-en {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-name {
+  font-size: 12px;
+  color: var(--text-hi);
+}
+.sr-name-en {
+  font-size: 10.5px;
+  color: var(--text-low);
+}
+.sr-what {
+  font-size: 10.5px;
+  color: var(--text-low);
+  white-space: nowrap;
+}
+.sr-d {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+  white-space: nowrap;
+}
+/* The two honest foot lines: what the cap left out, and what was never
+   fetched to be searched. Never inside the scroller (see `.search-drop`). */
+.search-note {
+  flex-shrink: 0;
+  padding: 7px 9px 6px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-low);
+}
+.search-list + .search-note {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--hairline-2);
+}
+
 /* ---------------------------------------------------- tools (top right)
    Draw, Note, Share: the three things a person can do to this map. On screen
    in both chromes — an agent arriving does not take the map away from the
@@ -425,13 +575,17 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
 }
 
 /* ---------------------------------------------------- agent activity feed */
+/* Second in the left column, not first: the search box (T-98) holds the band
+   under the brand in both chromes, so the feed arrives beneath it. 110px is
+   62 (the box's own top) + 37 (its measured height) + 11, and the same 48px
+   comes back out of `max-height` so the feed's bottom edge is where it was. */
 .feed {
   position: absolute;
-  top: 62px;
+  top: 110px;
   left: 14px;
   z-index: 15;
   width: 302px;
-  max-height: calc(100% - 150px);
+  max-height: calc(100% - 198px);
   display: flex;
   flex-direction: column;
   /* The lit ring and the lens are painted into the box; a panel that scrolls
@@ -2084,10 +2238,12 @@ html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-pan
   }
 }
 /* mid tier, busy: an expanded feed ends above the note-pin card, so the
-   presenter's expand click never buries the annotation payoff. */
+   presenter's expand click never buries the annotation payoff. The 48px the
+   search box pushed the feed down by comes out of here too, so the bottom
+   edge this number is really about has not moved. */
 @media (min-width: 921px) and (max-width: 1240px) {
   .feed.has-calls:not(.collapsed) {
-    max-height: calc(50vh - 145px);
+    max-height: calc(50vh - 193px);
   }
 }
 
@@ -2245,6 +2401,31 @@ html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-pan
     top: 12px;
     left: 12px;
   }
+  /* Wider than the desktop box, because down here nothing shares its row:
+     there is no feed and no lane, and 302px beside a 390px screen's brand is
+     a box nobody could type a place name into. Capped at 460 so a tablet gets
+     a search field rather than an 820px trough. The drop is capped against the
+     map rather than the viewport — in agent chrome the map ends at 54vh (the
+     other side of the sheet) and `.map-wrap` clips what runs past it. */
+  .search-box {
+    top: 58px;
+    left: 12px;
+    width: min(calc(100% - 24px), 460px);
+  }
+  .search-drop {
+    max-height: min(300px, calc(100vh - 200px));
+  }
+  /* An open dropdown may cover the map; it may never cover the licence. Down
+     here in agent chrome the map is only 54vh tall and the bottom bar rides
+     just above the sheet, so the drop stops short of the attribution row
+     instead of over it — the same clearance the tray keeps at <=640. 235px is
+     the drop's own top (103) plus the bar's height and offset, measured at
+     390x844 where the band is tightest. */
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    .search-drop {
+    max-height: min(300px, calc(54vh - 235px));
+  }
 
   /* wider-than-phone sheet: centre the content column so cards don't
      stretch edge to edge (no effect at <=660px) */
@@ -2261,9 +2442,12 @@ html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-pan
     margin-right: auto;
   }
 
+  /* One band lower than it used to sit: the search box holds the second row
+     here (see `.search-box` below), and the agent's line arrives under the
+     human's rather than displacing it. */
   .ticker {
     position: absolute;
-    top: 58px;
+    top: 104px;
     left: 12px;
     right: 12px;
     z-index: 15;
@@ -2870,9 +3054,10 @@ body[data-fx="off"] .awaken-stage {
 }
 
 @media (max-width: 920px) {
-  /* Below the ticker, both of them — never over the brand. */
+  /* Below the ticker, both of them — never over the brand, and since T-98
+     never over the search box either: brand, search, ticker, then these. */
   .awaken-cap,
   .restored-chip {
-    top: 104px;
+    top: 150px;
   }
 }

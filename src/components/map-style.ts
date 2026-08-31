@@ -21,7 +21,7 @@ export const STYLE_ATTRIBUTION = [
   { href: "https://www.openstreetmap.org/copyright", text: "OpenStreetMap", prefix: "Data from " },
 ] as const;
 
-/** One colour per category; the legend in StateOverlay reuses these. */
+/** One colour per category; the Places tray's key and the inspector reuse these. */
 export const CATEGORY_COLOR: Record<FeatureCategory, string> = {
   mrt_station: "#d7263d",
   park: "#2f9e44",

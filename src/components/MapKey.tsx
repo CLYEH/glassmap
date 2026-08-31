@@ -23,6 +23,11 @@ function Swatch({ category }: { category: FeatureCategory }) {
  * counted from the store, so it can never advertise data the map is not
  * holding. "Places" is the human word for what the tools call features.
  *
+ * Until the bundled data lands the rows say "…", the same "not counted yet" the
+ * dock pill says and for the same reason: six confident zeros are a lie during
+ * load, and worse than a lie beside a pill that has just admitted it does not
+ * know yet — this is the surface whose job is to account for that number.
+ *
  * The first section of the Places tray ("Already here"), above the eighteen
  * categories a tap can load ("More places"). Both are the same question — what
  * places are there? — and they used to be answered by two surfaces on the same
@@ -41,6 +46,7 @@ function Swatch({ category }: { category: FeatureCategory }) {
 export function MapKey() {
   const features = useMapStore((s) => s.features);
   const rows = useMemo(() => bundledKeyRows(features), [features]);
+  const counted = features.length > 0;
 
   return (
     <section className="tray-sec" data-testid="legend">
@@ -62,7 +68,7 @@ export function MapKey() {
           >
             <Swatch category={category} />
             <span className="lg-name">{CATEGORY_PLURAL[category]}</span>
-            <span className="lg-n">{number(count)}</span>
+            <span className="lg-n">{counted ? number(count) : "…"}</span>
           </span>
         ))}
       </div>

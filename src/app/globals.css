@@ -1900,9 +1900,16 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
   /* In agent chrome the map — and the dock inside it — ends at the top of the
      sheet, and `.map-wrap` clips what overflows it, so down here the tray's
      ceiling is the visible map (54vh, the other side of the 46vh sheet) rather
-     than the viewport. Same subtraction otherwise. */
+     than the viewport. Same subtraction otherwise.
+
+     The floor is not decoration: 54vh of a 390px-tall screen (a phone held
+     sideways, in agent chrome) is 210.6px, and the subtraction leaves 0.6px —
+     a tray of head, foot and a one-pixel scroller, with no key row and no place
+     chip a person could reach. Below the floor the tray asks for more than the
+     map is tall and `.map-wrap` clips the top of it, which costs the head but
+     keeps the two things the tray is for. */
   html[data-chrome="awake"] .app .tray-body {
-    max-height: calc(54vh - 210px);
+    max-height: max(120px, calc(54vh - 210px));
   }
   .tray-grid {
     grid-template-columns: repeat(2, 1fr);

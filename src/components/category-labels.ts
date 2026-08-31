@@ -18,10 +18,10 @@ export const LEGEND_ORDER: readonly FeatureCategory[] = [
 ];
 
 /**
- * Legend chips. "Listings (sample)" is a disclosure, not decoration: the
- * listings are the one fabricated dataset on the map, and since the labels on
- * the map itself only appear from z14 the legend is the only place a viewer of
- * the opening view is told. It must stay wherever the full label is shown.
+ * Key chips. "Listings (sample)" is a disclosure, not decoration: the listings
+ * are the one fabricated dataset on the map, and since the labels on the map
+ * itself only appear from z14 the key in the Places tray is the only place a
+ * viewer is told. It must stay wherever the full label is shown.
  */
 export const CATEGORY_PLURAL: Record<FeatureCategory, string> = {
   park: "Parks",

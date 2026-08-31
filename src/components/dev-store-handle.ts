@@ -12,10 +12,11 @@ declare global {
      */
     __glassmapStore?: typeof useMapStore;
     /**
-     * Dev/QA handle on Places browsing. The panel that will drive it is a
-     * later task; until it exists this is the only way to reach the browse
-     * layer, and it is the same handle the panel will call:
-     * `__glassmapBrowse.getState().browse("cafe")` / `.clear()`.
+     * Dev/QA handle on Places browsing — the same store `PlacesDock` drives,
+     * so a run can put a category on the map without hunting for a chip in a
+     * tray it would first have to open:
+     * `__glassmapBrowse.getState().browse("cafe")`, `.remove("cafe")`,
+     * `.clear()`.
      */
     __glassmapBrowse?: typeof useBrowseStore;
   }
@@ -31,9 +32,11 @@ const isDev = process.env.NODE_ENV !== "production";
  * renders would be to run the tool layer. QA drives
  * `__glassmapStore.getState().addDrawing(...)` instead.
  *
- * The browse store rides the same handle for the same reason, one step
- * earlier: the Places panel is a later task, so today nothing in the UI can
- * turn the browse layer on.
+ * The browse store rides the same handle for a nearby reason: the Places tray
+ * can turn the browse layer on, but only through a tray a run has to open and
+ * a chip whose position depends on how many kinds are painted — so a check
+ * about what the layer *draws* says what it means by calling the store the
+ * tray calls.
  */
 export function useDevStoreHandle() {
   useEffect(() => {

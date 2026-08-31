@@ -1326,7 +1326,14 @@ html[data-chrome="awake"] .app .note-pop {
   z-index: 20;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  /* Three browsed kinds and the pill are wider than a narrow window, and the
+     dock is centred on the corridor rather than clipped by it. It wraps
+     upward, which is the only direction there is down here — the tray and the
+     hint are anchored to the dock's own top edge, so they ride up with it. */
+  flex-wrap: wrap;
+  max-width: calc(100vw - 24px);
 }
 html[data-chrome="awake"] .app .dock {
   left: calc((100% - var(--lane) - 10px) / 2);
@@ -1363,7 +1370,19 @@ html[data-chrome="awake"] .app .dock {
 .dock[data-tray-open="true"] .dock-pill .caret {
   transform: rotate(180deg);
 }
-/* The browsed category, named and counted. Rose, because a person asked for
+/* The browsed kinds, up to three, in the order they were asked for. A row of
+   its own inside the dock so the three stay together when the dock wraps: the
+   pill is one thing ("Places, 2,063 of them"), the strip is another ("and
+   these are painted"), and a wrap that split the strip in half would read as
+   two unrelated groups. */
+.dock-actives {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* One browsed category, named and counted. Rose, because a person asked for
    it — the same grammar the grains on the map are painted in. */
 .dock-active {
   display: flex;
@@ -2115,6 +2134,22 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
     bottom: 12px;
     transform: none;
     justify-content: center;
+    max-width: none;
+    /* One band, and one band only: the row below it is the attribution, whose
+       clearance (`.bottom-bar`, 62px) is measured for a dock one chip tall. A
+       second wrapped line would rise into a licence condition. */
+    flex-wrap: nowrap;
+  }
+  /* Which is what the strip gives up instead: the three chips scroll sideways
+     rather than stacking, and each says only what it is. The counts are two
+     taps away in the tray, on the rows they were counted from. */
+  .dock-actives {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .dock-active .n {
+    display: none;
   }
   .bottom-bar {
     bottom: 62px;

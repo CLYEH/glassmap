@@ -30,8 +30,8 @@ export function MarkerStatus() {
   const tier2Features = useMapStore((s) => s.tier2Features);
   const zoom = useMapStore((s) => s.view.zoom);
   const sources = useMapStore(selectionProvenance);
-  const category = useBrowseStore((s) => s.category);
-  const loading = useBrowseStore((s) => s.loading);
+  const categories = useBrowseStore((s) => s.categories);
+  const pending = useBrowseStore((s) => s.pending);
   const threshold = useBrowseStore((s) => s.threshold);
 
   const beads = useMemo(() => {
@@ -45,12 +45,23 @@ export function MarkerStatus() {
   );
 
   const browsed = useMemo(
-    () => browsePointsToGeoJson(tier2Features, category, selection).features.length,
-    [tier2Features, category, selection],
+    () => browsePointsToGeoJson(tier2Features, categories, selection).features.length,
+    [tier2Features, categories, selection],
   );
 
   const human = beads.filter((f) => f.properties?.prov === "user").length;
   const counted = Number.isFinite(threshold) ? String(threshold) : "none";
+  // The whole browsed set, in the order the human asked for it — the same
+  // order the slots on the map are numbered in, so a run reading this span can
+  // say which kind a mixed cluster is mixed out of. Comma-separated and never
+  // sorted: "cafe,bar" and "bar,cafe" are different maps, because the second
+  // one had bars painted first and cafes would be the next thing evicted.
+  const browsing = categories.join(",");
+  // `places` counts places, not (category, place) pairs: a bakery that also
+  // serves coffee is one grain on the map under either tag, and this span is
+  // the only place a headless run can check that. One `min`/`counted` pair for
+  // the whole set, because the ink budget is one allowance over the screen.
+  const painted = `places=${browsed} min=${browseTierMinimum(zoom)} counted>=${counted}`;
 
   return (
     <>
@@ -58,11 +69,11 @@ export function MarkerStatus() {
         {`beads=${beads.length} user=${human} rings=${rings}`}
       </span>
       <span data-testid="browse-state" className="gm-machine">
-        {category === null
-          ? loading
+        {categories.length === 0
+          ? pending.length > 0
             ? "loading"
             : "off"
-          : `${category} places=${browsed} min=${browseTierMinimum(zoom)} counted>=${counted}`}
+          : `${browsing} ${painted}`}
       </span>
     </>
   );

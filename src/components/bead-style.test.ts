@@ -158,41 +158,68 @@ describe("selectionProvenance", () => {
 describe("the browse layer", () => {
   const cafes = [poi("osm:node:1", [121.5, 25]), poi("osm:node:2", [121.6, 25])];
 
+  /** A bakery that also serves coffee — the dual tagging the pipeline emits. */
+  const bakeryCafe: MapFeature = {
+    ...poi("osm:node:9", [121.4, 25], "bakery"),
+    properties: {
+      id: "osm:node:9",
+      name: "both",
+      category: "bakery",
+      categories: ["bakery", "cafe"],
+      source: "osm",
+    },
+  };
+
   it("paints nothing at all until a human asks for a category", () => {
     // The calm-map law: nothing is on this map that was not acted on or
     // browse-invoked.
-    expect(browsePointsToGeoJson(cafes, null).features).toEqual([]);
+    expect(browsePointsToGeoJson(cafes, []).features).toEqual([]);
   });
 
-  it("paints only the category asked for", () => {
+  it("paints only the categories asked for", () => {
     const mixed = [...cafes, poi("osm:node:3", [121.7, 25], "bakery")];
-    expect(browsePointsToGeoJson(mixed, "cafe").features.map((f) => f.properties?.id)).toEqual([
+    expect(browsePointsToGeoJson(mixed, ["cafe"]).features.map((f) => f.properties?.id)).toEqual([
       "osm:node:1",
       "osm:node:2",
     ]);
+    expect(
+      browsePointsToGeoJson(mixed, ["cafe", "bakery"]).features.map((f) => f.properties?.id),
+    ).toEqual(["osm:node:1", "osm:node:2", "osm:node:3"]);
   });
 
   it("includes a dual-tagged place under either of its tags", () => {
     // A bakery that also serves coffee is tagged both ways in the pipeline;
     // browsing cafes has to find it, or the count under a numeral is wrong.
-    const both: MapFeature = {
-      ...poi("osm:node:9", [121.4, 25], "bakery"),
-      properties: {
-        id: "osm:node:9",
-        name: "both",
-        category: "bakery",
-        categories: ["bakery", "cafe"],
-        source: "osm",
-      },
-    };
-    expect(browsePointsToGeoJson([both], "cafe").features).toHaveLength(1);
+    expect(browsePointsToGeoJson([bakeryCafe], ["cafe"]).features).toHaveLength(1);
+  });
+
+  it("draws a dual-tagged place once when both of its tags are browsed", () => {
+    // The count under a numeral is a count of *places*. Emitting the same shop
+    // once per matching category would put two grains on one doorway and make
+    // every cluster that contains it claim one place too many.
+    const collection = browsePointsToGeoJson([bakeryCafe], ["cafe", "bakery"]);
+    expect(collection.features).toHaveLength(1);
+    // Painted as the kind that was asked for first, so the slot is the one the
+    // human would name if you pointed at the dot.
+    expect(collection.features[0].properties?.slot).toBe(0);
+  });
+
+  it("numbers each place with the browsed kind it was painted under", () => {
+    // The slot is what makes "these all agree" decidable inside the style
+    // (`smin === smax`), so a cluster can tell a numeral about one kind of
+    // place from a numeral about a mixture. It is an index into the browsed
+    // set, not into the 18 categories — the set is what the eye is comparing.
+    const mixed = [...cafes, poi("osm:node:3", [121.7, 25], "bakery")];
+    expect(
+      browsePointsToGeoJson(mixed, ["bakery", "cafe"]).features.map((f) => f.properties?.slot),
+    ).toEqual([1, 1, 0]);
   });
 
   it("leaves out the places that are already beads", () => {
     // Otherwise a selected cafe carries two marks and is counted twice: once
     // as a bead and once inside a grain cluster's numeral.
     expect(
-      browsePointsToGeoJson(cafes, "cafe", ["osm:node:1"]).features.map((f) => f.properties?.id),
+      browsePointsToGeoJson(cafes, ["cafe"], ["osm:node:1"]).features.map((f) => f.properties?.id),
     ).toEqual(["osm:node:2"]);
   });
 });
@@ -375,10 +402,39 @@ describe("the bead layers", () => {
     expect([...BEAD_LAYER_IDS]).toEqual(ids);
   });
 
-  it("paints the browse grains in the human's rose", () => {
+  it("paints the browse grains in the human's rose, whatever they hold", () => {
     // Browsing is something a person did, so its ink is the human's — the same
-    // colour a hand-drawn shape uses.
+    // colour a hand-drawn shape uses. One colour for the whole field even with
+    // three categories painted: the ink says who asked, and all of it was
+    // asked for by the same person.
     expect(paintOf(BROWSE_GRAIN_LAYER)["circle-color"]).toBe("#c2255c");
+  });
+
+  it("counts whether a browse cluster holds one kind of place or several", () => {
+    // The lowest and the highest browsed slot inside the cluster: equal means
+    // every place under the numeral is the same kind. Aggregated by the source
+    // because the answer is otherwise lost the moment supercluster coalesces
+    // the points, and written in slots rather than category names so it
+    // survives a person adding a category without the source being rebuilt.
+    // Nothing paints from it yet — see the next test for why.
+    const properties = JSON.stringify(browseSourceSpec().clusterProperties);
+    expect(properties).toContain('"smin":["min",["get","slot"]]');
+    expect(properties).toContain('"smax":["max",["get","slot"]]');
+  });
+
+  it("keeps the browse numeral rose however many kinds are under it", () => {
+    // The two inks are a provenance grammar, not a category legend: teal means
+    // an agent acted, and a browse cluster contains no agent by definition. A
+    // mixture tinted teal would tell a person an agent had been here, on the
+    // same screen as the tray line promising the rose means they asked for it
+    // themselves — and with two categories painted in central Taipei that was
+    // nearly every counted bead on screen, measured.
+    //
+    // The numeral makes no claim the mixture breaks, either: it never named a
+    // category. "38 places you asked to see" is exactly true of 20 cafes and
+    // 18 banks, and the dock strip names the kinds. mixed-cluster=teal
+    // (design2-v5:327) is the PROVENANCE rule — false-rose hides an agent —
+    // and multi-category browse paint is still §9's open item.
     expect(layoutOf(BROWSE_BEAD_LAYER)["icon-image"]).toBe(beadImageId("cluster", "user"));
   });
 

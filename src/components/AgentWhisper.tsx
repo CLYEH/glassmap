@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useState, useSyncExternalStore } from "react";
+import { useMapStore } from "@/lib/store/map-store";
+import { callCountLabel, selectActivity } from "./activity-model";
+import { sparkIsWaiting, unseenCalls, usePanelStore } from "./panel-store";
 import { ASK_CARDS } from "./TryAsking";
+import { useAwakenMode } from "./useAwakenMode";
 
 /** Per session, not per browser: a new tab is a new visitor being told once. */
 const KEY = "glassmap:whisper-dismissed";
@@ -65,18 +69,64 @@ function dismiss(): void {
  * It is rendered only in human chrome (`page.tsx`); once an agent is here the
  * badge says so, and a page telling you it *could* be read while it is being
  * read is noise.
+ *
+ * ## The way in, and the way back (T-93)
+ *
+ * The spark is also the collapsed button for the agent chrome itself. Its card
+ * carries the one control that opens that chrome by hand — the design's own
+ * answer to "where does a visitor find this without an agent", and the reason
+ * no new permanent furniture landed on the human-first map.
+ *
+ * When the chrome has been closed by hand over an agent that is still working,
+ * this same spark is what is left of it, and it says so: it pulses, and it
+ * carries the exact number of calls that have landed unseen — `activitySeq`
+ * arithmetic (`unseenCalls`), never a count of feed rows, which the 50-row cap
+ * and read-folding both make a lie. The count is the only claim made here about
+ * an agent, and it is made of calls this page really recorded.
  */
 export function AgentWhisper() {
   const hidden = useSyncExternalStore(subscribe, getSnapshot, () => false);
   const [open, setOpen] = useState(false);
+  const mode = useAwakenMode();
+  const panel = usePanelStore((s) => s.panel);
+  const seqAtClose = usePanelStore((s) => s.seqAtClose);
+  const openChrome = usePanelStore((s) => s.open);
+  const activitySeq = useMapStore((s) => s.activitySeq);
+  const calls = useMapStore((s) => selectActivity(s).length);
+  const closed = panel === "closed";
+  const waking = mode === "waking";
+  /**
+   * The chrome is folded away and there is really something behind it —
+   * `sparkIsWaiting`, which is the feed's own `feedIsLive` rule applied to the
+   * button the feed folded into. A claim about calls this page recorded, never
+   * about the machine's mode: a restored share link is `awake` with an empty
+   * log, and closing it by hand must leave a plain spark, because nothing is
+   * waiting. Everything the collapsed control says hangs off this one flag, so
+   * the ring, the copy and the count can never disagree with each other.
+   */
+  const waiting = sparkIsWaiting(panel, calls);
+  const unseen = waiting ? unseenCalls(activitySeq, seqAtClose) : 0;
 
   const onSpark = useCallback(() => {
     dismiss();
     setOpen((value) => !value);
   }, []);
 
+  // Opening the chrome closes the card that offered it: the answer to "what
+  // does an agent see" is now the whole page behind it, and a card left open
+  // over the feed would be covering the thing it just asked you to look at.
+  const onOpenChrome = useCallback(() => {
+    setOpen(false);
+    openChrome();
+  }, [openChrome]);
+
   return (
-    <div className="spark-wrap" data-testid="agent-whisper-zone" data-open={open}>
+    <div
+      className="spark-wrap"
+      data-testid="agent-whisper-zone"
+      data-open={open}
+      data-closed-chrome={closed || undefined}
+    >
       {open ? (
         <div className="spark-card lg deep" data-testid="agent-card">
           <h4>
@@ -85,19 +135,52 @@ export function AgentWhisper() {
             </svg>
             This map is readable
           </h4>
-          <p>
-            Point an AI agent — ChatGPT desktop, at this page — and it sees the map as data, not
-            pixels. The moment it acts, the map wakes: you will see every move it makes, right
-            here.
-          </p>
+          {/* Two sentences for two pages. The invitation is written for a map
+              nothing has touched, and over a chrome closed by hand it would be
+              in the future tense about something that has already happened —
+              the count beside the spark says so. The replacement claims only
+              the past ("has acted"), which is what `activity` proves; whether
+              an agent is still there is not something this page can know. */}
+          {waiting ? (
+            <p data-testid="agent-card-copy">
+              {/* No mention of "the calls beside the spark": between a close and
+                  the next call the ring is up but the count chip is not, and a
+                  sentence pointing at a chip that is not there would be the
+                  small lie this card exists to avoid. */}
+              An agent has acted on this map, and its view is closed. Reopening shows every call
+              it made, and the map they changed.
+            </p>
+          ) : (
+            <p data-testid="agent-card-copy">
+              Point an AI agent — ChatGPT desktop, at this page — and it sees the map as data, not
+              pixels. The moment it acts, the map wakes: you will see every move it makes, right
+              here.
+            </p>
+          )}
           <div className="spark-try">
             <b>Try asking</b>
             {ASK_CARDS[0].question}
           </div>
+          {/* The way in. Inert for the 1.8s of the story (design ruling 4):
+              the skip listener answers any keydown, so a focused toggle and
+              the transition would otherwise both fire from one press. */}
+          <button
+            type="button"
+            className="spark-open"
+            data-testid="chrome-open"
+            disabled={waking}
+            aria-disabled={waking}
+            onClick={onOpenChrome}
+          >
+            {mode === "awake" ? "Show the agent view" : "Preview what an agent sees"}
+          </button>
         </div>
       ) : null}
 
-      {!hidden && !open ? (
+      {/* Not over a chrome that was closed by hand: "also readable by AI
+          agents" is a landing invitation, and one has already been reading.
+          It would also land in the same corner slot as the unseen count. */}
+      {!hidden && !open && !waiting ? (
         <div className="spark-callout lg lens" data-testid="agent-whisper">
           Also readable by AI agents
           <button
@@ -112,12 +195,23 @@ export function AgentWhisper() {
         </div>
       ) : null}
 
+      {/* What a hand-closed agent chrome is reduced to: a number, and it is the
+          exact one. Withheld at zero — a chip saying "0 calls" over a folded
+          feed would be furniture, and the pulse already says the chrome is
+          there to come back to. */}
+      {waiting && unseen > 0 ? (
+        <span className="spark-unseen" data-testid="chrome-unseen">
+          {callCountLabel(unseen)}
+        </span>
+      ) : null}
+
       <button
         type="button"
-        className="spark lg lens"
+        className={`spark lg lens${waiting ? " waiting" : ""}`}
         data-testid="agent-spark"
+        data-waiting={waiting || undefined}
         aria-expanded={open}
-        aria-label="About agents"
+        aria-label={waiting ? "Show the agent view" : "About agents"}
         onClick={onSpark}
       >
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden>
@@ -126,6 +220,11 @@ export function AgentWhisper() {
           </g>
         </svg>
       </button>
+
+      {/* The feed's own "live" ring, on the button the feed folded into. Its
+          own element because the glass material has already spent `::after` on
+          the edge lens (`.lg.lens::after`, globals.css). */}
+      {waiting ? <span aria-hidden className="spark-ring" /> : null}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMapStore } from "@/lib/store/map-store";
 import {
   callCountLabel,
+  feedIsLive,
   formatCallTime,
   groupActivity,
   selectActivity,
@@ -178,10 +179,11 @@ export function ActivityFeed() {
       aria-label="Agent activity"
       data-testid="activity-feed"
       data-collapsed={collapsed}
-      // A restored page has no live agent, so the header's pulse stops
-      // pulsing: an animated "live" light over a map nobody is watching is the
-      // smallest possible lie, and still a lie.
       data-restored={restored !== null && !busy ? "true" : undefined}
+      // The header's pulse animates over calls this page saw, and over nothing
+      // else: a restored page has no live agent, and neither has a chrome
+      // somebody opened by hand to look at. See `feedIsLive`.
+      data-live={feedIsLive(activity.length) ? "true" : undefined}
     >
       <div className="feed-head">
         <span aria-hidden className="pulse" />
@@ -268,7 +270,13 @@ export function ActivityTicker() {
   // link's contents would be inventing one.
   if (!last && restored !== null) {
     return (
-      <div className="ticker lg wake" data-testid="activity-ticker" data-restored="true">
+      <div
+        className="ticker lg wake"
+        data-testid="activity-ticker"
+        data-restored="true"
+        // No call happened here, so the ring holds still — the same rule the
+        // feed's header follows (`feedIsLive`).
+      >
         <span aria-hidden className="pulse" />
         <span className="ticker-row">
           <span className="ticker-sum">{restored}</span>
@@ -279,7 +287,11 @@ export function ActivityTicker() {
   }
 
   return (
-    <div className="ticker lg wake" data-testid="activity-ticker">
+    <div
+      className="ticker lg wake"
+      data-testid="activity-ticker"
+      data-live={feedIsLive(activity.length) ? "true" : undefined}
+    >
       <span aria-hidden className="pulse" />
       {last ? (
         <span className="ticker-row">

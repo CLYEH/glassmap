@@ -303,16 +303,20 @@ describe("get_map_state", () => {
     expect(Object.keys(written).sort()).toEqual(Object.keys(read).sort());
   });
 
-  it("warns that the first call of a session can report the pre-chrome corridor", () => {
+  it("says bounds follows the chrome actually on screen, in both directions", () => {
     // The page opens without its agent chrome and grows the inspector lane the
-    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`), so
-    // the first call's answer is computed against a viewport that is about to
-    // shrink. The tool cannot fix that - the chrome appears *because* of this
-    // call - and an agent that is not told will read the difference between
-    // call one and call two as the human having moved the map. The description
-    // is the only place it can learn otherwise.
+    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`) -
+    // and since T-93 the human can also open or close that chrome by hand at
+    // any time. So bounds can widen as well as narrow between two calls, and
+    // an agent that is not told will read either jump as the human having
+    // moved the map. The description is the only place it can learn otherwise;
+    // the old promise ("every call after the first reports the narrowed one")
+    // became false the day the toggle shipped.
     expect(toolsFor().byName.get_map_state.description).toMatch(
-      /first call of a session can report a slightly wider corridor/,
+      /open or close that chrome by hand/,
+    );
+    expect(toolsFor().byName.get_map_state.description).toMatch(
+      /bounds always describes the rectangle actually on screen/,
     );
   });
 });

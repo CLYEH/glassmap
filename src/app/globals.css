@@ -216,7 +216,9 @@ button {
 }
 /* agent chrome only: the teal the map's own provenance grammar uses, at the
    lowest alpha that still reads as "this pane belongs to the agent". */
-html[data-chrome="awake"] .app .lg.wake {
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  .lg.wake {
   box-shadow:
     0 18px 44px rgba(3, 7, 13, 0.46),
     0 1px 2px rgba(3, 7, 13, 0.32),
@@ -394,7 +396,9 @@ body[data-fx="off"] .caustic {
   display: flex;
   gap: 8px;
 }
-html[data-chrome="awake"] .app .tools {
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  .tools {
   right: calc(var(--lane) + 22px);
 }
 .tool-chip {
@@ -701,8 +705,9 @@ html[data-chrome="awake"] .app .tools {
   right: 14px;
   z-index: 21;
 }
-html[data-chrome="awake"] .app .draw-hint,
-html[data-chrome="awake"] .app .note-pop {
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  :is(.draw-hint, .note-pop) {
   right: calc(var(--lane) + 22px);
 }
 .draw-hint {
@@ -1057,6 +1062,41 @@ html[data-chrome="awake"] .app .note-pop {
   color: var(--text-mid);
   background: rgba(255, 255, 255, 0.06);
 }
+/* Beside Hide, and deliberately not styled like it: Hide collapses this panel's
+   body and keeps the lane, this takes the whole agent chrome off the page and
+   gives the map back (T-93). The `margin-left: auto` belongs to Hide, which is
+   first — these two travel together as the head's right-hand pair.
+
+   It costs the summary beside the title most of its width (measured: 136px ->
+   57px at 1440, 130px -> 24px at 1240), and that is the trade taken knowingly.
+   `.insp-sub` is already the element this row yields with — `min-width: 0` and
+   an ellipsis, written for exactly this crowding — and every count in it is
+   repeated in the section heads a line below, whereas a control that only says
+   "Close" would be indistinguishable from the "Hide" next to it, which is the
+   one thing the design says this label may not be. */
+.insp-close {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  color: var(--text-mid);
+  font-size: 11px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.insp-close:hover {
+  color: var(--text-hi);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+}
+.insp-close:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.insp-close:disabled:hover {
+  color: var(--text-mid);
+  border-color: var(--hairline);
+  background: none;
+}
 .insp-tabs {
   display: none;
 }
@@ -1335,7 +1375,9 @@ html[data-chrome="awake"] .app .note-pop {
   flex-wrap: wrap;
   max-width: calc(100vw - 24px);
 }
-html[data-chrome="awake"] .app .dock {
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  .dock {
   left: calc((100% - var(--lane) - 10px) / 2);
 }
 .dock-pill {
@@ -1629,7 +1671,9 @@ html[data-chrome="awake"] .app .dock {
    is padded into and `bounds` reports (MapCanvas's `inspectorLane`). Below
    921px the inspector is a bottom sheet and there is no lane, so the clamp goes
    back to the viewport — see the tier below. */
-html[data-chrome="awake"] .app .otm-card {
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  .otm-card {
   left: clamp(131px, var(--otm-x), calc(100vw - var(--lane) - 131px));
 }
 .otm-card[data-place="below"] {
@@ -1787,6 +1831,83 @@ html[data-chrome="awake"] .app .otm-card {
   color: var(--text-low);
 }
 
+/* --- the manual toggle (T-93) -------------------------------------------
+   Open lives in the card, because the card is already the sentence it
+   answers: "point an agent at this page and it sees the map as data" — this
+   is "show me". Teal, because what it opens belongs to the agent, and quiet,
+   because it is an offer and not the point of the page. */
+.spark-open {
+  display: block;
+  width: 100%;
+  margin-top: 9px;
+  padding: 8px 10px;
+  border: 1px solid rgba(45, 212, 191, 0.32);
+  border-radius: var(--radius-s);
+  background: rgba(45, 212, 191, 0.08);
+  color: var(--agent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.spark-open:hover {
+  background: rgba(45, 212, 191, 0.14);
+  border-color: rgba(45, 212, 191, 0.5);
+}
+/* Inert for the 1.8s of the story: a press that both skipped the transition
+   and toggled the chrome would answer one keypress twice. */
+.spark-open:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.spark-open:disabled:hover {
+  background: rgba(45, 212, 191, 0.08);
+  border-color: rgba(45, 212, 191, 0.32);
+}
+
+/* What is left of a hand-closed agent chrome: the spark, breathing, with the
+   exact number of calls that have landed behind it. The ring is the feed's own
+   `ring` keyframes — the same vocabulary for the same claim, so nothing new has
+   to be learnt to read it.
+
+   Its own element rather than `.spark::after`, which the glass material has
+   already spent on the edge lens (`.lg.lens::after`): the wrap is the spark's
+   own box, so `inset: 0` is the button, exactly. */
+.spark.waiting {
+  color: var(--agent);
+}
+.spark-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid var(--agent);
+  opacity: 0;
+  animation: ring 2.4s ease-out infinite;
+  pointer-events: none;
+}
+.spark-unseen {
+  position: absolute;
+  right: 44px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(45, 212, 191, 0.14);
+  border: 1px solid rgba(45, 212, 191, 0.32);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--agent);
+  white-space: nowrap;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spark-ring {
+    animation: none;
+    opacity: 0.5;
+  }
+}
+body[data-fx="off"] .spark-ring {
+  animation: none;
+  opacity: 0.5;
+}
+
 /* ---------------------------------------------------- chrome gating
    What the two states change about the layout. Everything that is only
    agent chrome is not rendered at all in human chrome (`page.tsx`); these
@@ -1809,21 +1930,63 @@ html[data-chrome="awake"] .app .otm-card {
    the DOM: the lane, the feed and the badge are React's and arrive with
    hydration, so the map is already dressed for them a moment before they
    exist. That is the trade — the chrome that would be *wrong* is never
-   painted, and the chrome that is merely *missing* fades in. */
+   painted, and the chrome that is merely *missing* fades in.
+
+   ## The second writer, and why it is a second attribute (T-93)
+
+   The chrome can also be asked for by hand: `html[data-panel="open"]` on a
+   page no agent has touched, `html[data-panel="closed"]` over one that is
+   being worked on (`components/panel-store.ts`). It is a separate attribute
+   because `data-chrome` already has two writers in sequence (the boot script,
+   then the controller) and a third that could *disagree* with them — a person
+   holding the chrome closed while the machine says "awake" — would fight them
+   for every frame of the transition. So the stylesheet composes the two facts
+   instead, and every rule below that used to name one of them now names both,
+   in one of exactly three forms:
+
+     AGENT LAYOUT   html:is([data-chrome="awake"]:not(:where([data-panel="closed"])),
+                            :where([data-panel="open"]))
+     HUMAN LAYOUT   html:is(:not([data-chrome="awake"]), [data-panel="closed"])
+                        :not(:where([data-panel="open"]))
+     NO CHROME      the human form with `waking` excluded as well — the sheet
+                    tier's map container, which yields the sheet's band at the
+                    *start* of the story (see the <=920 block).
+
+   The first two are exact complements: `(awake AND NOT closed) OR open`, and
+   its negation. The `:where()` wrappers are not decoration — they contribute
+   zero specificity, so every composed selector weighs exactly what the
+   single-attribute one it replaced weighed ((0,1,1), or (0,2,1) for the
+   `waking`-excluding form). Rules that override these later in the file (the
+   sheet tier's `.tools`, the phone tier's `.dock`) therefore still win by
+   source order alone, which is how they were written.
+
+   `waking` deliberately falls on the HUMAN side of the first two: the
+   choreography starts from the human positions and animates to the agent's,
+   and it is the handover to `[data-chrome="awake"]` at p=1 that must move
+   nothing. The panel is always absent by then — it lets go the instant the
+   story begins (`panel-store.ts`) — so no composed rule ever has to arbitrate
+   between a hand and a transition. */
 
 /* The corner whisper is the one human-only surface the server renders, so it
-   is the one that has to be told. Unmounted a moment later (`page.tsx`); this
-   only covers the frames before hydration. */
-html[data-chrome="awake"] .app .spark-wrap {
+   is the one that has to be told. Unmounted a moment later (`page.tsx`) unless
+   the chrome was closed by hand, in which case the spark is the way back in
+   and this rule is what keeps it on screen. */
+html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+  .app
+  .spark-wrap {
   display: none;
 }
-html:not([data-chrome="awake"]) .app .cam-chip {
+html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-panel="open"]))
+  .app
+  .cam-chip {
   display: none;
 }
 /* No lane to leave room for: the bottom bar spans the whole map, and the
    corridor `bounds` describes is the whole canvas (MapCanvas's
-   `inspectorLane`, which reads the same store the chrome does). */
-html:not([data-chrome="awake"]) .app .bottom-bar {
+   `inspectorLane`, which reads the same fact this selector does). */
+html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-panel="open"]))
+  .app
+  .bottom-bar {
   right: 14px;
 }
 
@@ -1888,11 +2051,23 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
      `[data-chrome="idle"]`: the boot script writes the attribute only for a
      link that carries a share hash, so a plain landing has no `data-chrome` at
      all until hydration — and naming `idle` here would shorten that map for a
-     sheet that is not coming. */
-  html:not([data-chrome="waking"]):not([data-chrome="awake"]) .app .map-wrap {
+     sheet that is not coming.
+
+     This is the NO CHROME form (see "chrome gating"): the only rule in the file
+     for which `waking` counts as the agent's, because the band is given up at
+     the start of the story rather than at its end. A chrome closed by hand has
+     no sheet at all, so the map takes the whole screen back with it. */
+  html:is(
+      :not([data-chrome="waking"]):not([data-chrome="awake"]),
+      [data-panel="closed"]
+    ):not(:where([data-panel="open"]))
+    .app
+    .map-wrap {
     bottom: 0;
   }
-  html:not([data-chrome="awake"]) .app .bottom-bar {
+  html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-panel="open"]))
+    .app
+    .bottom-bar {
     right: 12px;
   }
   .dock {
@@ -1900,7 +2075,9 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
   }
   /* No lane down here: the inspector is a sheet under the map, not a pane over
      its east edge, so the whole width is visible again. */
-  html[data-chrome="awake"] .app .otm-card {
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    .otm-card {
     left: clamp(131px, var(--otm-x), calc(100vw - 131px));
   }
   /* Which is why the dock keeps the map's own centre in both chromes. The awake
@@ -1909,7 +2086,9 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
      room for), so the dock simply arrived 155px to the left in the frame the
      story landed (measured, 768x1024). Between 641px and 920px only: below
      that the dock is a full-width row and states its own left. */
-  html[data-chrome="awake"] .app .dock {
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    .dock {
     left: 50%;
   }
   .tray {
@@ -1927,7 +2106,9 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
      chip a person could reach. Below the floor the tray asks for more than the
      map is tall and `.map-wrap` clips the top of it, which costs the head but
      keeps the two things the tray is for. */
-  html[data-chrome="awake"] .app .tray-body {
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    .tray-body {
     max-height: max(120px, calc(54vh - 210px));
   }
   .tray-grid {
@@ -1979,12 +2160,16 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
   .brand-name {
     font-size: 13.5px;
   }
+  /* Both chromes, at a width with no lane in either: the second selector is
+     only here to outweigh the AGENT LAYOUT rule above, so it has to carry the
+     same composition — a hand-opened chrome down here has no lane to step
+     aside for either. */
   .tools,
-  html[data-chrome="awake"] .app .tools,
   .draw-hint,
-  html[data-chrome="awake"] .app .draw-hint,
   .note-pop,
-  html[data-chrome="awake"] .app .note-pop {
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    :is(.tools, .draw-hint, .note-pop) {
     right: 12px;
   }
   .brand-cluster {
@@ -2128,7 +2313,9 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
      on top of the attribution, which is a licence condition and may never be
      covered. */
   .dock,
-  html[data-chrome="awake"] .app .dock {
+  html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-panel="open"]))
+    .app
+    .dock {
     left: 12px;
     right: 12px;
     bottom: 12px;
@@ -2314,9 +2501,10 @@ html[data-chrome="waking"] .app .badge,
 html[data-chrome="waking"] .app .cam-chip {
   opacity: 0;
 }
-/* The camera chip is hidden in human chrome (`:not([data-chrome="awake"])`),
-   and the transition has to be able to fade it in. Same specificity as that
-   rule, later in the file, so this wins for the one state it names. */
+/* The camera chip is hidden in human chrome (the HUMAN LAYOUT form, which
+   `waking` falls under), and the transition has to be able to fade it in. Same
+   specificity as that rule — the `:where()`s in it weigh nothing — and later in
+   the file, so this wins for the one state it names. */
 html[data-chrome="waking"] .app .cam-chip {
   display: flex;
 }
@@ -2578,9 +2766,15 @@ body[data-fx="off"] .awaken-stage {
 .call.restored-sum .tool {
   color: var(--text-low);
 }
-/* No live agent on a restored page, so the header's "live" light holds still. */
-.feed[data-restored="true"] .pulse::after,
-.ticker[data-restored="true"] .pulse::after {
+/* The "live" light animates over calls this page recorded, and over nothing
+   else — written as the requirement rather than as the two exceptions to it. A
+   restored page has agent work and no agent; a chrome somebody opened by hand
+   (T-93) has neither, on a map that has never been touched. Both used to be
+   reasoned about separately, and the second one did not exist yet. `data-live`
+   is `feedIsLive(activity.length)` (`activity-model.ts`); its absence is the
+   default, so a panel that forgets to state it holds still rather than lying. */
+.feed:not([data-live="true"]) .pulse::after,
+.ticker:not([data-live="true"]) .pulse::after {
   animation: none;
 }
 

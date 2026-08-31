@@ -2,7 +2,7 @@
 
 import { useMapStore } from "@/lib/store/map-store";
 import { BADGE_LABEL, badgeClaim } from "./badge-claim";
-import { useAwakenMode } from "./useAwakenMode";
+import { useChromeVisible } from "./useChromeVisible";
 
 /** "document.modelContext" is the wire name; the badge has room for the noun. */
 const SHORT_SURFACE: Record<string, string> = {
@@ -55,7 +55,7 @@ export function WebMcpBadge() {
   // The count, not the array: the label only changes between none and some,
   // so this does not re-render the corner on every call.
   const calls = useMapStore((s) => s.activity.length);
-  const mode = useAwakenMode();
+  const chrome = useChromeVisible();
   const surfaces = info?.surfaces ?? [];
   const live = surfaces.length > 0;
   const tools = `${info?.toolCount ?? 0} tools`;
@@ -63,7 +63,14 @@ export function WebMcpBadge() {
   const claim = badgeClaim({ surfaces, calls });
   const tone = claim === "off" ? " offline" : claim === "readable" ? " ready" : "";
 
-  if (mode === "idle") {
+  // Which *form* the corner takes follows the chrome on screen, and nothing
+  // else: the badge and the spark are the same slot in the two chromes, so a
+  // hand-opened chrome shows the badge and a hand-closed one gives the slot
+  // back to the spark (`useChromeVisible`, T-93). What the badge is allowed to
+  // *say* is untouched by any of that — `badgeClaim` reads registration and
+  // calls, so the preview a person opens on a virgin map says "Agent-readable"
+  // and cannot be talked into claiming somebody arrived.
+  if (!chrome) {
     return (
       <span data-testid="webmcp-status" className="gm-machine">
         {`WebMCP ${info === null ? "…" : live ? "live" : "off"} · ${tools} · ${where}`}

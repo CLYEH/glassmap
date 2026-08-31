@@ -13,6 +13,7 @@
  *    artifacts — nothing here ever outlives its effect.
  */
 import type { LngLat } from "@/lib/store/map-store";
+import { readChromeVisible } from "../panel-store";
 import type { Pt } from "./geometry";
 import { getFxMap } from "./map-handle";
 
@@ -85,22 +86,23 @@ export interface FxContext {
 const metresPerDegreeLng = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
 
 /**
- * The inspector's lane, read from the same custom property the stylesheet lays
- * it out with — the same rule `MapCanvas.inspectorLane()` follows, so the FX
- * corridor and the camera's padding can never describe different rectangles.
+ * The inspector's lane, clause for clause with `MapCanvas.inspectorLane()`:
+ * first the fact that mounts the panel (`chromeVisible`, `panel-store.ts`),
+ * then the breakpoint, then the custom property the stylesheet lays the lane
+ * out with.
  *
- * One clause of that rule is deliberately missing here: `inspectorLane()` also
- * answers 0 in human chrome, where no lane is mounted (T-82). What that costs
- * is bounded rather than nil. Every effect that consumes this — the viewfinder,
- * the scan band, the pack-to-chip rect — is a *tool* effect, and the tool call
- * that schedules it is the same write that puts the page into agent chrome, so
- * by the time one is planned the lane is on its way in. The window where the
- * two answers differ is the frames between that write and the lane being laid
- * out: an effect planned inside it measures a corridor a few hundred pixels too
- * narrow, which moves a rectangle, not a mode. Human-gesture effects are drawn
+ * One corridor is on screen, so there is exactly one definition of it. Any
+ * second one is a rectangle drawn where the map is not — the viewfinder, the
+ * scan band and the pack-to-chip rect would frame a strip of screen the camera
+ * was never padded into and `get_map_state().bounds` never reported. `--lane`
+ * on its own cannot answer this: it is a media-query constant, true whenever
+ * the window is wide, and since T-93 a person can close the agent chrome by
+ * hand over an agent that is still calling tools — for the whole of that close
+ * the lane is 336px in CSS and 0px on screen. Human-gesture effects are drawn
  * in map space and never ask.
  */
 function laneWidth(): number {
+  if (!readChromeVisible()) return 0;
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;

@@ -519,6 +519,35 @@ describe("summary copy", () => {
     });
   });
 
+  it("list_features_in_view quotes the words the search was narrowed by", async () => {
+    // A row reading "Features in view — found 1" beside a screen full of them
+    // is the feed hiding the filter: the human cannot tell a search that found
+    // one thing from a map that has one thing on it. The words are quoted the
+    // way find_features quotes them, because it is the same filter and a
+    // person should not have to learn two notations for it.
+    const { store, byName } = setup();
+    await call(byName.list_features_in_view, { query: "Pxmart" });
+    expect(last(store).summary).toBe("“Pxmart” in view — found 1");
+
+    await call(byName.list_features_in_view, { query: "大安", categories: ["mrt_station"] });
+    expect(last(store).summary).toBe("MRT stations matching “大安” in view — found 2");
+  });
+
+  it("list_features_in_view describes only the filter this tool has", async () => {
+    // The subject is shared with find_features, which also knows `near` and
+    // `within`. Neither is in this tool's schema, so a caller that smuggles one
+    // in must not get a row claiming a circle nobody drew or a place the search
+    // never measured from — the human would go looking for it on the map.
+    const { store, byName } = setup();
+    await call(byName.list_features_in_view, {
+      query: "Pxmart",
+      near: "Daan Station",
+      within: "drawing:1",
+    });
+    expect(last(store).summary).toBe("“Pxmart” in view — found 1");
+    expect(last(store).refIds).toBeUndefined();
+  });
+
   it("compare_areas names both places as the tool resolved them, not as they were typed", async () => {
     const { store, byName } = setup();
     await call(byName.compare_areas, { a: "osm:node:2", b: "osm:node:1" });

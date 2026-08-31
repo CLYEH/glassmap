@@ -66,6 +66,7 @@ import {
   resolveNear,
   validateCategories,
   validateLimit,
+  validateQuery,
   validateRadius,
 } from "./query";
 import {
@@ -147,6 +148,7 @@ export interface MeasureInput {
 }
 
 export interface ListFeaturesInViewInput {
+  query?: unknown;
   categories?: unknown;
   limit?: unknown;
 }
@@ -224,6 +226,15 @@ const categoriesProperty = {
   items: { type: "string", enum: [...FEATURE_CATEGORIES, ...TIER2_CATEGORIES] },
   description: CATEGORIES_DESCRIPTION,
 };
+
+/**
+ * How a name is matched, in the words find_features has always used. Shared
+ * because the matching really is the same code (`queryFeatures`): a schema that
+ * described it twice could describe it differently, and an agent would have to
+ * guess which of the two tools folds case, or a hyphen, or an English name.
+ * What each tool adds after this sentence is only *where* it looks.
+ */
+const QUERY_MATCHING = "Case-insensitive substring of the local or English name.";
 
 const limitProperty = {
   type: "integer",
@@ -371,11 +382,8 @@ async function resolveQueryInput(
   const rad = validateRadius(input.radius_m);
   if ("error" in rad) return { error: rad.error };
 
-  let query: string | undefined;
-  if (input.query !== undefined) {
-    if (typeof input.query !== "string") return { error: "query must be a string" };
-    query = input.query.trim() || undefined;
-  }
+  const q = validateQuery(input.query);
+  if ("error" in q) return { error: q.error };
 
   let within: Polygon | MultiPolygon | undefined;
   if (input.within !== undefined) {
@@ -408,7 +416,7 @@ async function resolveQueryInput(
     origin,
     radius_m,
     categories: plan.categories,
-    query,
+    query: q.query,
     within,
     limit: lim.limit,
     disclosure: plan.disclosure,
@@ -605,10 +613,17 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Pass query to search the screen by name - the same match find_features makes, scoped to what is in view, and combining with categories rather than replacing it, so \"which of the cafes on screen is a Louisa?\" is one call. Called without categories it also returns category_counts - how many of each category the answer covers, which is the same set features and total describe, so with a query only the features that matched it are counted - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
-      properties: { categories: categoriesProperty, limit: limitProperty },
+      properties: {
+        query: {
+          type: "string",
+          description: `${QUERY_MATCHING} Only the features already in view are searched; omit to list every feature in view. Combines with categories instead of replacing it.`,
+        },
+        categories: categoriesProperty,
+        limit: limitProperty,
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -618,6 +633,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ("error" in cats) return { error: cats.error };
       const lim = validateLimit(inp.limit);
       if ("error" in lim) return { error: lim.error };
+      const q = validateQuery(inp.query);
+      if ("error" in q) return { error: q.error };
 
       const bounds = store.getBounds();
       if (!bounds) return { error: "map not ready" };
@@ -632,7 +649,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const b = featureBounds(f);
         return b ? boundsIntersect(b, bounds) : false;
       });
-      const matched = queryFeatures(visible, { origin, categories: plan.categories });
+      // The same engine find_features uses, on the visible slice: the two tools
+      // must not disagree about whether "matching 森林" includes the station.
+      const matched = queryFeatures(visible, {
+        origin,
+        categories: plan.categories,
+        query: q.query,
+      });
       return {
         ...listOutput(matched, origin, lim.limit),
         // Every distance_m and direction below is measured from here, so the
@@ -642,6 +665,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // A per-category tally of what is on screen, so "what am I looking at?"
         // is one call rather than one call per category. Only worth its tokens
         // once there are POI categories to choose between.
+        //
+        // Counted over `matched`, which is the set `total` and `features` above
+        // describe — never over the unfiltered view. A query narrows the tally
+        // with everything else: an answer reading `total: 1` beside
+        // `category_counts: {cafe: 9}` would be one answer making two claims,
+        // and the agent has no third field to tell it which one was about its
+        // question. The unfiltered tally is still one call away — ask without
+        // the query — while a mistaken "9 cafes here" cannot be walked back.
         ...(plan.tier2Available > 0 ? { category_counts: countByCategory(matched) } : {}),
         ...plan.disclosure,
       };
@@ -657,8 +688,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       properties: {
         query: {
           type: "string",
-          description:
-            "Case-insensitive substring of the local or English name. Omit to match every name.",
+          description: `${QUERY_MATCHING} Omit to match every name.`,
         },
         categories: categoriesProperty,
         near: nearProperty,

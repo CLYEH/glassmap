@@ -190,6 +190,13 @@ test.describe("Inspector row actions (T-101)", () => {
     expect(state.bounds!.south).toBeLessThanOrEqual(CENTER.lat - HALF);
     expect(state.bounds!.east).toBeGreaterThanOrEqual(CENTER.lng + HALF);
     expect(state.bounds!.north).toBeGreaterThanOrEqual(CENTER.lat + HALF);
+    // Containment alone is satisfiable by a camera that never moved: the
+    // fixture square sits inside the DEFAULT_VIEW corridor at z12. The frame
+    // must actually travel — centre on the square and come CLOSER, which is
+    // the "answers 'show me this' with a dot" regression frame-model.test.ts
+    // names (T-101 final review, SF2).
+    expect(state.center).toEqual({ lng: CENTER.lng, lat: CENTER.lat });
+    expect(state.zoom!).toBeGreaterThan(12);
   });
 
   test("a pinned note's row flies to its exact coordinate, and the point rule never drops a zoom already past its floor", async ({

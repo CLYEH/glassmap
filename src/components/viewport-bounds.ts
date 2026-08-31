@@ -67,12 +67,23 @@ function mercatorHeight(bounds: Bounds): number {
  * `fill` is the fraction of the corridor the target is allowed to occupy, i.e.
  * the padding: 0.8 leaves a tenth of the corridor clear on each side.
  *
- * Two known approximations, both safe in the direction they err: a rotated map
- * publishes the *bounding box* of its corridor, which is larger than the
- * corridor, so a fit computed while the map is turned can overshoot slightly;
- * and a target with no extent on an axis leaves that axis unconstrained. A
- * target with no extent at all is not a fit at all — there is nothing to frame
- * — so the current zoom comes back unchanged and the caller decides.
+ * Three known approximations. Two are safe in the direction they err: a
+ * rotated map publishes the *bounding box* of its corridor, which is larger
+ * than the corridor, so a fit computed while the map is turned can overshoot
+ * slightly; and a target with no extent on an axis leaves that axis
+ * unconstrained. A target with no extent at all is not a fit at all — there
+ * is nothing to frame — so the current zoom comes back unchanged and the
+ * caller decides.
+ *
+ * The third does NOT err safely: on the live-map path `view.zoom` updates
+ * synchronously on a click while `bounds` republishes only at `moveend`, so a
+ * second fit requested mid-flight measures a fresh zoom against a stale
+ * corridor and can land far too wide or too narrow (two rapid area-row
+ * clicks). The store self-corrects at landing; the camera does not. A real
+ * fix records the zoom the corridor was measured at and corrects by the
+ * delta — until then, callers should not chain fits inside one flight.
+ * (The network-isolated suite cannot see this: its jumpTo path publishes
+ * bounds synchronously.)
  */
 export function zoomToFit(
   currentZoom: number,

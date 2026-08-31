@@ -1,4 +1,6 @@
 import type { GlassMapFeature } from "@/lib/data/schema";
+import { featureBounds } from "@/lib/map-tools/output";
+import type { Bounds } from "@/lib/store/map-store";
 import type { MapCategory, MapFeature } from "@/lib/store/tier2";
 import { featureDetails, sameText, type DetailRow } from "./feature-details";
 
@@ -25,6 +27,16 @@ export interface SelectedRow {
   sample: boolean;
   /** The OSM tags a human can be shown; empty for bundled features and unknown ids. */
   details: DetailRow[];
+  /**
+   * [west, south, east, north] of the feature, or null when there is nothing to
+   * point a camera at: an id nothing has loaded, or a geometry turf could not
+   * box. It is what makes the row clickable — the sidebar offers to fly to a
+   * row only when this is non-null, so a "not loaded" row can still be
+   * deselected but never pretends to know where its place is. A point feature's
+   * box is its own coordinate twice over (`frame-model.hasExtent` is false),
+   * which is exactly how the framing tells a place from an area.
+   */
+  bounds: Bounds | null;
 }
 
 /**
@@ -59,7 +71,9 @@ export function resolveSelection(
   }
   return selection.map((id) => {
     const feature = byId.get(id);
-    if (!feature) return { id, name: id, category: null, sample: false, details: [] };
+    if (!feature) {
+      return { id, name: id, category: null, sample: false, details: [], bounds: null };
+    }
     const properties = feature.properties;
     // A POI with no `name` is normal — a nameless car park is still a place
     // you can park — so the English name is tried before falling back to the
@@ -77,6 +91,7 @@ export function resolveSelection(
       category: properties.category,
       sample: properties.sample === true,
       details: featureDetails(properties, [name, nameEn ?? ""]),
+      bounds: featureBounds(feature),
     };
   });
 }

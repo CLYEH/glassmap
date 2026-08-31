@@ -47,6 +47,7 @@ describe("resolveSelection", () => {
       category: null,
       sample: false,
       details: [],
+      bounds: null,
     });
   });
 
@@ -78,6 +79,7 @@ describe("resolveSelection", () => {
           category: "cafe",
           sample: false,
           details: [],
+          bounds: [121.54, 25.03, 121.54, 25.03],
         },
       ]);
     });
@@ -154,6 +156,49 @@ describe("resolveSelection", () => {
       // id nothing has loaded: both render a card with no details section.
       expect(resolveSelection(features, ["osm:node:1"])[0].details).toEqual([]);
       expect(resolveSelection(features, ["osm:way:404"])[0].details).toEqual([]);
+    });
+  });
+
+  /**
+   * T-101: a sidebar row is clickable, and `bounds` is what decides whether it
+   * can be. A row that offered to fly to a place it cannot locate would be the
+   * one lie this panel has never told — so the box is read from the feature's
+   * own geometry, and its absence is the row's honest "not loaded".
+   */
+  describe("where the row is", () => {
+    it("boxes a point feature at its own coordinate, which is not an extent", () => {
+      // A point has nothing to frame, and the framing has to be able to tell:
+      // west === east and south === north is exactly how `frame-model` decides
+      // to keep the person's zoom instead of fitting.
+      const rows = resolveSelection([], ["a"], [poi("a")]);
+      expect(rows[0].bounds).toEqual([121.54, 25.03, 121.54, 25.03]);
+    });
+
+    it("boxes an area feature so a click can frame the whole of it", () => {
+      const district: MapFeature = {
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [121.5, 25.0],
+              [121.56, 25.0],
+              [121.56, 25.04],
+              [121.5, 25.04],
+              [121.5, 25.0],
+            ],
+          ],
+        },
+        properties: { id: "osm:way:7", name: "Daan", category: "district", source: "osm" },
+      };
+      const rows = resolveSelection([], ["osm:way:7"], [district]);
+      expect(rows[0].bounds).toEqual([121.5, 25.0, 121.56, 25.04]);
+    });
+
+    it("has no box for an id nothing has loaded — the row that cannot be flown to", () => {
+      // Share-restore leftovers land here: the row still renders and can still
+      // be deselected, but there is nowhere to point a camera.
+      expect(resolveSelection(features, ["osm:way:404"])[0].bounds).toBeNull();
     });
   });
 });

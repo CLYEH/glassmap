@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isFeatureCategory } from "@/lib/data/schema";
-import { useMapStore, type Annotation, type Drawing } from "@/lib/store/map-store";
+import {
+  useMapStore,
+  type Annotation,
+  type Bounds,
+  type Drawing,
+  type LngLat,
+} from "@/lib/store/map-store";
 import { ActivityPanel } from "./ActivityFeed";
 import { selectActivity } from "./activity-model";
 import { categorySingular } from "./category-labels";
+import { frameFor, frameForPoint, geometryBounds } from "./frame-model";
 import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
 import { usePanelStore } from "./panel-store";
@@ -126,6 +133,216 @@ function SelectedDot({ category }: { category: SelectedRow["category"] }) {
   return <span aria-hidden className="sel-dot" style={{ backgroundColor: CATEGORY_COLOR[category] }} />;
 }
 
+/**
+ * One selected feature, as a row you can act on.
+ *
+ * Two hit areas, two buttons, no ambiguity: the main area flies the camera to
+ * the place, the ✕ takes it off the map. They are siblings rather than one
+ * inside the other, so a click on the ✕ has no row handler to bubble into and
+ * neither gesture can be mistaken for the other — a nested button would also be
+ * invalid HTML and unreachable by keyboard in the order a person expects.
+ * Real `<button>`s, so Enter and Space work, focus is visible (the global
+ * `:focus-visible` ring) and the pointer says "clickable" without a role
+ * attribute or a keydown handler of our own.
+ *
+ * A row whose id nothing has loaded — a share link naming a category that has
+ * not arrived, an id that never existed — has no coordinate to fly to, so the
+ * main area is rendered inert rather than as a button that would do nothing.
+ * The ✕ stays: the one thing the page can always honestly do with such an id is
+ * stop claiming it is selected.
+ */
+function SelectedItem({
+  row,
+  onShow,
+  onDeselect,
+}: {
+  row: SelectedRow;
+  onShow: (target: Bounds) => void;
+  onDeselect: (id: string) => void;
+}) {
+  // Bound to a const so the narrowing survives into the click handler.
+  const target = row.bounds;
+  const body = (
+    <>
+      <SelectedDot category={row.category} />
+      <span className="sel-main">
+        <span className="sel-name" title={row.name}>
+          {row.name}
+        </span>
+        {/* The English name the data carries, under the local one — the same
+            pair the tap card shows, so the two surfaces name the same place the
+            same way. Omitted when the data has none, or when it is the line
+            above (selection-model). */}
+        {row.nameEn ? (
+          <span className="sel-name-en" data-testid="sidebar-name-en" title={row.nameEn}>
+            {row.nameEn}
+          </span>
+        ) : null}
+      </span>
+      <span className="sel-cat">
+        {row.category ? categorySingular(row.category) : "not loaded"}
+        {row.sample ? " (sample)" : ""}
+      </span>
+    </>
+  );
+
+  return (
+    <li
+      className="sel-row"
+      data-feature-id={row.id}
+      data-category={row.category ?? undefined}
+      data-zoomable={target !== null}
+    >
+      {target ? (
+        <button
+          type="button"
+          className="sel-hit"
+          data-testid="zoom-to-feature"
+          data-feature-id={row.id}
+          title={`Show ${row.name} on the map`}
+          onClick={() => onShow(target)}
+        >
+          {body}
+        </button>
+      ) : (
+        <span className="sel-hit off" title="Nothing loaded has this id, so there is nowhere to fly">
+          {body}
+        </span>
+      )}
+      <button
+        type="button"
+        className="sel-x"
+        data-testid="deselect-feature"
+        data-feature-id={row.id}
+        aria-label={`Deselect ${row.name}`}
+        onClick={() => onDeselect(row.id)}
+      >
+        ✕
+      </button>
+    </li>
+  );
+}
+
+/**
+ * One drawn shape. Same two hit areas as a selected row, and the ✕ keeps the
+ * behaviour it has had since it existed — the shape leaves the store first, and
+ * the dissolve is played over the ghost of it.
+ *
+ * The main area frames the shape's whole extent rather than flying to its
+ * middle: a 2 km circle and the point at its centre are not the same answer to
+ * "show me that one".
+ */
+function DrawingItem({
+  drawing,
+  onShow,
+  onRemove,
+}: {
+  drawing: Drawing;
+  onShow: (target: Bounds) => void;
+  onRemove: (id: string) => boolean;
+}) {
+  const box = geometryBounds(drawing.geometry);
+  const body = (
+    <>
+      <DrawingSwatch drawing={drawing} />
+      <span className="obj-main">
+        {drawing.label && <span className="obj-title">{drawing.label}</span>}
+        <span className="obj-meta">
+          {drawing.kind}
+          {drawing.radius_m ? ` · ${Math.round(drawing.radius_m)} m` : ""} ·{" "}
+          <Source source={drawing.source} /> · {drawing.id}
+        </span>
+      </span>
+    </>
+  );
+
+  return (
+    <li className="obj-card" data-drawing-id={drawing.id} data-zoomable={box !== null}>
+      {box ? (
+        <button
+          type="button"
+          className="obj-hit"
+          data-testid="zoom-to-drawing"
+          data-drawing-id={drawing.id}
+          title={`Show ${drawing.label ?? drawing.id} on the map`}
+          onClick={() => onShow(box)}
+        >
+          {body}
+        </button>
+      ) : (
+        <span className="obj-hit off">{body}</span>
+      )}
+      <button
+        type="button"
+        className="obj-x"
+        data-testid="remove-drawing"
+        data-drawing-id={drawing.id}
+        aria-label={`Remove ${drawing.id}`}
+        // The shape leaves the store first, so the dissolve is played over a
+        // ghost of what was there — the artifact itself is already gone, which
+        // is the honest order.
+        onClick={() => {
+          if (onRemove(drawing.id)) {
+            emitHumanFx({ type: "delete", geometry: drawing.geometry, id: drawing.id });
+          }
+        }}
+      >
+        ✕
+      </button>
+    </li>
+  );
+}
+
+/** One pinned note. A note is a coordinate, so its row eases to the pin. */
+function NoteItem({
+  annotation,
+  onShow,
+  onRemove,
+}: {
+  annotation: Annotation;
+  onShow: (at: LngLat) => void;
+  onRemove: (id: string) => boolean;
+}) {
+  return (
+    <li className="obj-card" data-annotation-id={annotation.id} data-zoomable={true}>
+      <button
+        type="button"
+        className="obj-hit"
+        data-testid="zoom-to-annotation"
+        data-annotation-id={annotation.id}
+        title="Show this note on the map"
+        onClick={() => onShow(annotation.at)}
+      >
+        <NoteSwatch annotation={annotation} />
+        <span className="obj-main">
+          <span className="obj-title">{annotation.note}</span>
+          <span className="obj-meta">
+            <Source source={annotation.source} /> · {annotation.id}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="obj-x"
+        data-testid="remove-annotation"
+        data-annotation-id={annotation.id}
+        aria-label={`Remove ${annotation.id}`}
+        onClick={() => {
+          if (onRemove(annotation.id)) {
+            emitHumanFx({
+              type: "delete",
+              geometry: { type: "Point", coordinates: annotation.at },
+              id: annotation.id,
+            });
+          }
+        }}
+      >
+        ✕
+      </button>
+    </li>
+  );
+}
+
 /** "8 selected · 1 shape · 1 note", or "quiet" when the map is untouched. */
 function summarise(selection: number, shapes: number, notes: number): string {
   const parts: string[] = [];
@@ -160,6 +377,7 @@ export function Inspector() {
   const selection = useMapStore((s) => s.selection);
   const drawings = useMapStore((s) => s.drawings);
   const annotations = useMapStore((s) => s.annotations);
+  const setSelection = useMapStore((s) => s.setSelection);
   const removeDrawing = useMapStore((s) => s.removeDrawing);
   const removeAnnotation = useMapStore((s) => s.removeAnnotation);
   const activityCount = useMapStore((s) => selectActivity(s).length);
@@ -180,6 +398,42 @@ export function Inspector() {
   // for one word, and one word about a mixed list would be false for part of it.
   const claim = selectionClaim(selection, selectionSources, selectionAttributionExplicit);
   const quiet = rows.length === 0 && drawings.length === 0 && annotations.length === 0;
+
+  /**
+   * Fly to what a row names. The camera and the corridor are read at click time
+   * rather than subscribed to, so listing what is on the map does not re-render
+   * this whole panel every time somebody pans it.
+   *
+   * `setView` is the write a pan makes. No tool runs, nothing lands in the
+   * activity feed, and `lib/awaken` — which watches `activity` and
+   * `restoredAgentState` — never hears about it: this is the human's own hand
+   * on their own map. The camera chip and the share hash both read `view` back
+   * out of the store, so they follow without being told.
+   */
+  const showBounds = useCallback((target: Bounds) => {
+    const state = useMapStore.getState();
+    state.setView(frameFor(target, state.view, state.bounds));
+  }, []);
+
+  const showPoint = useCallback((at: LngLat) => {
+    const state = useMapStore.getState();
+    state.setView(frameForPoint(at, state.view));
+  }, []);
+
+  /**
+   * Take one id off the map. The same writer the tap card's Remove uses
+   * (`OnTheMapCard`) — the whole selection minus this id, attributed `"user"`,
+   * so what leaves and what stays keep the sources they were recorded with.
+   */
+  const deselect = useCallback(
+    (id: string) => {
+      setSelection(
+        selection.filter((value) => value !== id),
+        "user",
+      );
+    },
+    [selection, setSelection],
+  );
 
   // In the sheet, the feed shares the inspector's scroll container, so
   // resting at the newest call is this component's job.
@@ -265,32 +519,12 @@ export function Inspector() {
             />
             <ul data-testid="sidebar-selection">
               {rows.map((row) => (
-                <li
+                <SelectedItem
                   key={row.id}
-                  className="sel-row"
-                  data-feature-id={row.id}
-                  data-category={row.category ?? undefined}
-                >
-                  <SelectedDot category={row.category} />
-                  <span className="sel-main">
-                    <span className="sel-name" title={row.name}>
-                      {row.name}
-                    </span>
-                    {/* The English name the data carries, under the local one —
-                        the same pair the tap card shows, so the two surfaces
-                        name the same place the same way. Omitted when the data
-                        has none, or when it is the line above (selection-model). */}
-                    {row.nameEn ? (
-                      <span className="sel-name-en" data-testid="sidebar-name-en" title={row.nameEn}>
-                        {row.nameEn}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="sel-cat">
-                    {row.category ? categorySingular(row.category) : "not loaded"}
-                    {row.sample ? " (sample)" : ""}
-                  </span>
-                </li>
+                  row={row}
+                  onShow={showBounds}
+                  onDeselect={deselect}
+                />
               ))}
             </ul>
             {rows.length === 0 && (
@@ -310,38 +544,12 @@ export function Inspector() {
             />
             <ul data-testid="sidebar-drawings">
               {drawings.map((drawing) => (
-                <li key={drawing.id} className="obj-card" data-drawing-id={drawing.id}>
-                  <DrawingSwatch drawing={drawing} />
-                  <div className="obj-main">
-                    {drawing.label && <div className="obj-title">{drawing.label}</div>}
-                    <div className="obj-meta">
-                      {drawing.kind}
-                      {drawing.radius_m ? ` · ${Math.round(drawing.radius_m)} m` : ""} ·{" "}
-                      <Source source={drawing.source} /> · {drawing.id}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="obj-x"
-                    data-testid="remove-drawing"
-                    data-drawing-id={drawing.id}
-                    aria-label={`Remove ${drawing.id}`}
-                    // The shape leaves the store first, so the dissolve is
-                    // played over a ghost of what was there — the artifact
-                    // itself is already gone, which is the honest order.
-                    onClick={() => {
-                      if (removeDrawing(drawing.id)) {
-                        emitHumanFx({
-                          type: "delete",
-                          geometry: drawing.geometry,
-                          id: drawing.id,
-                        });
-                      }
-                    }}
-                  >
-                    ✕
-                  </button>
-                </li>
+                <DrawingItem
+                  key={drawing.id}
+                  drawing={drawing}
+                  onShow={showBounds}
+                  onRemove={removeDrawing}
+                />
               ))}
             </ul>
             {drawings.length === 0 && (
@@ -361,33 +569,12 @@ export function Inspector() {
             />
             <ul data-testid="sidebar-annotations">
               {annotations.map((annotation) => (
-                <li key={annotation.id} className="obj-card" data-annotation-id={annotation.id}>
-                  <NoteSwatch annotation={annotation} />
-                  <div className="obj-main">
-                    <div className="obj-title">{annotation.note}</div>
-                    <div className="obj-meta">
-                      <Source source={annotation.source} /> · {annotation.id}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="obj-x"
-                    data-testid="remove-annotation"
-                    data-annotation-id={annotation.id}
-                    aria-label={`Remove ${annotation.id}`}
-                    onClick={() => {
-                      if (removeAnnotation(annotation.id)) {
-                        emitHumanFx({
-                          type: "delete",
-                          geometry: { type: "Point", coordinates: annotation.at },
-                          id: annotation.id,
-                        });
-                      }
-                    }}
-                  >
-                    ✕
-                  </button>
-                </li>
+                <NoteItem
+                  key={annotation.id}
+                  annotation={annotation}
+                  onShow={showPoint}
+                  onRemove={removeAnnotation}
+                />
               ))}
             </ul>
             {annotations.length === 0 && (

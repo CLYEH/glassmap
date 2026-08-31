@@ -46,6 +46,55 @@ export function approximateBounds(view: MapView, widthPx: number, heightPx: numb
   ];
 }
 
+/** Height of a [west, south, east, north] box in unit-square Mercator, ≥ 0. */
+function mercatorHeight(bounds: Bounds): number {
+  return mercatorYFromLat(bounds[1]) - mercatorYFromLat(bounds[3]);
+}
+
+/**
+ * The zoom at which `target` fits inside the rectangle `corridor` currently
+ * occupies — the `fitBounds` answer, computed from two boxes instead of from a
+ * live map.
+ *
+ * It takes the corridor rather than a pixel size on purpose. `store.bounds` is
+ * already the extent of what a human can see (`visibleBounds` above subtracts
+ * the inspector's lane; the no-WebGL path computes the same rectangle with
+ * `approximateBounds`), so the ratio of the two boxes is the ratio of the two
+ * scales — no DOM measurement, no second opinion about where the lane is, and
+ * the same answer on a page that never got a GPU. Zoom is log2 of scale, so the
+ * whole thing is one logarithm.
+ *
+ * `fill` is the fraction of the corridor the target is allowed to occupy, i.e.
+ * the padding: 0.8 leaves a tenth of the corridor clear on each side.
+ *
+ * Two known approximations, both safe in the direction they err: a rotated map
+ * publishes the *bounding box* of its corridor, which is larger than the
+ * corridor, so a fit computed while the map is turned can overshoot slightly;
+ * and a target with no extent on an axis leaves that axis unconstrained. A
+ * target with no extent at all is not a fit at all — there is nothing to frame
+ * — so the current zoom comes back unchanged and the caller decides.
+ */
+export function zoomToFit(
+  currentZoom: number,
+  corridor: Bounds,
+  target: Bounds,
+  fill: number,
+): number {
+  const corridorWidth = corridor[2] - corridor[0];
+  const corridorHeight = mercatorHeight(corridor);
+  if (!(corridorWidth > 0) || !(corridorHeight > 0)) return currentZoom;
+
+  const targetWidth = target[2] - target[0];
+  const targetHeight = mercatorHeight(target);
+  // Infinity for an axis with no extent: it constrains nothing, so the other
+  // axis decides. Both infinite means the target is a point.
+  const byWidth = targetWidth > 0 ? corridorWidth / targetWidth : Infinity;
+  const byHeight = targetHeight > 0 ? corridorHeight / targetHeight : Infinity;
+  const scale = Math.min(byWidth, byHeight) * fill;
+  if (!Number.isFinite(scale) || scale <= 0) return currentZoom;
+  return currentZoom + Math.log2(scale);
+}
+
 /** Just enough of MapLibre's `unproject` to compute a viewport box from it. */
 type Unproject = (point: [number, number]) => { lng: number; lat: number };
 

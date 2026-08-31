@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMapStore } from "@/lib/store/map-store";
 import type { Tier2Category } from "@/lib/store/tier2";
+import { MapKey } from "./MapKey";
 import { useBrowseStore } from "./browse-store";
 import { TIER2_PLURAL } from "./category-labels";
 import { TRAY_ORDER, trayCount } from "./places-model";
@@ -18,20 +19,31 @@ const number = (n: number) => n.toLocaleString("en-US");
  * The map ships with six painted datasets and eighteen more a *tool* could
  * load. That asymmetry was the whole reason the landing page needed an agent to
  * be interesting: a human could see 2,063 places and ask for none of the 31,000
- * others. This tray is that list, in English, with the manifest's counts beside
- * each row — so "show me the cafés" is a tap, and the rose ring the layer draws
- * says who asked for them.
+ * others. This tray is both halves of that sentence — `MapKey` for what is on
+ * the map already, the grid for what a tap can add, with the manifest's counts
+ * beside each row — so "show me the cafés" is a tap, and the rose ring the
+ * layer draws says who asked for them.
  *
- * Counts come from `/data/tier2/index.json`, fetched on the first open rather
- * than at load: a landing page that never opens the tray makes no request for
- * it. Until it lands the rows say "…" — an honest "not counted yet" rather than
- * a zero the map would be lying about.
+ * One surface, because it is one question. The six painted datasets used to be
+ * a separate pill in the other bottom corner, which meant a person looking for
+ * "places" found two answers on the same edge of the screen and had to work out
+ * which one they were reading. The two counts still never mix: the pill's total
+ * and the key's rows are the painted six (they sum, see `bundledKeyRows`),
+ * while the grid's numbers are what the manifest says a file holds.
+ *
+ * Grid counts come from `/data/tier2/index.json`, fetched on the first open
+ * rather than at load: a landing page that never opens the tray makes no
+ * request for it. Until it lands the rows say "…" — an honest "not counted yet"
+ * rather than a zero the map would be lying about. The pill's total says the
+ * same "…" for the same reason, until the bundled data is in the store.
  */
 export function PlacesDock() {
   const mode = useAwakenMode();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<Tier2Category | null>(null);
   const [failed, setFailed] = useState<Tier2Category | null>(null);
+  /** The painted six, which is what the pill's total counts — never the POIs. */
+  const bundled = useMapStore((s) => s.features.length);
   const manifest = useMapStore((s) => s.tier2Manifest);
   const loadManifest = useMapStore((s) => s.loadTier2Manifest);
   const tier2Loaded = useMapStore((s) => s.tier2Loaded);
@@ -90,31 +102,50 @@ export function PlacesDock() {
         <span aria-hidden className="caustic" />
         <div className="tray-head">
           <h3>Places</h3>
-          <span>tap to see a kind of place · lives in this map, not on a server</span>
+          <span>lives in this map, not on a server</span>
         </div>
-        <div className="tray-grid">
-          {TRAY_ORDER.map((c) => {
-            const count = counts.get(c);
-            const loading = pending === c;
-            return (
-              <button
-                key={c}
-                type="button"
-                className={`place-chip${category === c ? " active" : ""}`}
-                data-testid="place-chip"
-                data-category={c}
-                data-loading={loading || undefined}
-                aria-pressed={category === c}
-                onClick={() => void pick(c)}
-              >
-                <span className="pl">{TIER2_PLURAL[c]}</span>
-                <span className="pn">
-                  {loading ? "loading…" : count === undefined ? "…" : trayCount(count)}
-                </span>
-              </button>
-            );
-          })}
+
+        {/* Both sections scroll together, and only they do: the tray opens
+            upward from the dock, so on a short screen (a phone held sideways is
+            390px tall) an un-capped tray runs off the top and takes the key —
+            the first thing in it — with it. The head and the foot stay put,
+            because the foot is the OpenStreetMap attribution. */}
+        <div className="tray-body">
+          {/* What is already painted, before what a tap could add: a person
+              reading downward gets the map they are looking at first. */}
+          <MapKey />
+
+          <section className="tray-sec">
+            <div className="tray-sec-head">
+              <h4>More places</h4>
+              <span>tap one to load it onto the map</span>
+            </div>
+            <div className="tray-grid">
+              {TRAY_ORDER.map((c) => {
+                const count = counts.get(c);
+                const loading = pending === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`place-chip${category === c ? " active" : ""}`}
+                    data-testid="place-chip"
+                    data-category={c}
+                    data-loading={loading || undefined}
+                    aria-pressed={category === c}
+                    onClick={() => void pick(c)}
+                  >
+                    <span className="pl">{TIER2_PLURAL[c]}</span>
+                    <span className="pn">
+                      {loading ? "loading…" : count === undefined ? "…" : trayCount(count)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         </div>
+
         <p className="tray-foot" data-testid="places-foot">
           {failed
             ? `${TIER2_PLURAL[failed]} could not load — the file did not arrive. Try again.`
@@ -135,6 +166,12 @@ export function PlacesDock() {
           <circle cx="6.4" cy="10" r="1.8" stroke="currentColor" strokeWidth="1.3" />
         </svg>
         Places
+        {/* The scale of the map, stated on the landing screen without opening
+            anything — the one thing the old bottom-left pill said that a person
+            got for free. The painted six only; see `MapKey`. */}
+        <span className="dock-n" data-testid="legend-total">
+          {bundled > 0 ? number(bundled) : "…"}
+        </span>
         <svg className="caret" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
           <path d="M2 3.5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" />
         </svg>

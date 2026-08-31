@@ -9,7 +9,7 @@
  *
  * Wire format
  * -----------
- *   hash := ("v1." | "v2.") base64url(utf8(JSON payload))
+ *   hash := ("v1." | "v2." | "v3.") base64url(utf8(JSON payload))
  *
  * The version prefix sits outside the base64 so a build can reject a link it
  * does not understand by reading three characters instead of parsing it.
@@ -26,11 +26,13 @@
  *   d  [drawing, …]                 a  [annotation, …]
  *   t  [tier-2 category name, …]    (v2; omitted when none is loaded)
  *
- *   drawing:     k kind, o source, l label?, and either
+ *   drawing:     k kind, o source, l label?, and one of
  *                c [lng, lat] + r radius_m — a circle, whose 65-point polygon is
  *                  rebuilt on the other side rather than carried;
  *                g [lng, lat, lng, lat, …] — a polygon ring without its closing
- *                  point, or a line.
+ *                  point, or a line;
+ *                e "…" — the same points as `g`, written as differences
+ *                  (`./polyline`) instead of numbers. v3 only.
  *   annotation:  o source, p [lng, lat], n note, i icon?
  *
  * Ids are deliberately not carried: `drawing:3` means nothing in the browser
@@ -63,6 +65,31 @@
  * own link now promising less than the one they were sent. Both sides converge
  * the moment the mirror carries categories in both directions.
  *
+ * `e` is the next version up, and it is decided the same way: by content. A
+ * coordinate written as a JSON number costs about ten bytes and says nothing
+ * about the point before it, though a drawing's consecutive points normally
+ * differ in the last two digits. So a 500-point line — a legal `draw_shape`
+ * call, and what a route or a traced outline actually looks like — spends more
+ * than the whole 8 KB budget on numbers, and a map holding one had no link at
+ * all. `polyline.ts` writes the differences instead, at the same 5 decimals,
+ * for about a fifth of the bytes.
+ *
+ * A link carrying `e` is `v3`, which every build shipped so far refuses whole,
+ * so a map that already fits does not pay that price: the encoder writes the
+ * flat form first and only re-writes it as `v3` when that hash is over
+ * `SHARE_POLYLINE_THRESHOLD_BYTES` *and* the packed one is genuinely smaller.
+ * Every demo-sized map therefore still produces the exact v1 or v2 link it
+ * produced yesterday, and v3 appears only where the alternative was no link.
+ * A map made large by its selection alone stays v1: polylines cannot shrink
+ * ids, and the same bytes under a version fewer readers understand is no trade.
+ * Drawings are the only thing that gains — an annotation carries one point and
+ * a circle its centre and radius, which is already the smallest either can be.
+ *
+ * What `v3` does not do is drop points. Which points a human's outline can
+ * lose is a question about their map, not about its representation, so a map
+ * that still does not fit is refused by `get_share_link` with the byte count
+ * and the shape count, exactly as before — visibly, and by the caller.
+ *
  * `su` is the one key that is *not* versioned, and deliberately so. It only
  * ever narrows a claim: without it a reader knows the selection came from the
  * link and nothing more, with it the reader also knows which of those ids the
@@ -91,6 +118,7 @@ import type {
   SelectionSource,
 } from "@/lib/store/map-store";
 import { isTier2Category, sortedCategories, type Tier2Category } from "@/lib/store/tier2";
+import { decodePolyline, encodePolyline } from "./polyline";
 import { round5 } from "./state";
 import {
   circleGeometry,
@@ -111,8 +139,19 @@ export const SHARE_VERSION_BASE = "v1";
 /** The version a link gets once it declares loaded categories (`t`). */
 export const SHARE_VERSION_TIER2 = "v2";
 
+/**
+ * The version a link gets once a drawing's coordinates travel as differences
+ * (`e`) rather than as JSON numbers. It supersedes both versions above: a v3
+ * payload may carry everything they could.
+ */
+export const SHARE_VERSION_POLYLINE = "v3";
+
 /** Every version this build can read, in the order the error message lists them. */
-export const SHARE_VERSIONS = [SHARE_VERSION_BASE, SHARE_VERSION_TIER2] as const;
+export const SHARE_VERSIONS = [
+  SHARE_VERSION_BASE,
+  SHARE_VERSION_TIER2,
+  SHARE_VERSION_POLYLINE,
+] as const;
 
 const PREFIXES = SHARE_VERSIONS.map((v) => `${v}.`);
 
@@ -122,6 +161,18 @@ const PREFIXES = SHARE_VERSIONS.map((v) => `${v}.`);
  * two people is worse than no link at all.
  */
 export const MAX_SHARE_URL_BYTES = 8192;
+
+/**
+ * The hash size above which a map is worth re-writing as `v3`.
+ *
+ * Measured on the hash, because the hash is all this module is handed, with a
+ * kilobyte of the budget left for the page address in front of the "#" — 28
+ * bytes in production, under a hundred for the longest preview URL. The slack
+ * is deliberately generous and costs nothing: a map in that band fits either
+ * way, so all the threshold decides is which version it fits as. Too little
+ * slack would do real damage, refusing a link that v3 could have carried.
+ */
+export const SHARE_POLYLINE_THRESHOLD_BYTES = MAX_SHARE_URL_BYTES - 1024;
 
 /**
  * How much text `decodeShareState` will look at. Twice the limit above accepts
@@ -184,6 +235,8 @@ interface WireDrawing {
   c?: [number, number];
   r?: number;
   g?: number[];
+  /** The same points as `g`, delta-encoded. Written and read under v3 only. */
+  e?: string;
 }
 
 interface WireAnnotation {
@@ -312,8 +365,12 @@ function fromBase64Url(payload: string): string | null {
  * Polygons, a line is a LineString) makes null unreachable in practice;
  * `get_share_link` checks for it anyway, because a shape the human drew and the
  * link quietly lost is the one failure this feature must never hide.
+ *
+ * `packed` picks the form of the coordinates and nothing else: both forms are
+ * built from the same validated, 5-decimal points, so which one a link carries
+ * can never change which shape it restores — only how many bytes it takes.
  */
-function encodeDrawing(drawing: ShareDrawing): WireDrawing | null {
+function encodeDrawing(drawing: ShareDrawing, packed: boolean): WireDrawing | null {
   const wire: WireDrawing = { k: drawing.kind, o: drawing.source };
   const label = shareText(drawing.label, MAX_LABEL_CHARS);
   if (label) wire.l = label;
@@ -323,11 +380,13 @@ function encodeDrawing(drawing: ShareDrawing): WireDrawing | null {
     return { ...wire, c: roundPoint(drawing.center), r: round2(drawing.radius_m) };
   }
 
+  const coordinates = (flat: number[]) => (packed ? { e: encodePolyline(flat) } : { g: flat });
+
   const geometry = drawing.geometry;
   if (!geometry) return null;
   if (geometry.type === "LineString") {
     const flat = flatten(geometry.coordinates);
-    return flat && flat.length >= 4 ? { ...wire, g: flat } : null;
+    return flat && flat.length >= 4 ? { ...wire, ...coordinates(flat) } : null;
   }
   if (geometry.type === "Polygon") {
     const ring = geometry.coordinates[0];
@@ -335,7 +394,7 @@ function encodeDrawing(drawing: ShareDrawing): WireDrawing | null {
     // Drop the closing point: decode re-closes the ring.
     const open = samePoint(ring[0], ring[ring.length - 1]) ? ring.slice(0, -1) : ring;
     const flat = flatten(open);
-    return flat && flat.length >= 6 ? { ...wire, g: flat } : null;
+    return flat && flat.length >= 6 ? { ...wire, ...coordinates(flat) } : null;
   }
   return null;
 }
@@ -380,7 +439,9 @@ export function encodeShareState(input: ShareState): string {
     if (userSelected.length) payload.su = userSelected;
   }
 
-  const drawings = input.drawings.map(encodeDrawing).filter((d): d is WireDrawing => d !== null);
+  const drawings = input.drawings
+    .map((drawing) => encodeDrawing(drawing, false))
+    .filter((d): d is WireDrawing => d !== null);
   if (drawings.length) payload.d = drawings;
 
   const annotations = input.annotations
@@ -398,7 +459,20 @@ export function encodeShareState(input: ShareState): string {
   // exact v1 bytes it always did, so nothing that reads today's links breaks
   // and the field costs nothing until it is used.
   const version = categories.length ? SHARE_VERSION_TIER2 : SHARE_VERSION_BASE;
-  return `${version}.${toBase64Url(JSON.stringify(payload))}`;
+  const flat = `${version}.${toBase64Url(JSON.stringify(payload))}`;
+  if (!payload.d || utf8Bytes(flat) <= SHARE_POLYLINE_THRESHOLD_BYTES) return flat;
+
+  // Big enough to be in danger, and it has shapes, so it is worth asking what
+  // the same map costs with its coordinates written as differences. Kept only
+  // if that is genuinely smaller: a map made large by its selection re-encodes
+  // to the same bytes, and the same bytes under a version older builds refuse
+  // would be a pure loss. Encoding twice is the price of that guarantee, and
+  // only maps in this band pay it.
+  payload.d = input.drawings
+    .map((drawing) => encodeDrawing(drawing, true))
+    .filter((d): d is WireDrawing => d !== null);
+  const compact = `${SHARE_VERSION_POLYLINE}.${toBase64Url(JSON.stringify(payload))}`;
+  return utf8Bytes(compact) < utf8Bytes(flat) ? compact : flat;
 }
 
 // ------------------------------------------------------------------- decode
@@ -418,7 +492,16 @@ function decodeView(payload: Record<string, unknown>): MapView | null {
   };
 }
 
-function decodeDrawing(value: unknown): ShareDrawing | null {
+/**
+ * `polylines` is the link's version, passed down rather than assumed: `e` is
+ * read from a v3 payload only. The prefix is the entire compatibility
+ * contract, so if a v1-labelled link could carry geometry only this build
+ * understands, an older build would restore that map without the shape and
+ * neither side would know — the half-applied restore the version exists to
+ * prevent. A v3 link may still carry `g`; a newer form never leaks into an
+ * older label.
+ */
+function decodeDrawing(value: unknown, polylines: boolean): ShareDrawing | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const wire = value as Record<string, unknown>;
   const kind = wire.k;
@@ -439,7 +522,12 @@ function decodeDrawing(value: unknown): ShareDrawing | null {
     return { ...base, geometry: circleGeometry(center, radius_m), center, radius_m };
   }
 
-  const points = unflatten(wire.g, kind === "line" ? 2 : 3);
+  // Both forms land in the same unflatten, so a polyline is held to the same
+  // point count and the same coordinate range a flat list is: a link must not
+  // be able to hand the UI a shape it would refuse from a tool call, whichever
+  // way it spelled the coordinates.
+  const flat = polylines && wire.e !== undefined ? decodePolyline(wire.e) : wire.g;
+  const points = unflatten(flat, kind === "line" ? 2 : 3);
   if (!points) return null;
   if (kind === "line") return { ...base, geometry: { type: "LineString", coordinates: points } };
   const ring = closeRing(points);
@@ -522,8 +610,9 @@ export function decodeShareState(hash: string): DecodedShareState | { error: str
   }
 
   const rawDrawings = Array.isArray(payload.d) ? payload.d : [];
+  const polylines = prefix === `${SHARE_VERSION_POLYLINE}.`;
   const drawings = rawDrawings
-    .map(decodeDrawing)
+    .map((drawing) => decodeDrawing(drawing, polylines))
     .filter((d): d is ShareDrawing => d !== null);
 
   const rawAnnotations = Array.isArray(payload.a) ? payload.a : [];

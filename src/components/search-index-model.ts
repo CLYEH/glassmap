@@ -14,7 +14,8 @@ import { TIER2_SINGULAR } from "./category-labels";
  * categories, whether or not a single one of their files has been fetched. It is
  * the same defect the tool layer's `unloaded_matches` answers, on the surface a
  * person uses — "starbucks" on a fresh page found nothing, over a city holding
- * 152 of them.
+ * 152 Starbucks, 151 of which that word reaches (the odd one out is written
+ * 星巴克 and nothing else, and is found by typing that).
  *
  * ## An index row is not a feature, and this module never pretends otherwise
  *

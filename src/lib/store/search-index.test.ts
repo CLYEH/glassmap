@@ -2,7 +2,7 @@
  * The citywide search index, tested where it can lie.
  *
  * Everything downstream of this file is a *promise*: find_features' answer
- * says "there are 152 of those in a category you have not loaded", and an
+ * says "there are 151 of those in a category you have not loaded", and an
  * agent that cannot see the screen relays it to a human. So the properties
  * that matter here are the ones that would turn that sentence into a lie:
  *

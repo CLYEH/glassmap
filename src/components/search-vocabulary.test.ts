@@ -78,7 +78,7 @@ describe("matchCategoryVocabulary", () => {
     // The invariant that caught the real gap: matching is by prefix, so a
     // plural English does not build by adding a letter is unreachable from its
     // own singular — "Pharmacies" was not found by typing "pharmacy", over a
-    // city holding 1,100 of them. The map teaches a person both words (the
+    // city holding 563 of them. The map teaches a person both words (the
     // tray shows the plural, a selected row shows the singular), so both have
     // to work, and a nineteenth category cannot be added without checking it.
     for (const category of TIER2_CATEGORIES) {
@@ -148,7 +148,7 @@ describe("matchCategoryVocabulary", () => {
 
   it("keeps food out of the table — that is the feature matcher's job", () => {
     // `cuisine` values belong to the places that carry them. Offering to paint
-    // 12,000 restaurants because somebody typed "ramen" answers a question
+    // 13,789 restaurants because somebody typed "ramen" answers a question
     // nobody asked, and hides the ramen shop two streets away.
     expect(match("ramen")).toEqual([]);
     expect(match("sushi")).toEqual([]);

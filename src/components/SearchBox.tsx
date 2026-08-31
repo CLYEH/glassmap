@@ -72,11 +72,12 @@ import { matchCategoryVocabulary } from "./search-vocabulary";
  * ## Picking loads, and the two picks load differently
  *
  * A **citywide row** loads its category and paints nothing
- * (`restoreTier2Categories`, the store's own loader). Two reasons, and both
- * would be violated by routing it through the browse tray's `browse()`:
+ * (`loadTier2Category`, the store's plain per-category loader). Two reasons,
+ * and both would be violated by routing it through the browse tray's
+ * `browse()`:
  *
  *  - **A search pick is one place, not a citywide paint.** Someone asking where
- *    a Starbucks is has not asked for 2,297 café beads over their city. The
+ *    a Starbucks is has not asked for 2,298 café beads over their city. The
  *    place they picked is still marked — `applySelectionMarks` in `MapCanvas`
  *    draws a bead for any *selected* point of interest whatever the browse set
  *    is (`selectedPoiFeatures`, map-style.ts) — so the pick is visible without
@@ -86,9 +87,22 @@ import { matchCategoryVocabulary } from "./search-vocabulary";
  *    take a kind of place the human was looking at off the map. A pick is not
  *    a browse gesture and must not cost one.
  *
+ * And it is the *plain* loader, not `restoreTier2Categories`, for a third
+ * reason the browse tray does not raise: the restore loader records a failure
+ * in `tier2RestoreFailures`, and that list is a claim about a **share link**. A
+ * pick whose file never arrived, taken through it, made a page nobody was sent
+ * say "couldn't load cafe for this link" (`ShareRestoreNotice`), showed an
+ * agent a restore failure in `get_map_state().tier2.failed` — contradicting
+ * the invisibility this box promises above — and got the category declared
+ * into the next link this page wrote, so a recipient downloaded 573 KB of
+ * cafés for a map that never held one. A failed pick is the pick's own news
+ * and nobody else's; it is said in one line under the rows and nowhere else.
+ *
  * What it does cost is disclosed where every loaded-but-unpainted category is
  * disclosed: the `poi-loaded` strip in the bottom bar (`LoadedCategories`)
- * names it and counts it. Then the pick behaves exactly like a loaded one —
+ * names it and counts it — the plain loader lands the category in
+ * `tier2Loaded` exactly as the restore does, so a pick that works is disclosed
+ * as loudly as it ever was. Then the pick behaves exactly like a loaded one —
  * append to the selection as `"user"`, ease the camera, never zoom out.
  *
  * The selection is written **after** the load, never beside it, and never at
@@ -118,7 +132,7 @@ export function SearchBox() {
   const searchIndex = useMapStore((s) => s.searchIndex);
   const searchIndexStatus = useMapStore((s) => s.searchIndexStatus);
   const manifest = useMapStore((s) => s.tier2Manifest);
-  const restoreCategories = useMapStore((s) => s.restoreTier2Categories);
+  const loadCategory = useMapStore((s) => s.loadTier2Category);
   const painted = useBrowseStore((s) => s.categories);
   const browse = useBrowseStore((s) => s.browse);
 
@@ -253,10 +267,12 @@ export function SearchBox() {
     async (key: string, id: string, category: Tier2Category, center: [number, number]) => {
       setPending(key);
       setNote(null);
-      const result = await restoreCategories([category]);
+      const result = await loadCategory(category);
       setPending(null);
       // A file that would not load selects nothing: "the file did not arrive"
-      // is said out loud instead of shown as a dead pick.
+      // is said out loud, here and only here — the plain loader leaves no
+      // restore failure behind for another surface to repeat as a link's news
+      // (see the header) — instead of shown as a dead pick.
       if (!result.ok) {
         setNote({ kind: "failed", category });
         return;
@@ -275,7 +291,7 @@ export function SearchBox() {
       state.setView({ center, zoom: Math.max(state.view.zoom, SEARCH_ZOOM) });
       setOpen(false);
     },
-    [restoreCategories],
+    [loadCategory],
   );
 
   /** A "browse this kind" row: the tray's own act, cap, eviction and all. */

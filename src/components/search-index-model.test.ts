@@ -58,7 +58,8 @@ const search = (
 describe("searchIndexEntries", () => {
   it("finds a place in a category nobody has loaded — the whole reason it exists", () => {
     // The reported defect, as a test: "starbucks" on a fresh page found
-    // nothing, over a city holding 152 of them in a file never fetched.
+    // nothing, over a city holding 152 Starbucks — 151 of them reachable by
+    // that word — in a file never fetched.
     const index = [row("osm:node:1", { name: "Starbucks", brand: "Starbucks" })];
     const answer = search("starbucks", { index });
     expect(answer.total).toBe(1);

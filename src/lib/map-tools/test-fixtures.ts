@@ -658,7 +658,7 @@ export const TIER2_FILES_WITH_SEARCH_INDEX: Record<string, unknown> = {
 };
 
 /** The categories of `TIER2_SEARCH_INDEX_WIDE`, in descending row count. */
-export const WIDE_SEARCH_CATEGORIES = [
+const WIDE_SEARCH_CATEGORIES = [
   "restaurant",
   "cafe",
   "bar",
@@ -675,7 +675,7 @@ export const WIDE_SEARCH_CATEGORIES = [
  * and which are only counted is decided by the data rather than by the order
  * anything happens to iterate in. Every row matches "wide".
  */
-export const TIER2_SEARCH_INDEX_WIDE = {
+const TIER2_SEARCH_INDEX_WIDE = {
   generated: "2026-08-31",
   rows: WIDE_SEARCH_CATEGORIES.flatMap((category, i) =>
     Array.from({ length: WIDE_SEARCH_CATEGORIES.length - i }, (_, n) => [

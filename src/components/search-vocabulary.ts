@@ -12,14 +12,14 @@ import { TIER2_PLURAL } from "./category-labels";
  * three words in Chinese — and the honest answer is not a list of eight cafés
  * but the offer to put every café on the map. Without it the box searched
  * 31,000 names for the Chinese word for pharmacy and found the handful of shops
- * that happen to be *called* that, over a city holding 1,100 of them.
+ * that happen to be *called* that, over a city holding 563 of them.
  *
  * Three rules keep the table from becoming a search engine of its own:
  *
  *  - **Category concepts only.** A kind of place, never a kind of food: ramen,
  *    sushi and vegetarian are `cuisine` tag values, and the feature matcher
  *    already finds them on the places that carry them (`search-model.ts`).
- *    Putting them here would offer to paint 12,000 restaurants because somebody
+ *    Putting them here would offer to paint 13,789 restaurants because somebody
  *    typed "ramen", which is not what they asked and not where the answer is.
  *  - **Common Taiwanese usage, not translation.** Every alias is a word people
  *    in Taipei actually type — the contraction for a convenience store, the
@@ -64,8 +64,11 @@ export interface CategoryVocabularyEntry {
  *  - `place_of_worship`: one OSM tag covers temples, shrines and churches, so
  *    the row has to be reachable from all three, including the single character
  *    that is the most-typed of them.
- *  - `bicycle_rental`: in Taipei this category *is* YouBike — the Chinese name
- *    the city uses, and "ubike", the older and still universal one.
+ *  - `bicycle_rental`: in Taipei this category *is* YouBike, so the row has to
+ *    be reachable from that name and from "ubike", the older and still
+ *    universal one. The headline word is the spoken register — 腳踏車 is what a
+ *    person here says and types; 自行車 is the written form officialdom uses,
+ *    kept as an alias so the city's own signage still reaches the row.
  *  - `hotel`: two words are current, and one of them also ends restaurant
  *    names. Harmless: a restaurant with that ending is found by the feature
  *    matcher above this row, not instead of it.
@@ -99,8 +102,8 @@ export const CATEGORY_VOCABULARY: readonly CategoryVocabularyEntry[] = [
   {
     category: "bicycle_rental",
     en: TIER2_PLURAL.bicycle_rental,
-    zh: "自行車租借",
-    aliases: ["ubike", "youbike", "微笑單車", "腳踏車"],
+    zh: "腳踏車租借",
+    aliases: ["自行車租借", "ubike", "youbike", "微笑單車", "單車", "腳踏車"],
   },
   { category: "library", en: TIER2_PLURAL.library, zh: "圖書館", aliases: ["圖書室", "library"] },
   { category: "museum", en: TIER2_PLURAL.museum, zh: "博物館", aliases: ["美術館", "展覽館", "museum"] },

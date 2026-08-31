@@ -455,7 +455,8 @@ task's scope, but a future data task should consider trying
 `public/data/tier2/search-index.json` fixes a defect: the map's search only
 matched whatever tier-2 categories a session had already *loaded*, so a
 query like "starbucks" found nothing on a fresh page even though 152
-Starbucks stores exist in `cafe.geojson`. This file is a flat, always-
+星巴克 rows exist in `cafe.geojson` — 151 of them reachable by that Latin
+query, the odd one out being written 星巴克 and nothing else. This file is a flat, always-
 available name/kind/address lookup covering all 18 tier-2 categories,
 independent of which categories are in memory — the search tool can load it
 once and match against it regardless.
@@ -528,7 +529,7 @@ through the manifest.
 
 31057 rows (31069 tier-2 features minus 12 ids that appear in two category
 files — see "12 ids appear in two category files" above — each counted
-once). 3,619,608 bytes (3535.7 KB) raw / 903,555 bytes (882.4 KB) gzip -9.
+once). 3,619,608 bytes (3534.8 KB) raw / 903,555 bytes (882.4 KB) gzip -9.
 Substantially larger than the top-level "under 300 KB per file" target, for
 the same reason the 18 tier-2 category files already exceed it (real Taipei
 POI density) plus the address/cuisine columns added for this task's wider
@@ -549,14 +550,19 @@ Sanity-checked against the citywide-search defect report:
 
 | Query | Matches | Matched via |
 |---|---:|---|
-| "Starbucks" / "星巴克" | 152 | name/nameEn/brand |
-| "Louisa" / "路易莎" | 133 | name/nameEn/brand |
+| "Starbucks" / "星巴克" | 152 union (151 Latin, 152 Chinese) | name/nameEn/brand |
+| "Louisa" / "路易莎" | 133 union (118 Latin, 129 Chinese) | name/nameEn/brand |
 | "coffee" | 834 (354 name/nameEn/brand + 480 address/cuisine) | mostly `cuisine=coffee_shop` |
 | "拉麵" (ramen) | 146 | name/nameEn/brand |
 | "基河路" (a Taipei street) | 32 (2 name + 30 address) | address |
 | "藥局" (pharmacy, Chinese) | 438 | name/nameEn/brand |
 
-152 Starbucks and 133 Louisa both match the owner's defect report (~152,
-~132) within real-data variance. The address/cuisine hits for "coffee" and
+The first two rows are the **union** of one brand's two spellings, which is
+not what either spelling finds on its own: one store is written 星巴克 with
+no Latin name at all, so "starbucks" reaches 151 of the 152. Both unions
+match the owner's defect report (~152, ~132) within real-data variance.
+Neither is a brand census — 4 more rows spell Louisa 路易．莎 or 路易沙 and
+2 spell it 露易莎, and no query in this table reaches them, which is what
+"matched via name" costs and buys. The address/cuisine hits for "coffee" and
 "基河路" are what the two added columns are for: a query that names a kind
 of place or a street, not a specific business, still finds something.

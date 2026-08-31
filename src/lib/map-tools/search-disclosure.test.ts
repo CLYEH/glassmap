@@ -2,7 +2,8 @@
  * find_features learning to say what it *could* have found.
  *
  * The defect: on a fresh page nothing tier-2 is loaded, so a search for a
- * chain by name answers `total: 0` — over a city holding 152 of them. An agent
+ * chain by name answers `total: 0` — over a city holding 152 Starbucks, 151 of
+ * which the word "starbucks" reaches (`public/data/README.md`). An agent
  * cannot see that the map is empty, so it reads the zero out to a human as if
  * it were an answer. `unloaded_matches` is the fix, and every test here defends
  * one of the four things that make it worth trusting:

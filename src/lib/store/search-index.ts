@@ -4,8 +4,9 @@
  *
  * It exists because of a defect the category-lazy design creates and cannot
  * fix on its own: a search for "starbucks" on a fresh page finds nothing,
- * because no category is loaded yet, even though 152 Starbucks stores are
- * sitting in `cafe.geojson`. Nothing on screen contradicts that answer — which
+ * because no category is loaded yet, even though 151 stores that word reaches
+ * are sitting in `cafe.geojson` (152 are Starbucks; one is written 星巴克 and
+ * nothing else). Nothing on screen contradicts that answer — which
  * is the exact failure mode `tier2.ts` was written to prevent, one level up.
  * The index is how a search can say *what it could have found*, without
  * fetching a single category file.

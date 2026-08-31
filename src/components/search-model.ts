@@ -31,7 +31,7 @@ import type { CategoryRow } from "./search-vocabulary";
  * ## Why this is wider than the tools' `query`, and must stay wider
  *
  * `find_features` and `list_features_in_view` match the local and English
- * **name** only (`QUERY_MATCHING` in `map-tools/index.ts`, `matchesQuery` in
+ * **name** only (`QUERY_MATCHING` in `map-tools/index.ts`, `matchesName` in
  * `map-tools/query.ts`). This box also matches `brand` and `cuisine`, and the
  * asymmetry is deliberate on both sides:
  *

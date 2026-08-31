@@ -16,21 +16,24 @@
  * lives under `/data/tier2/`, same-origin to the `next dev` server, exactly
  * the guarantee `tier2.spec.ts` already relies on.
  *
- * Two numbers below are measured against the shipped extract rather than
- * derived at runtime, on purpose -- like `FEATURE_COUNT` in `helpers.ts`,
- * they pin this spec to the real data so a regeneration that quietly changes
- * what "starbucks" finds fails a test instead of nothing:
- *  - `STARBUCKS_CITYWIDE_CAFES` (151): every index row whose name or English
- *    name contains "starbucks" -- all of them tagged `cafe`, none of them
- *    tagged anything else. Matches both `find_features`' `unloaded_matches`
- *    (name/nameEn only) and the human box's own `searchIndexEntries` (which
- *    also matches brand/cuisine/address) because for this particular query
- *    the two totals happen to coincide -- there is no Starbucks row whose
- *    *only* matching field is brand, cuisine or address.
- *  - `COFFEE_SHOP_CUISINE_HITS` (676): index rows carrying `coffee_shop` as
- *    their `cuisine` column -- the box's own divergence note
- *    (`search-model.ts`) made concrete, and the fixture for item 6's
- *    names-only assertion below.
+ * One number below is measured against the shipped extract rather than
+ * derived at runtime, on purpose -- like `FEATURE_COUNT` in `helpers.ts`, it
+ * pins this spec to the real data so a regeneration that quietly changes what
+ * "starbucks" finds fails a test instead of nothing. `STARBUCKS_CITYWIDE_CAFES`
+ * (151) is every index row whose name or English name contains "starbucks" --
+ * all of them tagged `cafe`, none of them tagged anything else. It matches
+ * both `find_features`' `unloaded_matches` (name/nameEn only) and the human
+ * box's own `searchIndexEntries` (which also matches brand/cuisine/address)
+ * because for this particular query the two totals happen to coincide: there
+ * is no Starbucks row whose *only* matching field is brand, cuisine or
+ * address. (The Chinese name reaches one row more -- 152 rows carry 星巴克 or
+ * "starbucks" between them -- which is why the data README words that count as
+ * a union rather than as one query's answer.)
+ *
+ * Item 6's second case needs no such number: it asks for a cuisine tag value
+ * ("coffee_shop") that hundreds of index rows carry and no row is *named*, and
+ * asserts the tool discloses nothing at all -- the box's own divergence note
+ * (`search-model.ts`) made concrete, with no count to keep in sync.
  */
 import type { Page } from "@playwright/test";
 import { SEARCH_INDEX_LIMIT } from "@/components/search-index-model";
@@ -315,6 +318,92 @@ test.describe("5. failure honesty -- a moment never gets dressed up as a fact (T
     // pick, and cafe never entered memory.
     expect(after.selection).toEqual(before.selection);
     expect(after.tier2Loaded).not.toContain("cafe");
+
+    // And the note is the ONLY surface that says so. A pick is not a share
+    // restore: routing it through `restoreTier2Categories` used to record a
+    // `tier2RestoreFailures` entry, which made this page -- opened with no
+    // link at all -- render "couldn't load cafe for this link" and hand an
+    // agent a broken-link claim, on top of re-declaring cafe in the next link
+    // it wrote. `SearchBox` takes the store's plain `loadTier2Category` for
+    // exactly this reason.
+    await expect(page.getByTestId("share-restore")).toHaveCount(0);
+    // Read last, because any tool call records activity: the assertions above
+    // are about a page nothing has called a tool on.
+    const state = await callTool(page, "get_map_state", {});
+    expect(state.error).toBeUndefined();
+    expect(state.tier2?.failed ?? []).toEqual([]);
+  });
+
+  test("a category file that arrives without the picked place says so, and still selects nothing", async ({
+    page,
+  }) => {
+    // The other half of "never select an id the store cannot resolve", and the
+    // half that survives a *successful* load: the citywide index and the
+    // category files are generated separately (`scripts/fetch-tier2.mjs
+    // --only`), so a deployment can serve an index row for a place its cafe
+    // file no longer contains. Selecting that id would highlight nothing, and
+    // T-101's inspector would render it as an inert "not loaded" row with no
+    // way out -- honest, and indistinguishable from a bug.
+    //
+    // Simulated by serving the *real* cafe.geojson with every Starbucks
+    // stripped: a valid file, correctly parsed, fully loaded -- so nothing but
+    // the guard in `chooseIndex` can produce the outcome asserted below.
+    let stripped = 0;
+    await page.route("**/data/tier2/cafe.geojson", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        features: { properties: { name?: string; nameEn?: string } }[];
+      };
+      const before = body.features.length;
+      body.features = body.features.filter(({ properties }) => {
+        const written = `${properties.name ?? ""} ${properties.nameEn ?? ""}`.toLowerCase();
+        return !written.includes("starbucks") && !written.includes("星巴克");
+      });
+      stripped = before - body.features.length;
+      // `response` carries the real status and headers; only the body changes.
+      await route.fulfill({ response, body: JSON.stringify(body) });
+    });
+
+    await page.goto("/");
+    await waitForTools(page);
+    await waitForFeatures(page);
+    await waitForStoreHandle(page);
+
+    await typeQuery(page, "starbucks");
+    await waitForIndexReady(page);
+
+    const before = await storeSnapshot(page);
+    const row = page.locator('[data-testid="search-index-result"]').first();
+    await expect(row).toBeVisible();
+    const id = await row.getAttribute("data-feature-id");
+    expect(await row.getAttribute("data-category")).toBe("cafe");
+
+    await row.click();
+
+    await expect(page.getByTestId("search-pick-note")).toHaveAttribute("data-kind", "stale");
+
+    const after = await storeSnapshot(page);
+    // The load really happened -- this is not the failed path wearing another
+    // word. Cafe is in memory, and the picked id is not.
+    expect(after.tier2Loaded).toContain("cafe");
+    expect(stripped, "the served cafe file must really have lost its Starbucks").toBeGreaterThan(0);
+    expect(
+      await page.evaluate(
+        (featureId) =>
+          window
+            .__glassmapStore!.getState()
+            .tier2Features.some((f) => f.properties.id === featureId),
+        id!,
+      ),
+      "the guard's own premise: the loaded file does not contain the picked id",
+    ).toBe(false);
+
+    // Byte-identical selection: not merely "the id is absent" but "nothing
+    // moved", which is what keeps the inspector and every share link this page
+    // writes free of a row nothing can answer for.
+    expect(after.selection).toEqual(before.selection);
+    expect(after.selectionSources).toEqual(before.selectionSources);
+    expect(after.selection).not.toContain(id);
   });
 });
 

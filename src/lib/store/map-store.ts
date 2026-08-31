@@ -393,6 +393,26 @@ interface MapStore {
   /** See `MapToolStore.restoreCategories`; this is the same call, for the page. */
   restoreTier2Categories: (categories: readonly Tier2Category[]) => Promise<Tier2RestoreResult>;
   /**
+   * See `MapToolStore.loadCategory`; the same call, for the page — one category,
+   * loaded because a person asked for it here and now.
+   *
+   * **Not the loader above, and the difference is the whole reason this exists.**
+   * `restoreTier2Categories` is the *link* path: on a failure it writes
+   * `tier2RestoreFailures`, which is a claim that a shared map cannot be
+   * reproduced here. Everything downstream reads it as exactly that — the page
+   * says "couldn't load cafe for this link" (`ShareRestoreNotice`),
+   * `get_map_state` reports it under `tier2.failed`, and `shareCategories`
+   * keeps declaring a momentarily-failed category in the next link this page
+   * writes, so a recipient downloads its file. A search pick has no link behind
+   * it: routing one through the restore path made a linkless page say a link
+   * had broken. This loader tells its one caller what happened and records
+   * nothing about links — a failure is the picker's own line to say (see
+   * `SearchBox`'s `chooseIndex`). Success is identical on both paths: the
+   * features land in `tier2Features` and the category in `tier2Loaded`, where
+   * the `poi-loaded` strip discloses it.
+   */
+  loadTier2Category: (category: Tier2Category) => Promise<Tier2LoadResult>;
+  /**
    * See `MapToolStore.loadTier2Manifest`; the same call, for the page. The
    * Places tray needs the per-category counts to offer them, and it must ask
    * the same registry the tools ask, or the index would be fetched twice and
@@ -495,6 +515,7 @@ export const useMapStore = create<MapStore>((set, get) => ({
   tier2RestoreFailures: [],
   // The loader is created below (it needs this store); read at call time.
   restoreTier2Categories: (categories) => zustandTier2.restoreCategories(categories),
+  loadTier2Category: (category) => zustandTier2.loadCategory(category),
   loadTier2Manifest: () => zustandTier2.loadManifest(),
   tier2Manifest: null,
   searchIndex: null,

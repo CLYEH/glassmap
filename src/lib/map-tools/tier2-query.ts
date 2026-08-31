@@ -153,9 +153,10 @@ export interface UnloadedMatchDisclosure {
  *
  * This is the answer to the defect that made the citywide index exist: on a
  * fresh page, `find_features({query: "starbucks"})` searches the six bundled
- * datasets, finds nothing, and — before this — said nothing about the 152
- * Starbucks stores sitting in a cafe file it never fetched. An agent cannot see
- * that the map is empty; the honest answer has to carry the reason.
+ * datasets, finds nothing, and — before this — said nothing about the 151
+ * Starbucks stores that word reaches in a cafe file it never fetched (152 rows
+ * are Starbucks; one of them is written 星巴克 and nothing else). An agent
+ * cannot see that the map is empty; the honest answer has to carry the reason.
  *
  * Four rules, and each one is a promise:
  *
@@ -168,8 +169,10 @@ export interface UnloadedMatchDisclosure {
  *    `address`, and the human-facing search box is free to match them; a *tool*
  *    disclosure must not, because `count` is read as "how many I get if I name
  *    this category", and find_features once loaded matches names and nothing
- *    else. Counting the 480 `cuisine=coffee_shop` rows for "coffee" would
- *    promise 480 features that the follow-up call then cannot find.
+ *    else. On the shipped index "coffee" is 354 rows by name and 834 once
+ *    address and cuisine count — mostly `cuisine=coffee_shop`, which 569 rows
+ *    carry citywide. Disclosing the 834 would promise 480 features the
+ *    follow-up call then cannot find.
  *  - **Already-loaded rows do not count.** A row is skipped when *any* of its
  *    categories is in memory, because those matches are already in the answer
  *    above and this field is about what is missing from it. For the handful of

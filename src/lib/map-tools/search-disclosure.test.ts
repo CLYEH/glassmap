@@ -11,7 +11,10 @@
  *  1. it names only categories this session has not loaded, so it is always
  *     about the calls that could follow rather than the one that just ran;
  *  2. its counts are what naming the category actually returns — matched by
- *     the same predicate `queryFeatures` uses, over names and nothing else;
+ *     the same predicate `queryFeatures` uses, over the same five fields
+ *     (name, English name, brand, cuisine, address). Until T-102 both sides
+ *     were names only; widening one of them alone would have broken exactly
+ *     this promise, which is why the predicate widened rather than the count;
  *  3. it never loads anything. The disclosure *is* the feature: the agent
  *     decides what to fetch, and the map never changes because someone typed a
  *     word;
@@ -30,6 +33,7 @@ import {
   FIXTURE_FEATURES,
   TIER2_FILES,
   TIER2_FILES_WITH_BAKERY,
+  TIER2_FILES_WITH_DRIFTED_BAKERY,
   TIER2_FILES_WITH_SEARCH_INDEX,
   TIER2_FILES_WITH_WIDE_SEARCH_INDEX,
   TIER2_INDEX,
@@ -86,49 +90,105 @@ describe("a name that exists in a category nobody loaded", () => {
     expect(out.total).toBe(0);
     expect(out.unloaded_matches).toEqual([
       { category: "cafe", count: 3 },
+      { category: "fast_food", count: 3 },
+      { category: "bakery", count: 2 },
       { category: "bar", count: 2 },
-      { category: "bakery", count: 1 },
-      { category: "fast_food", count: 1 },
+      { category: "restaurant", count: 1 },
     ]);
     // Nothing was dropped, so nothing claims to have been.
     expect(out.unloaded_matches_omitted).toBeUndefined();
   });
 
-  it("counts names, never a cuisine, a brand or an address", async () => {
-    // The rule the count depends on. The fixture index holds three rows that
-    // match "coffee" through some *other* column: osm:node:112 through
-    // `cuisine` (bakery;coffee_shop), osm:node:302 through `brand` ("Coffee
-    // Corner"), osm:node:303 through `address` ("No. 5, Coffee Lane"). None may
-    // be counted, because find_features matches the local and English name and
-    // nothing else — so counting them would promise features the follow-up
-    // call cannot return, which is the same lie in the opposite direction from
-    // the one this whole field exists to fix.
+  it("counts a cuisine, a brand and an address, because the loaded search does", async () => {
+    // The rule the count depends on, and the half of T-102 that is about
+    // *this* field. The fixture index holds three rows that match "coffee"
+    // through some column other than a name: osm:node:112 through `cuisine`
+    // (bakery;coffee_shop), osm:node:302 through `brand` ("Coffee Corner"),
+    // osm:node:303 through `address` ("No. 5, Coffee Lane").
+    //
+    // Before T-102 none of them could be counted, and the reasoning was right
+    // at the time: `count` is read as "how many features I get if I name this
+    // category", and the loaded search matched names only, so counting these
+    // would have promised features the follow-up call could not return. The
+    // fix was not to keep quiet about them - it was to stop the two sides
+    // matching different things (`matchesQuery`, one predicate, both call
+    // sites). Now the promise and its fulfilment are the same five fields, and
+    // silence here would be the lie: a person searching for a coffee shop by
+    // cuisine would be told there is nothing to load.
     const { byName } = page();
     const out = await call(byName.find_features, { query: "coffee" });
     const counts = Object.fromEntries(
       (out.unloaded_matches ?? []).map((m) => [m.category, m.count]),
     );
 
-    // restaurant would be here at all only through node:112's cuisine.
-    expect(counts.restaurant).toBeUndefined();
-    // fast_food holds three matching-ish rows and exactly one real one:
-    // node:304 by name. node:302 (brand) and node:303 (address) are not it.
-    expect(counts.fast_food).toBe(1);
+    // restaurant is here at all only through node:112's cuisine.
+    expect(counts.restaurant).toBe(1);
+    // fast_food: node:304 by name, node:302 by brand, node:303 by address.
+    expect(counts.fast_food).toBe(3);
   });
 
-  it("promises a number the follow-up call keeps", async () => {
+  it("promises a floor the follow-up call keeps, for a match on any of the five", async () => {
     // The contract in one round trip: whatever the disclosure said about a
-    // category, naming it returns at least that many features. If these two
-    // ever disagree, the field is worse than useless - it sends the agent to
-    // fetch a megabyte for matches that are not there.
-    const { byName } = page();
-    const disclosed = await call(byName.find_features, { query: "coffee" });
-    const cafe = disclosed.unloaded_matches?.find((m) => m.category === "cafe");
+    // category, naming it returns *at least* that many features. If these two
+    // ever disagree downwards, the field is worse than useless - it sends the
+    // agent to fetch a megabyte for matches that are not there.
+    //
+    // Checked per category rather than on one of them, and with a query that
+    // reaches every column the index has: node:112 is disclosed under
+    // restaurant purely on `cuisine`, and loading restaurant has to find it, or
+    // the widened count would be the exact over-promise the old names-only
+    // rule existed to prevent.
+    //
+    // The promise is about an index generated from the files it indexes, which
+    // is what `scripts/build-search-index.mjs` builds and validates. Two of
+    // this fixture's categories are deliberately not that: bar and fast_food
+    // are index rows with no file behind them (which is what makes them useful
+    // above), and the bakery file holds one of the two rows the index files
+    // under bakery. They are named rather than filtered by a predicate, so a
+    // category that quietly stopped being reconcilable fails this test instead
+    // of being skipped by it.
+    const disclosed = await call(page().byName.find_features, { query: "coffee" });
+    const counts = disclosed.unloaded_matches ?? [];
+    const derived = counts.filter((m) => ["cafe", "restaurant"].includes(m.category));
+    expect(derived.map((m) => m.category)).toEqual(["cafe", "restaurant"]);
 
-    const loaded = await call(byName.find_features, { query: "coffee", categories: ["cafe"] });
+    for (const { category, count } of derived) {
+      // A fresh page per category: loading one changes what the next
+      // disclosure would say, and this is a claim about a single follow-up.
+      const fresh = page().byName;
+      const loaded = await call(fresh.find_features, { query: "coffee", categories: [category] });
+      expect(loaded.error, category).toBeUndefined();
+      expect(loaded.total ?? 0, category).toBeGreaterThanOrEqual(count);
+    }
+    // restaurant is the one that matters: its only match is node:112, reached
+    // through `cuisine` alone. A count that widened without the loaded search
+    // widening with it would fail right here.
+    expect(derived.find((m) => m.category === "restaurant")?.count).toBe(1);
+  });
 
-    expect(loaded.error).toBeUndefined();
-    expect(loaded.total).toBe(cafe?.count);
+  it("is a floor and not an equality, because a loaded file can hold more than the index counted", async () => {
+    // Why the invariant above is >= rather than ==, in the case that makes it
+    // so. A dual-tagged id's row is written from whichever file the generator
+    // read first, and the other file can drift away from it afterwards
+    // (`fetch-tier2.mjs --only=<category>` regenerates one category, so an OSM
+    // rename lands in one of them only). Here the bakery file calls node:112
+    // 多那之咖啡烘焙 / "Donutes Coffee Bakery" and the index row - the
+    // restaurant file's copy - has never heard that name.
+    //
+    // So the disclosure says nothing while the category itself holds a match,
+    // and that is the safe direction: it under-counts, never over-counts, so an
+    // agent acting on it is never sent after features that are not there. The
+    // other, permanent source of the same slack is the dual-tagged row below.
+    const { byName } = page({
+      ...TIER2_FILES_WITH_DRIFTED_BAKERY,
+      [SEARCH_INDEX_URL]: TIER2_FILES_WITH_SEARCH_INDEX[SEARCH_INDEX_URL],
+    });
+    const disclosed = await call(byName.find_features, { query: "咖啡烘焙" });
+    // The index (restaurant's copy of the row) has never heard that name.
+    expect(disclosed.unloaded_matches).toBeUndefined();
+
+    const loaded = await call(byName.find_features, { query: "咖啡烘焙", categories: ["bakery"] });
+    expect(loaded.total).toBe(1);
   });
 });
 
@@ -167,7 +227,12 @@ describe("what the disclosure refuses to do", () => {
     const out = await call(byName.find_features, { query: "coffee" });
 
     expect(out.total).toBe(3);
-    expect(out.unloaded_matches?.map((m) => m.category)).toEqual(["bar", "bakery", "fast_food"]);
+    expect(out.unloaded_matches?.map((m) => m.category)).toEqual([
+      "fast_food",
+      "bakery",
+      "bar",
+      "restaurant",
+    ]);
   });
 
   it("drops a dual-tagged row entirely once either of its categories is loaded", async () => {
@@ -185,10 +250,22 @@ describe("what the disclosure refuses to do", () => {
 
     const out = await call(byName.find_features, { query: "coffee" });
 
+    // node:112 (bakery,restaurant) goes with it, so restaurant - which the
+    // widened predicate reaches only through that row's cuisine - is gone too.
     expect(out.unloaded_matches).toEqual([
       { category: "cafe", count: 3 },
       { category: "bar", count: 2 },
+      { category: "fast_food", count: 2 },
     ]);
+    // And this is the floor, at its widest: restaurant is not disclosed at all,
+    // because its only matching row is node:112 and bakery already holds it -
+    // yet naming restaurant still returns that row. Under-counted (0 against
+    // 1), never over-counted, which is the direction an agent can act on.
+    const loaded = await call(byName.find_features, {
+      query: "coffee",
+      categories: ["restaurant"],
+    });
+    expect(loaded.total).toBe(1);
   });
 
   it("cannot name a category the caller just asked for", async () => {
@@ -201,9 +278,10 @@ describe("what the disclosure refuses to do", () => {
     expect(out.total).toBe(3);
     expect(out.unloaded_matches?.map((m) => m.category)).not.toContain("cafe");
     expect(out.unloaded_matches).toEqual([
+      { category: "fast_food", count: 3 },
+      { category: "bakery", count: 2 },
       { category: "bar", count: 2 },
-      { category: "bakery", count: 1 },
-      { category: "fast_food", count: 1 },
+      { category: "restaurant", count: 1 },
     ]);
   });
 

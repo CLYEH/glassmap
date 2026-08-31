@@ -1,5 +1,6 @@
 import { normaliseName } from "@/lib/map-tools/gazetteer";
 import { distanceMeters } from "@/lib/map-tools/output";
+import { QUERY_FIELDS } from "@/lib/map-tools/query";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
 import type { SearchIndexEntry } from "@/lib/store/search-index";
 import { isTier2Category, type Tier2Category } from "@/lib/store/tier2";
@@ -34,15 +35,23 @@ import { TIER2_SINGULAR } from "./category-labels";
  * makes the box self-healing — pick one café and the whole cafe category loads,
  * so every other café in the index turns into a rich row on the next keystroke.
  *
- * ## Wider than the tool's disclosure, on purpose
+ * ## The same columns as everything else (T-102)
  *
- * `unloadedMatches` counts **names only**, because its number is read as "how
- * many I get if I name this category" and `find_features` once loaded matches
- * names. This box matches name, English name, brand, cuisine and address,
- * because a person types the word in their head and has no follow-up call to
- * make. See the divergence note in `search-model.ts`: same folding
- * (`normaliseName`), different field set, and the difference is load-bearing in
- * both directions.
+ * Name, English name, brand, cuisine, address — `QUERY_FIELDS`, iterated rather
+ * than listed here, so this list cannot gain or lose a column without the tools
+ * and the loaded list gaining or losing it in the same commit. It reads them
+ * through a precomputed haystack instead of calling `matchesQuery` per row, for
+ * the measured reason under {@link SearchHaystack}; the two are equivalent
+ * because a folded needle can never contain the newline the columns are joined
+ * with.
+ *
+ * This list was the first surface to read all five, and for a while the only
+ * one: the tools counted names because a disclosure is a promise about a later
+ * call and the loaded search could not keep it for the other columns. T-102
+ * dissolved that by widening the shared predicate, so `unloadedMatches` now
+ * counts exactly what naming the category returns. See the note in
+ * `search-model.ts` for what deliberately still differs between the box and a
+ * tool call — none of it is the field set.
  */
 
 /** One citywide row: a place this map could show, and does not yet. */
@@ -128,11 +137,14 @@ export function searchHaystack(index: readonly SearchIndexEntry[]): SearchHaysta
   const cached = haystacks.get(index);
   if (cached) return cached;
   const built = index.map((entry) => {
-    let text = normaliseName(entry.name);
-    if (entry.nameEn) text += `\n${normaliseName(entry.nameEn)}`;
-    if (entry.brand) text += `\n${normaliseName(entry.brand)}`;
-    if (entry.cuisine) text += `\n${normaliseName(entry.cuisine)}`;
-    if (entry.address) text += `\n${normaliseName(entry.address)}`;
+    let text = "";
+    // `QUERY_FIELDS`, not a copy of it: a column added to the shared predicate
+    // has to reach this list too, and an index row that stopped carrying one
+    // has to stop compiling here rather than quietly stop being searched.
+    for (const field of QUERY_FIELDS) {
+      const folded = normaliseName(entry[field] ?? "");
+      if (folded) text += text ? `\n${folded}` : folded;
+    }
     return text;
   });
   haystacks.set(index, built);

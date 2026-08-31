@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { QUERY_FIELDS } from "@/lib/map-tools/query";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
 import type { SearchIndexEntry } from "@/lib/store/search-index";
 import type { Tier2Category } from "@/lib/store/tier2";
@@ -68,9 +69,9 @@ describe("searchIndexEntries", () => {
   });
 
   it("matches every column a person might type, not just the name", () => {
-    // The divergence from `unloadedMatches`, which counts names only because
-    // its number is a promise about a later tool call. This row IS the answer,
-    // so it may match anything the index carries.
+    // The five columns of `QUERY_FIELDS` — since T-102 the same five every
+    // other surface reads, so a word that finds a row here finds the feature
+    // once its category is loaded, and finds it through a tool call too.
     const index = [
       row("named", { name: "星巴克", nameEn: "Starbucks" }),
       row("branded", { name: "無名", brand: "Louisa Coffee" }),
@@ -158,7 +159,8 @@ describe("searchIndexEntries", () => {
   });
 
   it("folds spelling the way the tools do, so one map has one answer", () => {
-    // `normaliseName` is shared with the gazetteer: only the field set diverges.
+    // `normaliseName` is shared with the gazetteer, and since T-102 the field
+    // set is shared too: one folding, one column set, one answer.
     const index = [row("p", { name: "Da-an Coffee" })];
     expect(search("daan coffee", { index }).total).toBe(1);
     expect(search("DAAN COFFEE", { index }).total).toBe(1);
@@ -190,6 +192,11 @@ describe("searchHaystack", () => {
     // Folded (lower-cased, punctuation dropped) and newline-separated, so no
     // needle can span two columns.
     expect(hay[0]).toBe("louisa\nlouisa coffee\nlouisa\ncoffee_shop\nno 1");
+    // One line per shared column, in `QUERY_FIELDS` order. This goes red the
+    // day the predicate gains a column and this fixture stops populating it —
+    // which is the moment to check that the citywide list still reads all of
+    // them, not the moment to loosen the assertion above.
+    expect(hay[0].split("\n")).toHaveLength(QUERY_FIELDS.length);
     // Absent columns leave nothing behind — an empty line would let a one-space
     // needle match every row that happens to be missing a brand.
     expect(hay[1]).toBe("bare");

@@ -424,27 +424,36 @@ describe("a query with no category says what it did not search", () => {
 
   it("counts what a query matched, never the rest of the view", async () => {
     // The one ruling a view-scoped keyword search forces: category_counts
-    // describes the same set as features and total. Two cafes are on screen and
-    // one of them is called 大安, so a tally of the unfiltered view would put
-    // `cafe: 2` beside `total: 5` and a five-item list containing one cafe — one
-    // answer making two claims, with nothing in it to say which was about the
-    // question. The wider tally is one call away; a mistaken "2 cafes here" is
-    // not, because the agent has no reason to doubt it.
+    // describes the same set as features and total. Eight features are on
+    // screen and six of them answer this question, so a tally of the
+    // unfiltered view would put `supermarket: 1, listing: 1` beside `total: 6`
+    // and a six-item list holding neither — one answer making two claims, with
+    // nothing in it to say which was about the question. The wider tally is one
+    // call away; a mistaken "there is a supermarket called 大安 here" is not,
+    // because the agent has no reason to doubt it.
     const { byName } = tier2Ready();
     await call(byName.find_features, { categories: ["cafe"] });
     const out = await call(byName.list_features_in_view, { query: "大安" });
 
-    // The loaded cafe named 大安 sorts in among the bundled features by
-    // distance, exactly as it would in find_features: one list, one order.
+    // The loaded cafes sort in among the bundled features by distance, exactly
+    // as they would in find_features: one list, one order. Two of them are
+    // here, and only one is *called* 大安 — osm:node:100 is 路易莎咖啡, and it
+    // matched because its address is in 大安區 (T-102: a query reads name,
+    // English name, brand, cuisine and address). That is the case worth
+    // pinning: the row it produces shows three list tags and no address, so
+    // the answer looks unexplained unless the schema says a match can come
+    // from a field the list does not echo — which is why QUERY_MATCHING says
+    // it, and why get_place_details exists.
     expect(idsOf(out.features)).toEqual([
       "osm:node:3",
       "osm:way:10",
       "osm:node:101",
+      "osm:node:100",
       "osm:node:2",
       "district:daan",
     ]);
-    expect(out.total).toBe(5);
-    expect(out.category_counts).toEqual({ mrt_station: 2, park: 1, cafe: 1, district: 1 });
+    expect(out.total).toBe(6);
+    expect(out.category_counts).toEqual({ mrt_station: 2, park: 1, cafe: 2, district: 1 });
     // The categories that matched nothing are gone rather than listed as zero:
     // a supermarket and a listing are on screen, and neither is an answer to
     // this question.

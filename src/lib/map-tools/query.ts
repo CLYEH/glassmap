@@ -124,7 +124,7 @@ export function resolveNear(
 }
 
 export interface QuerySpec {
-  /** Case-insensitive substring of name or nameEn. */
+  /** Case-insensitive substring of any of `QUERY_FIELDS`. */
   query?: string;
   categories?: MapCategory[];
   /** Distances are measured from here and the result is sorted by them. */
@@ -139,26 +139,40 @@ export interface QuerySpec {
 }
 
 /**
- * The whole of what `query` matches: the local name and the English one, with
- * the same folding as place lookup, so find_features({query:"Daan Forest
- * Park"}) and set_map_view({place:"Daan Forest Park"}) cannot disagree about
- * whether OSM's "Da-an Forest Park" is a match.
+ * The whole of what `query` matches: the five fields a place can be *called*.
  *
- * Taken over names rather than over a feature so that the citywide search index
- * — which holds names, not features (`store/search-index.ts`) — is matched by
- * this exact function and not by a copy of it. That is what makes
- * find_features' `unloaded_matches` count a promise it can keep: the number it
- * discloses for a category is the number naming that category returns, because
- * the same predicate decided both.
+ * The local name and the English one, because a human says either; `brand`,
+ * because a chain is often what someone is looking for and 2,664 of the 9,623
+ * branded places in the shipped extract are branded something their name does
+ * not say; `cuisine`, because "ramen" and "coffee" name a kind of place rather
+ * than a place, and 676 rows answer "coffee_shop" that no name does; `address`,
+ * because a street is how a person says where. Folded exactly as place lookup
+ * folds, so find_features({query:"Daan Forest Park"}) and set_map_view({place:
+ * "Daan Forest Park"}) cannot disagree about whether OSM's "Da-an Forest Park"
+ * is a match.
+ *
+ * Taken over a bag of fields rather than over a feature so that the citywide
+ * search index — which holds those same five columns and no features at all
+ * (`store/search-index.ts`) — is matched by this exact function and not by a
+ * copy of it. That is what makes find_features' `unloaded_matches` count a
+ * promise it can keep: the number it discloses for a category is the number
+ * naming that category returns, because the same predicate decided both. The
+ * index row and the loaded feature are two different types with the same five
+ * optional strings on them, and both are passed in whole.
+ *
+ * A caller's answer may therefore have matched on something the list output
+ * does not show — the list stays at three tags per feature (T-97) — which is
+ * what `get_place_details` is for.
  *
  * `needle` is expected already normalised, as `queryFeatures` normalises it.
  */
-export function matchesName(
-  name: string | undefined,
-  nameEn: string | undefined,
-  needle: string,
-): boolean {
-  return normaliseName(name ?? "").includes(needle) || normaliseName(nameEn ?? "").includes(needle);
+export const QUERY_FIELDS = ["name", "nameEn", "brand", "cuisine", "address"] as const;
+
+/** Anything a query can be matched against: an index row, or a feature's properties. */
+export type QueryFields = Partial<Record<(typeof QUERY_FIELDS)[number], string>>;
+
+export function matchesQuery(fields: QueryFields, needle: string): boolean {
+  return QUERY_FIELDS.some((field) => normaliseName(fields[field] ?? "").includes(needle));
 }
 
 /**
@@ -184,7 +198,7 @@ export function queryFeatures(
   for (const feature of features) {
     if (!feature?.properties?.id) continue;
     if (categories && !inCategories(feature, categories)) continue;
-    if (needle && !matchesName(feature.properties.name, feature.properties.nameEn, needle)) continue;
+    if (needle && !matchesQuery(feature.properties, needle)) continue;
     if (spec.within && !featureWithin(spec.within, feature)) continue;
     const center = featureCenter(feature);
     const distance = center ? distanceMeters(spec.origin, center) : Number.POSITIVE_INFINITY;

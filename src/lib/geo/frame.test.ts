@@ -9,7 +9,7 @@ import {
   frameForPoint,
   geometryBounds,
   hasExtent,
-} from "./frame-model";
+} from "./frame";
 
 const view = (patch: Partial<MapView> = {}): MapView => ({ ...DEFAULT_VIEW, ...patch });
 

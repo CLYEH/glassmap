@@ -1,6 +1,7 @@
 import { isFeatureCategory } from "@/lib/data/schema";
 import { normaliseName } from "@/lib/map-tools/gazetteer";
 import { distanceMeters, featureCenter } from "@/lib/map-tools/output";
+import { matchesQuery } from "@/lib/map-tools/query";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
 import type { SearchIndexStatus } from "@/lib/store/search-index";
 import {
@@ -28,52 +29,48 @@ import type { CategoryRow } from "./search-vocabulary";
  * `modelContext` at all. The one thing that crosses into the shared store is
  * what the person then *does* — the selection, written as `"user"`.
  *
- * ## Why this is wider than the tools' `query`, and must stay wider
+ * ## One predicate, every surface (T-102)
  *
- * `find_features` and `list_features_in_view` match the local and English
- * **name** only (`QUERY_MATCHING` in `map-tools/index.ts`, `matchesName` in
- * `map-tools/query.ts`). This box also matches `brand` and `cuisine`, and the
- * asymmetry is deliberate on both sides:
+ * The matching is not this module's own: it is `matchesQuery` over
+ * `QUERY_FIELDS` (`map-tools/query.ts`) — local name, English name, brand,
+ * cuisine, address. The same function answers `find_features`,
+ * `select_features` and `list_features_in_view`; the same five columns are what
+ * the citywide list folds into its haystack (`search-index-model.ts`) and what
+ * the tool layer's `unloadedMatches` counts. So a word that finds a place for a
+ * person finds it for an agent, and the box's own two lists cannot disagree
+ * about which places matched.
  *
- *  - **An agent already has a category.** It asks `list_features_in_view({
- *    categories: ["cafe"], query: "Louisa" })` — the category is the subject
- *    and the query narrows it by name. Widening the tool's `query` to tags
- *    would change what every answer it has ever given means: a `query` that
- *    silently matched `cuisine` would return places whose names an agent
- *    could not explain to the human it is talking to.
- *  - **A person has a word, not a category.** They type "coffee", "7-eleven",
- *    "vegetarian" — the word in their head, with no vocabulary to pick from
- *    and no tool call to make. Matching names only would answer "nothing
- *    here" over a map that is holding the answer.
+ * It was not always so, and the history is the argument for keeping it this
+ * way. Until T-102 the tools matched names only while this box matched four
+ * fields, on the reasoning that an agent already has a category and narrows it
+ * by name, whereas a person types the word in their head — "coffee",
+ * "7-eleven", "vegetarian". What that reasoning could not explain was the
+ * asymmetry *inside the box*: the citywide list read `address` and this one did
+ * not, so typing a street name found a café the map had never fetched and
+ * missed the identical one it was holding. The fix was to widen rather than
+ * narrow, in both directions at once — the disclosed count is a promise about a
+ * later call (`unloadedMatches`), so it can only count columns that call also
+ * reads. One field set, or the count lies.
  *
- * So: two matchers, one folding — `normaliseName` is shared, so spelling
- * ("Da-an" vs "Daan") decides the same way on both sides and only the *field
- * set* differs. Do not unify them in either direction.
+ * ## What stays the box's alone
  *
- * ### The same divergence, one level out: the citywide index (T-100)
+ * The field set is shared; nothing else here is. Each of these answers a
+ * question an agent does not ask, and unifying it would cost the human surface
+ * without buying the tool one:
  *
- * Both sides now also read `/data/tier2/search-index.json`, which holds every
- * point of interest in the city whether or not its category is in memory — and
- * the field sets diverge there too, harder, for a sharper reason.
- *
- *  - **The tool discloses names only.** `unloadedMatches` (`map-tools/
- *    tier2-query.ts`) answers `find_features` with `{category, count}` for the
- *    categories it did not search. That `count` is read as *"how many I get if
- *    I name this category"*, and the call that names it matches names — so
- *    counting the index's `cuisine` and `address` columns would promise
- *    features the follow-up call then cannot find. Measured on the shipped
- *    index: "coffee" is 354 names but 834 rows once cuisine and address count.
- *    **A tool must not promise what its own loaded search cannot deliver.**
- *  - **The box is the finder.** It matches all five columns —
- *    name, English name, brand, cuisine, address — through
- *    `searchIndexEntries` (`search-index-model.ts`), because there is no
- *    follow-up call to keep faith with: the row *is* the answer, and picking it
- *    loads the one category it needs. A person typing a street name or the word
- *    for coffee gets the 834, and every one of them is a place they can go to.
- *
- * The rule that keeps both honest is the same one: say what you can deliver.
- * The tool's promise is a later call, so it is narrow; the box's promise is the
- * row under the cursor, so it is wide.
+ *  - **The vocabulary layer.** "咖啡", "ubike", "drugstore" name a *kind* of
+ *    place, not a place, and `matchCategoryVocabulary` (`search-vocabulary.ts`)
+ *    answers them with the offer to paint the whole category. An agent picks
+ *    its category out of the tool schema's enum and needs no synonyms. That
+ *    layer also matches by **prefix**, not substring — "咖" already offers cafés
+ *    — which is a rule shaped by keystrokes and meaningless in one tool call.
+ *  - **The ranking.** On screen first, then nearest (below), and every loaded
+ *    row above every citywide one however far away (`composeSearchRows`). The
+ *    tools sort by distance alone and let the caller decide.
+ *  - **The caps.** Eight loaded rows, six citywide ones — a dropdown is read at
+ *    a glance. A tool's `limit` defaults to 20 and reaches 100.
+ *  - **Which list a place lands in.** The citywide list drops any row whose
+ *    category is already in memory, so one place is never offered twice.
  *
  * ## `inView` is a ranking hint, not the tool's answer
  *
@@ -163,16 +160,6 @@ export interface SearchInput {
   limit?: number;
 }
 
-/** Name, English name, brand, cuisine — see the header for why it is four. */
-function matches(properties: MapFeatureProperties, needle: string): boolean {
-  return (
-    normaliseName(properties.name ?? "").includes(needle) ||
-    normaliseName(properties.nameEn ?? "").includes(needle) ||
-    normaliseName(properties.brand ?? "").includes(needle) ||
-    normaliseName(properties.cuisine ?? "").includes(needle)
-  );
-}
-
 /**
  * A place that carries no `name` is normal in the POI extract — a nameless car
  * park is still somewhere to park — and one of them can be matched by its brand
@@ -215,7 +202,10 @@ export function searchLoadedFeatures(input: SearchInput): SearchAnswer {
     for (const feature of list) {
       const properties = feature?.properties;
       if (!properties?.id || seen.has(properties.id)) continue;
-      if (!matches(properties, needle)) continue;
+      // The tools' own predicate, over the tools' own five fields; see the
+      // header. `MapFeatureProperties` carries every one of them, so it is
+      // passed in whole exactly as `queryFeatures` passes it.
+      if (!matchesQuery(properties, needle)) continue;
       seen.add(properties.id);
       // A place the box cannot fly to is not offered: every row's job is to
       // put the camera somewhere, and a broken geometry has nowhere.

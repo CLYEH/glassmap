@@ -1,6 +1,7 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { GlassMapTool } from "@/lib/webmcp/types";
-import type { Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
+import type { Bounds, Drawing, LngLat, MapToolStore, MapView } from "@/lib/store/map-store";
+import { frameFor, geometryBounds } from "@/lib/geo/frame";
 import { FEATURE_CATEGORIES } from "@/lib/data/schema";
 import {
   featureCategories,
@@ -89,7 +90,12 @@ import {
   type RouteFetch,
 } from "./route";
 
-/** Zoom used when the caller names a place instead of a camera position. */
+/**
+ * Zoom used when the caller names a place instead of a camera position — as a
+ * floor, never a reset: see `pointZoom` in set_map_view. The same 15 the human
+ * paths use (`ROW_POINT_ZOOM` in `lib/geo/frame`, `SEARCH_ZOOM` in
+ * `components/search-model`), restated there rather than imported.
+ */
 export const PLACE_ZOOM = 15;
 
 /** Ceiling on an explicit id list; larger sets belong to the filter path. */
@@ -102,6 +108,7 @@ export interface SetMapViewInput {
   pitch?: number;
   place?: string;
   feature_id?: string;
+  fit?: unknown;
 }
 
 export interface FindFeaturesInput {
@@ -235,13 +242,21 @@ const categoriesProperty = {
 };
 
 /**
- * How a name is matched, in the words find_features has always used. Shared
- * because the matching really is the same code (`queryFeatures`): a schema that
- * described it twice could describe it differently, and an agent would have to
- * guess which of the two tools folds case, or a hyphen, or an English name.
- * What each tool adds after this sentence is only *where* it looks.
+ * How a query is matched, in the words find_features has always used. Shared
+ * because the matching really is the same code (`matchesQuery`, via
+ * `queryFeatures`): a schema that described it twice could describe it
+ * differently, and an agent would have to guess which of the two tools folds
+ * case, or a hyphen, or an English name. What each tool adds after this
+ * sentence is only *where* it looks.
+ *
+ * The second sentence exists because the answer is deliberately leaner than the
+ * match (T-97): a list row shows a feature's three list tags, so a hit on a
+ * brand, a cuisine or an address can look unexplained. Naming the field that
+ * could have matched, and the tool that shows it, is cheaper than widening
+ * every list row for the minority of calls that would use it.
  */
-const QUERY_MATCHING = "Case-insensitive substring of the local or English name.";
+const QUERY_MATCHING =
+  "Case-insensitive substring of the local or English name, brand, cuisine, or address. A result may have matched on a field the list does not echo; get_place_details shows all of a feature's tags.";
 
 const limitProperty = {
   type: "integer",
@@ -350,6 +365,40 @@ function findDrawing(
   const drawing = drawings.find((d) => d.id === value.trim());
   if (!drawing) return { error: `unknown drawing id: ${value.trim()}`, known_ids, known_count };
   return { drawing };
+}
+
+/**
+ * What `set_map_view({fit})` is being asked to frame: the extent of a drawing
+ * or of a loaded feature, and the id it came from.
+ *
+ * One parameter takes both kinds because "show me that one" is one intention,
+ * and an agent holding an id from map state should not have to know which list
+ * it came out of. The prefix decides, not a guess: `drawing:` goes to
+ * `findDrawing`, which answers a miss with the ids that do exist (the same
+ * answer `within` and `measure` give), and anything else is a feature id, whose
+ * miss is `unknown feature_id` — the words this tool already uses for exactly
+ * that mistake.
+ */
+function resolveFit(
+  store: MapToolStore,
+  value: unknown,
+): { id: string; bounds: Bounds } | QueryError {
+  if (typeof value !== "string" || !value.trim()) {
+    return { error: 'fit must be a drawing id like "drawing:1", or the id of a loaded feature' };
+  }
+  const id = value.trim();
+  if (id.startsWith(DRAWING_PREFIX)) {
+    const found = findDrawing(store, id, "fit");
+    if ("error" in found) return found;
+    const bounds = geometryBounds(found.drawing.geometry);
+    // A drawing the page could not frame either; the human's row click declines
+    // the same shape rather than flying somewhere arbitrary.
+    return bounds ? { id, bounds } : { error: `${id} has no usable geometry` };
+  }
+  const feature = store.getFeatures().find((f) => f.properties?.id === id);
+  if (!feature) return { error: "unknown feature_id" };
+  const bounds = featureBounds(feature);
+  return bounds ? { id, bounds } : { error: `${id} has no usable geometry` };
 }
 
 /**
@@ -502,7 +551,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const setMapView: GlassMapTool<SetMapViewInput> = {
     name: "set_map_view",
     description:
-      "Move the map camera. Give a place name or a feature id to jump to something by name, or center/zoom/bearing/pitch to position the camera directly. Returns the new map state, so no follow-up read is needed.",
+      `Move the map camera. Give a place name or a feature id to jump to something by name, fit to frame something whole, or center/zoom/bearing/pitch to position the camera directly. place and feature_id fly to the thing at zoom ${PLACE_ZOOM}, or keep the current zoom when it is already closer than that - going to a place never zooms you out; pass zoom to say otherwise. fit takes a drawing id or a feature id and frames that thing against what is currently on screen: an area (a district, a park, a circle or a route) is fitted so all of it is visible, which can zoom OUT when the thing is bigger than the view, while a target with no extent - a point of interest, a pinned note - behaves exactly like feature_id. fit needs the map to have rendered once; before that it answers "map not ready" rather than guessing how much you can see. Returns the new map state, so no follow-up read is needed.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -520,7 +569,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           type: "number",
           minimum: 0,
           maximum: 22,
-          description: `Zoom level: 10 shows a city, 15 a neighbourhood, 18 a building. Defaults to ${PLACE_ZOOM} when place or feature_id is used.`,
+          description: `Zoom level: 10 shows a city, 15 a neighbourhood, 18 a building. With place or feature_id it defaults to ${PLACE_ZOOM} without ever zooming out past the current view - the closer of the two wins - so pass zoom to override, including to pull back. Cannot be combined with fit, which decides its own zoom.`,
         },
         bearing: {
           type: "number",
@@ -542,6 +591,11 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           description:
             'Id of a loaded feature, e.g. "osm:node:123". Use this instead of place when you already have an id, or to resolve an ambiguous place.',
         },
+        fit: {
+          type: "string",
+          description:
+            'Frame this whole thing: a drawing id as draw_shape returns and map state lists ("drawing:1", including a shape the human drew by hand), or the id of a loaded feature ("district:daan", "osm:way:10"). An area is fitted to what is on screen and may zoom out to get all of it in; a target with no extent behaves exactly like feature_id, at any starting zoom - the two paths share one rule. Cannot be combined with center, place or feature_id, and not with zoom either - the fit is what decides the zoom.',
+        },
       },
       additionalProperties: false,
     },
@@ -552,6 +606,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       const state = () => describeState(store);
       const hasPlace = inp.place !== undefined;
       const hasFeatureId = inp.feature_id !== undefined;
+      const hasFit = inp.fit !== undefined;
       const hasCamera = [inp.center, inp.zoom, inp.bearing, inp.pitch].some((v) => v !== undefined);
 
       if (hasPlace && hasFeatureId) {
@@ -560,12 +615,38 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ((hasPlace || hasFeatureId) && inp.center !== undefined) {
         return { error: "provide either center or place/feature_id, not both", state: state() };
       }
-      if (!hasCamera && !hasPlace && !hasFeatureId) {
+      if (hasFit && (hasPlace || hasFeatureId || inp.center !== undefined)) {
+        return { error: "provide either fit or center/place/feature_id, not both", state: state() };
+      }
+      // Refused rather than resolved either way: honouring the zoom would leave
+      // the thing half off screen under a parameter named "fit", and ignoring
+      // it would drop a value the caller passed. Both are silent to an agent
+      // that cannot see the map, so the call has to come back.
+      if (hasFit && inp.zoom !== undefined) {
+        return { error: "provide either fit or zoom, not both - fit decides the zoom", state: state() };
+      }
+      if (!hasCamera && !hasPlace && !hasFeatureId && !hasFit) {
         return {
-          error: "provide at least one of center, zoom, bearing, pitch, place, feature_id",
+          error: "provide at least one of center, zoom, bearing, pitch, place, feature_id, fit",
           state: state(),
         };
       }
+
+      /**
+       * The zoom a jump to a *point* lands on when the caller named none: a
+       * floor, not a reset. Somebody looking at one building keeps that view
+       * when the agent flies to a shop on the same street — the camera moves,
+       * the scale does not, and an agent that wanted 15 says `zoom: 15`.
+       *
+       * A floor rather than `PLACE_ZOOM` outright since T-102 stage 1's qa
+       * pass: `fit` on a point already worked this way (`frameFor`'s no-extent
+       * branch), as do the human's row click and search pick, so an
+       * unconditional 15 here made the same camera behave two ways depending
+       * on which parameter named the same feature — with the schema promising
+       * they were the same call. Never zooming out is now the rule for every
+       * navigate-to-a-point path on this map, and this was the last exception.
+       */
+      const pointZoom = () => Math.max(store.getView().zoom, PLACE_ZOOM);
 
       let patch: Partial<MapView> = {};
       if (hasCamera) {
@@ -589,7 +670,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const center = featureCenter(feature);
         if (!center) return { error: "feature has no usable geometry", state: state() };
         patch.center = center;
-        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+        patch.zoom = patch.zoom ?? pointZoom();
       }
 
       if (hasPlace) {
@@ -609,7 +690,22 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
           return { error: "ambiguous place", candidates: resolved.candidates, state: state() };
         }
         patch.center = resolved.entry.center;
-        patch.zoom = patch.zoom ?? PLACE_ZOOM;
+        patch.zoom = patch.zoom ?? pointZoom();
+      }
+
+      if (hasFit) {
+        const target = resolveFit(store, inp.fit);
+        if ("error" in target) return { ...target, state: state() };
+        const corridor = store.getBounds();
+        // The same refusal list_features_in_view makes, for the same reason: a
+        // fit is measured against what a human can see, and before the map has
+        // reported a rectangle there is nothing to measure against. `frameFor`
+        // would quietly fall back to the point rule, which an agent would read
+        // as "framed" over a district it is standing inside.
+        if (!corridor) return { error: "map not ready", state: state() };
+        const frame = frameFor(target.bounds, store.getView(), corridor);
+        patch.center = frame.center;
+        patch.zoom = frame.zoom;
       }
 
       store.setView(patch);
@@ -620,7 +716,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Pass query to search the screen by name - the same match find_features makes, scoped to what is in view, and combining with categories rather than replacing it, so \"which of the cafes on screen is a Louisa?\" is one call. Called without categories it also returns category_counts - how many of each category the answer covers, which is the same set features and total describe, so with a query only the features that matched it are counted - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Pass query to search the screen by text - the same match find_features makes, scoped to what is in view, and combining with categories rather than replacing it, so \"which of the cafes on screen is a Louisa?\" is one call. Called without categories it also returns category_counts - how many of each category the answer covers, which is the same set features and total describe, so with a query only the features that matched it are counted - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
       properties: {
@@ -689,8 +785,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const findFeatures: GlassMapTool<FindFeaturesInput> = {
     name: "find_features",
     description:
-      "Search every loaded feature, not only the visible ones. Filter by name, category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories. " +
-      `With query, the answer also carries unloaded_matches when the name exists in point-of-interest categories this session has not fetched: {category, count} for each, biggest first, at most ${UNLOADED_MATCH_LIMIT} of them (unloaded_matches_omitted counts any further ones). This is how a search that returned nothing can still tell you where the matches are - the count is city-wide, matched on the local and English name exactly as this tool matches them, so call find_features again with that category in categories to load it and get the features. Nothing is fetched on your behalf: naming the category is still your call.`,
+      "Search every loaded feature, not only the visible ones. Filter by text (name, brand, cuisine or address), category, distance from a place, a feature or a coordinate (up to 10000 m), and by whether a feature is inside a shape on the map - including one the human drew by hand. Results come back nearest first, each with its distance in metres and an 8-point compass direction from that origin, which is echoed as origin - together with radius_m when near or radius_m limited the search. Naming a point-of-interest category (restaurant, cafe, pharmacy and so on) fetches it for the whole city on first use and then searches all of it, wherever the map happens to be pointing; searching without categories answers from what is already loaded and lists the rest under unsearched_categories. " +
+      `With query, the answer also carries unloaded_matches when the same text matches in point-of-interest categories this session has not fetched: {category, count} for each, biggest first, at most ${UNLOADED_MATCH_LIMIT} of them (unloaded_matches_omitted counts any further ones). This is how a search that returned nothing can still tell you where the matches are - the count is city-wide, matched on the same name, brand, cuisine and address fields this tool matches once a category is loaded, so call find_features again with that category in categories to load it and get the features. Nothing is fetched on your behalf: naming the category is still your call.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -748,8 +844,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         },
         query: {
           type: "string",
-          description:
-            "Case-insensitive substring of the local or English name, exactly as in find_features.",
+          description: `${QUERY_MATCHING} Exactly as in find_features.`,
         },
         near: nearProperty,
         radius_m: radiusProperty,

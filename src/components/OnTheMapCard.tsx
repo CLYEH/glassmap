@@ -99,7 +99,27 @@ function CardBody({
               title={detail.full}
             >
               <dt>{detail.label}</dt>
-              <dd>{detail.text}</dd>
+              <dd>
+                {/* A website is the one value worth following rather than
+                    reading: the visible string is the raw tag clipped like
+                    every other row, and the href is the whole of it
+                    (`linkHref`, which only ever produces http/https). A new
+                    tab, because this tab is a live map with an agent possibly
+                    working on it — navigating it away to read a menu would
+                    throw all of that out. */}
+                {detail.href ? (
+                  <a
+                    href={detail.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="otm-detail-link"
+                  >
+                    {detail.text}
+                  </a>
+                ) : (
+                  detail.text
+                )}
+              </dd>
             </div>
           ))}
         </dl>

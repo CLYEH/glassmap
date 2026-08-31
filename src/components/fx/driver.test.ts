@@ -94,7 +94,7 @@ const plan = (
 describe("the shared timeline", () => {
   it("drives every live effect from one frame callback", () => {
     // One rAF for the whole page is the difference between "the agent's hand"
-    // and sixteen independent animation loops fighting the compositor.
+    // and seventeen independent animation loops fighting the compositor.
     const { driver, tick, queue } = harness();
     driver.play(plan("get_map_state", ["viewport"]));
     driver.play(plan("set_map_view", ["camera"], 2));

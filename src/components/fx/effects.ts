@@ -1,5 +1,5 @@
 /**
- * The sixteen effects: thirteen tools, three human actions.
+ * The seventeen effects: fourteen tools, three human actions.
  *
  * Grammar (spec v3, unchanged since v1):
  *  - **read = gaze** — cased deep-teal geometry, transient, zero residue in ≤2 s;
@@ -438,6 +438,74 @@ const findPulse: Effect<FindNodes> = {
       glint.g.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
       setOpacity(glint.g, 0.9 * op);
     });
+  },
+  cleanup(n) {
+    n.root.remove();
+  },
+};
+
+/**
+ * get_place_details — "focused glint". The narrowest read this page can play:
+ * not a shape being interrogated and a page of hits, but one question about one
+ * place. So it is `find_features`' own hit glint — the same HOLLOW cased dot,
+ * because a read selects nothing and leaves nothing — with the sweep taken
+ * away: no shape pulse, no stagger, nothing to scan. One ring closes onto the
+ * place, the glint lights under it, both leave.
+ *
+ * Quieter on every axis on purpose. It is 900 ms against find's 1600 (the same
+ * beat as the pin drop, which is the other single-target effect), the ring
+ * contracts rather than pulsing outward, and it moves a single dot's worth of
+ * ink. A human watching a lookup should read "it is reading THAT one", and a
+ * lookup that arrived with a search's weather would say the agent had done
+ * more than ask a place what it is.
+ *
+ * The ring contracts rather than expanding for the same reason the reticle
+ * does: an expanding ring reads as something radiating OUT from the place —
+ * an area being searched, which is the claim `find_features` gets to make and
+ * this one does not. Closing in is attention arriving.
+ */
+interface PlaceNodes extends FxNodes {
+  root: SVGGElement;
+  ring: SVGCircleElement;
+  glint: SVGGElement;
+  at: LngLat;
+}
+
+const placeGlint: Effect<PlaceNodes> = {
+  dur: 900,
+  setup(ctx, geom) {
+    if (geom.kind !== "place" || !ctx.project(geom.at)) return null;
+    const root = mapGroup(ctx, "get_place_details");
+    const ring = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 0, fill: "none", stroke: TEAL, "stroke-width": 2.2, opacity: 0 },
+      root,
+    );
+    // Byte for byte the glint `find_features` marks a hit with: one place read
+    // by name and one place read out of a search are the same act, and the map
+    // must not give a person two vocabularies for it.
+    const glint = svgEl("g", { opacity: 0 }, root);
+    casedPair("circle", { cx: 0, cy: 0, r: s(8), fill: "none" }, glint, 5.5, 3, TEAL_DEEP);
+    return { root, ring, glint, at: geom.at };
+  },
+  render(p, n, ctx) {
+    const point = ctx.project(n.at);
+    if (!point) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    n.root.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+    const close = outCubic(seg(p, 0, 0.55));
+    n.ring.setAttribute("r", lerp(s(38), s(13), close).toFixed(1));
+    setOpacity(n.ring, 0.75 * bell(seg(p, 0, 0.66)));
+    setOpacity(n.glint, bell(seg(p, 0.16, 1)));
+  },
+  rm(p, n, ctx) {
+    const point = ctx.project(n.at);
+    if (!point) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    n.root.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+    n.ring.setAttribute("r", String(s(13)));
+    setOpacity(n.ring, 0);
+    setOpacity(n.glint, 0.9 * bell(p));
   },
   cleanup(n) {
     n.root.remove();
@@ -1294,6 +1362,7 @@ const EFFECTS: Record<FxName, Effect> = {
   describe_surroundings: compass as Effect,
   compare_areas: twinPing as Effect,
   measure: ruler as Effect,
+  get_place_details: placeGlint as Effect,
   get_share_link: packToChip as Effect,
   human_draw: inkEffect("human_draw", ROSE_DEEP, true, 1700) as Effect,
   human_note: pinEffect("human_note", ROSE_DEEP) as Effect,

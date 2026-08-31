@@ -6,7 +6,7 @@ import { AgentWhisper } from "@/components/AgentWhisper";
 import { Attribution } from "@/components/Attribution";
 import { BrandBar } from "@/components/BrandBar";
 import { Inspector } from "@/components/Inspector";
-import { Legend } from "@/components/Legend";
+import { LoadedCategories } from "@/components/LoadedCategories";
 import { MarkerStatus } from "@/components/MarkerStatus";
 import { OnTheMapCard } from "@/components/OnTheMapCard";
 import { PlacesDock } from "@/components/PlacesTray";
@@ -30,12 +30,12 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * The map is the page, and the page has two states.
  *
  * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the three
- * things they can do (Draw, Note, Share), the Places tray to browse the city
- * with, the legend's scale, the attribution, and one whisper in the corner
- * saying the map is also readable by agents. No feed, no tool roster, no
- * "WebMCP live" badge, no inspector lane — a person who came to look at Taipei
- * is not shown a dashboard about a protocol they did not ask about (BRIEF
- * item 3).
+ * things they can do (Draw, Note, Share), the Places dock — the map's scale on
+ * its pill, the key and the browsable city inside it — the attribution, and one
+ * whisper in the corner saying the map is also readable by agents. No feed, no
+ * tool roster, no "WebMCP live" badge, no inspector lane — a person who came to
+ * look at Taipei is not shown a dashboard about a protocol they did not ask
+ * about (BRIEF item 3).
  *
  * **Agent (`html[data-chrome="awake"]`).** The moment an agent acts — the first
  * `activity` row, or a restored link that carries agent work — the agent chrome
@@ -121,7 +121,13 @@ export default function Home() {
         <PlacesDock />
 
         <div className="bottom-bar">
-          <Legend />
+          {/* Loaded-but-unpainted categories, in the corner the legend used to
+              hold. It has to be readable without opening anything: it exists
+              because a tool can add thousands of searchable places and change
+              nothing on screen, and a disclosure a person must go looking for
+              does not close that gap. The key it is the counterpart of now
+              lives one surface over, in the Places tray. */}
+          <LoadedCategories />
           <div className="corner">
             {/* Both are about the link rather than about the map, so they share
                 the corner above the attribution: one says the map has outgrown

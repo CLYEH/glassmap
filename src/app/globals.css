@@ -749,8 +749,11 @@ html[data-chrome="awake"] .app .note-pop {
 }
 
 /* ---------------------------------------------------- bottom bar
-   One flex row spanning the corridor: legend left, attribution + badge
-   right, so overlap is impossible by construction. */
+   One flex row spanning the corridor: the loaded-POI disclosure left when
+   there is one, attribution + badge right, so overlap is impossible by
+   construction. `flex-end` rather than `space-between` because the left slot
+   is often empty (nothing is loaded on a landing map) — with one child,
+   space-between would file the corner on the left, under the brand. */
 .bottom-bar {
   position: absolute;
   left: 14px;
@@ -759,7 +762,7 @@ html[data-chrome="awake"] .app .note-pop {
   z-index: 15;
   display: flex;
   align-items: flex-end;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   pointer-events: none;
 }
@@ -767,34 +770,28 @@ html[data-chrome="awake"] .app .note-pop {
   pointer-events: auto;
 }
 
-.legend-zone {
-  min-width: 0;
-}
-
-/* Loaded point-of-interest categories, above the legend. Present only when a
-   category is in memory, so the landing view is unchanged; block-level and
-   fit-content so it stacks over the legend without stretching it, and the
-   bottom bar's flex-end alignment makes it grow upward — the legend does not
-   move when it appears. Quieter than the legend by design: text-low, no
-   swatches. The count keeps the data face; the category is a word a person
-   reads ("Cafés", TIER2_PLURAL) rather than the OSM tag it stands for, so it
-   is set in the UI face like every other name on screen. */
+/* Loaded point-of-interest categories. Present only when a category is in
+   memory, so the landing view is unchanged; `margin-right: auto` is what holds
+   the corner against the right edge when it is here. Quieter than the map key
+   by design: text-low, no swatches. The count keeps the data face; the category
+   is a word a person reads ("Cafés", TIER2_PLURAL) rather than the OSM tag it
+   stands for, so it is set in the UI face like every other name on screen. */
 .poi-strip {
   display: flex;
   align-items: center;
+  margin-right: auto;
   /* Wraps rather than scrolls. A count is the whole content of this row, and a
      horizontally scrolled chip cuts it mid-number — at 390px "Cafés 2,297"
      rendered as "Cafés 2", which is not a smaller disclosure but a false one.
      Wrapped, the strip grows upward over the map (the bottom bar is
-     bottom-aligned) and stays whole at every width. The cap is the viewport,
-     not the parent: below the legend's pill breakpoint the legend-zone parent
-     is pill-sized (~121px at 390px), and capping at 100% let long chips like
-     "Worship 1,718" spill onto the basemap unread. */
+     bottom-aligned) and stays whole at every width. The cap is the viewport
+     rather than 100%, which on a phone is whatever share of the row the
+     attribution leaves and would cut long chips like "Worship 1,718"; against
+     the corner the strip shrinks like any other flex item instead. */
   flex-wrap: wrap;
   gap: 1px 2px;
   width: fit-content;
   max-width: calc(100vw - 24px);
-  margin-bottom: 6px;
   padding: 5px 10px;
   border-radius: var(--radius-s);
 }
@@ -822,96 +819,6 @@ html[data-chrome="awake"] .app .note-pop {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-low);
-}
-
-.legend-total {
-  font-size: 11.5px;
-  font-weight: 620;
-  color: var(--text-hi);
-  white-space: nowrap;
-}
-.lg-chip {
-  display: flex;
-  align-items: center;
-  gap: 5.5px;
-  padding: 3px 8px;
-  white-space: nowrap;
-}
-.lg-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
-  flex-shrink: 0;
-}
-/* district: exact map colour; the white outer ring is the shared swatch
-   treatment (map dots carry the same white circle-stroke) */
-.lg-dot.ring {
-  background: transparent !important;
-  border: 1.5px solid var(--c-district);
-}
-.lg-name {
-  font-size: 11.5px;
-  color: var(--text-mid);
-}
-.lg-n {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-low);
-}
-
-/* The legend, at every width: a pill stating the scale, with the six rows
-   behind it. The always-open strip that used to run along the bottom went
-   with the rest of the dashboard — a landing map says how much is on it and
-   unfolds the key when asked. */
-.legend-pillbox {
-  position: relative;
-  display: flex;
-}
-.legend-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 13px;
-  font-size: 11.5px;
-  font-weight: 620;
-  color: var(--text-hi);
-  white-space: nowrap;
-}
-.legend-dots {
-  display: flex;
-  gap: 3.5px;
-}
-.legend-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
-}
-.legend-pill svg {
-  color: var(--text-low);
-  transition: transform 0.18s ease;
-}
-.legend-pop {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  display: none;
-  padding: 10px 13px;
-  min-width: 196px;
-}
-.legend-pillbox.open .legend-pop {
-  display: block;
-}
-.legend-pillbox.open .legend-pill svg {
-  transform: rotate(180deg);
-}
-.legend-pop .lg-chip {
-  padding: 3.5px 2px;
-}
-.legend-pop .lg-n {
-  margin-left: auto;
-  padding-left: 14px;
 }
 
 .corner {
@@ -1438,6 +1345,18 @@ html[data-chrome="awake"] .app .dock {
   color: var(--text-mid);
   flex-shrink: 0;
 }
+/* The scale of the map, on the one surface that is always on screen: the six
+   painted datasets, counted from the store (`MapKey` accounts for it row by
+   row). Data face and a hairline of its own, so it reads as a figure the pill
+   carries rather than as part of the word "Places". */
+.dock-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-low);
+  padding-left: 9px;
+  border-left: 1px solid var(--hairline-2);
+}
 .dock-pill .caret {
   transition: transform 0.2s ease;
 }
@@ -1513,6 +1432,97 @@ html[data-chrome="awake"] .app .dock {
   font-size: 10.5px;
   color: var(--text-low);
 }
+
+/* The tray opens upward from the dock and has no ceiling of its own, so a short
+   screen (a phone held sideways is 390px tall) would push the top of it — the
+   key, the first thing in it — off the screen and behind the brand. The
+   sections scroll instead. The 210px is measured: 61 for the dock and its gap,
+   91 for the tray's own head, foot and padding, 58 to clear the brand — so a
+   full tray lands exactly under the brand and anything more than that scrolls.
+   The head and foot are outside the scroller because the foot carries the
+   OpenStreetMap attribution, and so is the caustic, whose -40% inset would
+   otherwise become scrollable area. */
+.tray-body {
+  position: relative;
+  max-height: calc(100vh - 210px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+/* The tray's two halves — what is on the map, and what a tap can add. Both are
+   "places", which is exactly why they need naming: the first section's numbers
+   are counted from the store, the second's are read off the manifest, and the
+   rule is a person never has to guess which kind they are looking at. Relative
+   for the same reason as the head and the grid: the caustic is a positioned
+   sibling, so unpositioned content would paint under it. */
+.tray-sec {
+  position: relative;
+}
+.tray-sec + .tray-sec {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--hairline-2);
+}
+.tray-sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0 2px 7px;
+}
+.tray-sec-head h4 {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-mid);
+}
+.tray-sec-head span {
+  font-size: 10px;
+  color: var(--text-low);
+}
+
+/* The map key: six rows, one per painted dataset, wrapped rather than gridded
+   so it stays two lines at the tray's width and never competes with the
+   eighteen tap targets below it. Nothing here is a button — it is the sentence
+   the colours are written in. */
+.map-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 3px;
+  padding: 4px 2px;
+  border-radius: var(--radius-s);
+  background: rgba(255, 255, 255, 0.025);
+}
+.lg-chip {
+  display: flex;
+  align-items: center;
+  gap: 5.5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.lg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+/* district: exact map colour; the white outer ring is the shared swatch
+   treatment (map dots carry the same white circle-stroke) */
+.lg-dot.ring {
+  background: transparent !important;
+  border: 1.5px solid var(--c-district);
+}
+.lg-name {
+  font-size: 11.5px;
+  color: var(--text-mid);
+}
+.lg-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-low);
+}
+
 .tray-grid {
   position: relative;
   display: grid;
@@ -1887,10 +1897,21 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
     width: calc(100vw - 24px);
     padding: 12px 12px 10px;
   }
+  /* In agent chrome the map — and the dock inside it — ends at the top of the
+     sheet, and `.map-wrap` clips what overflows it, so down here the tray's
+     ceiling is the visible map (54vh, the other side of the 46vh sheet) rather
+     than the viewport. Same subtraction otherwise. */
+  html[data-chrome="awake"] .app .tray-body {
+    max-height: calc(54vh - 210px);
+  }
   .tray-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .tray-head span {
+  /* The subtitles go, the headings stay: down here the tray is nearly the whole
+     width of the screen and it is taller by a key, so the words that only
+     elaborate give their lines to the rows that count. */
+  .tray-head span,
+  .tray-sec-head span {
     display: none;
   }
   /* One line that cannot wrap, in the width where nothing else fits: the
@@ -2076,7 +2097,7 @@ html:not([data-chrome="awake"]) .app .bottom-bar {
    states where the tap was, this states that a phone does not use it. */
 @media (max-width: 640px) {
   /* One band per row: the dock spans the bottom (the design's own phone
-     arrangement) and the legend/attribution row sits above it. Centred over
+     arrangement) and the disclosure/attribution row sits above it. Centred over
      366px, the Places pill and the browsed-category chip would otherwise land
      on top of the attribution, which is a licence condition and may never be
      covered. */
@@ -2221,7 +2242,7 @@ body[data-fx="off"] .fx-viewport {
     animation: none;
   }
   .feed-toggle svg,
-  .legend-pill svg {
+  .dock-pill .caret {
     transition: none;
   }
 }
@@ -2265,7 +2286,7 @@ html[data-chrome="waking"] .app .cam-chip {
     transform: translateY(110%);
   }
   /* The map's container gives up the sheet's band at t=0 (see the <=920 block),
-     so the bottom band — legend, attribution, badge, dock — would start the
+     so the bottom band — attribution, badge, dock — would start the
      story already at its agent position, one sheet-height (46vh; 388px at
      390x844) above the foot of the screen, and the `sheet` beat would have
      nothing left to carry. `fixed` puts it back

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Annotation, Drawing } from "@/lib/store/map-store";
-import { CARD_COPY, CARD_NOTE_CHARS, cardProvenance, cardView, type CardSubjects } from "./card-model";
+import type { MapFeature } from "@/lib/store/tier2";
+import {
+  CARD_COPY,
+  CARD_GAP_PX,
+  CARD_NOTE_CHARS,
+  CARD_TOP_MARGIN_PX,
+  cardPlacement,
+  cardProvenance,
+  cardView,
+  type CardSubjects,
+} from "./card-model";
 
 /**
  * The card is the one surface where a human is told, in a whole sentence, who
@@ -38,6 +48,44 @@ describe("cardProvenance", () => {
     expect(cardProvenance(undefined, false)).toBe("link");
     expect(CARD_COPY.feature.link.line).toContain("from a shared link");
     expect(CARD_COPY.feature.link.line).not.toContain("agent");
+  });
+});
+
+/**
+ * Where the card hangs. This used to be a constant (190px, "roughly the card's
+ * own height") and the details section falsified it on arrival: a taller card
+ * kept choosing "above" for taps that could not fit one, and put the name off
+ * the top of the map — the one place a human cannot see that anything is
+ * wrong. What these tests hold is that the answer is a function of the height
+ * the card actually has, so no field added later can quietly re-stale it.
+ */
+describe("cardPlacement", () => {
+  /** The measured height of a bilingual card with three tag rows, at 1440x900. */
+  const THREE_ROW = 235;
+
+  it("hangs the card under the tap when there is not room for it above", () => {
+    // The regression, at the number it was measured at: 200px down the map,
+    // 235px of card. Above the tap it would start at −51.
+    expect(cardPlacement(200, THREE_ROW)).toBe("below");
+    // And the old constant's whole dead band, which said "above" for all of it.
+    expect(cardPlacement(190, THREE_ROW)).toBe("below");
+    expect(cardPlacement(250, THREE_ROW)).toBe("below");
+  });
+
+  it("hangs it above as soon as the card fits, and not one pixel sooner", () => {
+    const fits = THREE_ROW + CARD_GAP_PX + CARD_TOP_MARGIN_PX;
+    expect(cardPlacement(fits, THREE_ROW)).toBe("above");
+    expect(cardPlacement(fits - 1, THREE_ROW)).toBe("below");
+  });
+
+  it("moves its own boundary when the card grows", () => {
+    // T-97 adds address, phone, wheelchair and website to the same section.
+    // A shorter card still fits where a taller one does not — which is the
+    // whole reason this reads a measurement instead of a constant.
+    const short = 150;
+    expect(cardPlacement(200, short)).toBe("above");
+    expect(cardPlacement(200, THREE_ROW)).toBe("below");
+    expect(cardPlacement(200, THREE_ROW + 172)).toBe("below");
   });
 });
 
@@ -139,6 +187,55 @@ describe("cardView", () => {
       }),
     );
     expect(view).toMatchObject({ name: "Polygon", what: "Polygon", provenance: "user" });
+  });
+
+  it("tells a human what the tools already say about a place", () => {
+    // The tap card is where a person meets a POI. `describeFeature` returns
+    // cuisine, brand and opening_hours to the agent for exactly this place;
+    // before T-96 the card beside the human's finger said "Cafe" and a name.
+    const cafe: MapFeature = {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [121.54, 25.03] },
+      properties: {
+        id: "osm:node:77",
+        name: "路易莎咖啡",
+        nameEn: "Louisa Coffee",
+        category: "cafe",
+        source: "osm",
+        cuisine: "coffee_shop",
+        brand: "路易莎咖啡",
+        opening_hours: "Mo-Su 07:00-21:00",
+      },
+    };
+    const view = cardView(
+      { kind: "feature", id: "osm:node:77", x: 5, y: 5 },
+      subjects({ features: [], tier2Features: [cafe] }),
+    );
+    expect(view).toMatchObject({ name: "路易莎咖啡", nameEn: "Louisa Coffee", what: "Cafe" });
+    // Brand is dropped: it is the headline, character for character. The card
+    // says every distinct thing the source has, and says nothing twice.
+    expect(view?.details.map((d) => [d.label, d.text])).toEqual([
+      ["Cuisine", "coffee_shop"],
+      ["Hours", "Mo-Su 07:00-21:00"],
+    ]);
+  });
+
+  it("has no details and no second name for a place the data barely knows", () => {
+    // A bundled feature carries none of the POI tags, so the section is empty
+    // and the component renders nothing rather than an empty box.
+    const view = cardView({ kind: "feature", id: "park:1", x: 1, y: 2 }, subjects());
+    expect(view?.details).toEqual([]);
+    expect(view).not.toHaveProperty("nameEn");
+  });
+
+  it("keeps notes and shapes free of a details section", () => {
+    // Both are one person's words about a point, not a place with tags. The
+    // type says so too — `details` is always the empty array for these.
+    expect(cardView({ kind: "annotation", id: "annotation:1", x: 1, y: 2 }, subjects())?.details)
+      .toEqual([]);
+    expect(cardView({ kind: "drawing", id: "drawing:1", x: 1, y: 2 }, subjects())?.details).toEqual(
+      [],
+    );
   });
 
   it("resolves to nothing once the mark has been removed", () => {

@@ -1,15 +1,30 @@
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { MapCategory, MapFeature } from "@/lib/store/tier2";
+import { featureDetails, sameText, type DetailRow } from "./feature-details";
 
-/** One row of the sidebar's selection list. */
+/**
+ * One selected feature, resolved. The sidebar renders every row of these and
+ * the tap card renders one (`card-model`), so the two surfaces cannot disagree
+ * about what a place is called or what it carries — each shows the part it has
+ * room for.
+ */
 export interface SelectedRow {
   id: string;
   /** The feature name, or the id when the feature is not (yet) loaded. */
   name: string;
+  /**
+   * The OSM English name, present only when the source has one *and* it is not
+   * the name above it. Absent means absent: nothing on this page romanises a
+   * name the data does not carry, and a place whose two names are the same
+   * string is printed once.
+   */
+  nameEn?: string;
   /** null when nothing in the loaded data has this id. */
   category: MapCategory | null;
   /** Fabricated demo data, which the UI has to say out loud. */
   sample: boolean;
+  /** The OSM tags a human can be shown; empty for bundled features and unknown ids. */
+  details: DetailRow[];
 }
 
 /**
@@ -44,16 +59,24 @@ export function resolveSelection(
   }
   return selection.map((id) => {
     const feature = byId.get(id);
-    if (!feature) return { id, name: id, category: null, sample: false };
+    if (!feature) return { id, name: id, category: null, sample: false, details: [] };
+    const properties = feature.properties;
+    // A POI with no `name` is normal — a nameless car park is still a place
+    // you can park — so the English name is tried before falling back to the
+    // id. Every bundled feature has a local name, so this only ever fires
+    // for tier-2.
+    const name = properties.name || properties.nameEn || id;
+    const nameEn = properties.nameEn;
     return {
-      // A POI with no `name` is normal — a nameless car park is still a place
-      // you can park — so the English name is tried before falling back to the
-      // id. Every bundled feature has a local name, so this only ever fires
-      // for tier-2.
       id,
-      name: feature.properties.name || feature.properties.nameEn || id,
-      category: feature.properties.category,
-      sample: feature.properties.sample === true,
+      name,
+      // Not when it is the headline itself, which is both the nameless-POI
+      // fallback above and 32 of the cafes in the shipped extract, whose
+      // `name` and `nameEn` are the same string.
+      ...(nameEn && !sameText(nameEn, name) ? { nameEn } : {}),
+      category: properties.category,
+      sample: properties.sample === true,
+      details: featureDetails(properties, [name, nameEn ?? ""]),
     };
   });
 }

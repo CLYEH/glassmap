@@ -6,7 +6,7 @@
  *
  * The easings are the mockup's (`fx-mockup-v3.html`), value for value — the
  * spec's per-effect choreography is written against these curves, so changing
- * one would silently redesign fifteen effects.
+ * one would silently redesign sixteen effects.
  */
 
 export function clamp01(v: number): number {

@@ -875,6 +875,15 @@ html[data-chrome="awake"] .app .note-pop {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
+/* The routing service's credit, shown once a walk has been planned here. A
+   sibling of the basemap line above the corner, not a banner: same glass, same
+   size, same right edge. It wraps at every width — it is a sentence rather than
+   three link words, and nowrap would push it off the map on a laptop. */
+.attribution.routing {
+  white-space: normal;
+  max-width: 260px;
+  text-align: right;
+}
 .attribution a {
   color: inherit;
   text-decoration: underline;

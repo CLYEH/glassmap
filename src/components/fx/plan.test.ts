@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import type { ActivityFx, Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { DEFAULT_VIEW } from "@/lib/store/map-store";
 import { describeCall } from "@/lib/map-tools/activity";
 import { IMPERATIVE_TOOLS } from "../tool-roster";
@@ -33,6 +33,32 @@ const CIRCLE: Drawing = {
       ],
     ],
   },
+};
+
+/**
+ * What `plan_route` leaves behind: an ordinary line drawing whose points are
+ * the streets the service routed along. Its ends are deliberately NOT the two
+ * places below — a router snaps each end to the nearest street it knows.
+ */
+const ROUTE: Drawing = {
+  id: "drawing:route",
+  source: "agent",
+  kind: "line",
+  label: "walk: 大安站 → 大安森林公園",
+  geometry: {
+    type: "LineString",
+    coordinates: [
+      [121.54355, 25.03335],
+      [121.54021, 25.03312],
+      [121.53615, 25.03051],
+    ],
+  },
+};
+
+/** The two places the caller named, as the tool resolved them. */
+const WALK_ENDS: ActivityFx = {
+  origin: [121.5436, 25.0334],
+  originB: [121.53609, 25.03045],
 };
 
 const NOTE: Annotation = {
@@ -78,7 +104,7 @@ describe("the tool → effect registry", () => {
   it("gives every imperative tool an effect, and names it after the tool", () => {
     // Derived from the roster the landing screen prints — which
     // `tool-roster.test.ts` holds equal to the tools actually registered — so a
-    // twelfth tool cannot ship drawing nothing. The feed row, the spec, the
+    // thirteenth tool cannot ship drawing nothing. The feed row, the spec, the
     // mockup and `data-fx-name` all say the tool's name; a second vocabulary
     // here would make a frame unreadable against shots-v3.
     const expected = IMPERATIVE_TOOLS.filter((tool) => !WITHOUT_EFFECT.includes(tool));
@@ -403,6 +429,85 @@ describe("remove_from_map", () => {
 });
 
 /**
+ * The route effect, which is the only one whose geometry the page could fake
+ * convincingly: the row states both ends, so a straight line between them is
+ * always available. Every case here is about refusing to draw one.
+ */
+describe("plan_route", () => {
+  const walked = (patch: Partial<FxEntry> = {}) =>
+    entry({ tool: "plan_route", refIds: ["drawing:route"], fx: WALK_ENDS, ...patch });
+
+  it("draws the line the service returned, not a line between the two ends", () => {
+    // The streets ARE the answer. A walking route rendered as the chord between
+    // its endpoints would claim a path that does not exist — and the shape it
+    // would take is the one `compare_areas` bows on purpose *because* a bow is
+    // as far from a street-following route as a mark on a map can get.
+    const plan = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    expect(plan).toMatchObject({ name: "plan_route", keys: ["drawing:route"] });
+    expect(plan?.geom).toEqual({
+      kind: "route",
+      positions: [
+        [121.54355, 25.03335],
+        [121.54021, 25.03312],
+        [121.53615, 25.03051],
+      ],
+      // The places the caller named, which is not where the line starts and
+      // ends: the service snapped each one to the nearest street first.
+      from: [121.5436, 25.0334],
+      to: [121.53609, 25.03045],
+    });
+  });
+
+  it("falls back to the line's own ends when the row states none", () => {
+    // Not a guess: a route is simplified with its first and last point kept
+    // (`map-tools/route.ts`), so the drawn line begins and ends where the walk
+    // does. It is a poorer answer than the echo — it marks the street, not the
+    // place — and it is still a true one.
+    const plan = planForEntry(walked({ fx: undefined }), source({ drawings: [ROUTE] }));
+    expect(plan?.geom).toMatchObject({
+      from: [121.54355, 25.03335],
+      to: [121.53615, 25.03051],
+    });
+  });
+
+  it("degrades to a feed-row glow when the line is not in the store", () => {
+    // The one case that matters: both ends are right there in the row, and the
+    // answer is still nothing. Drawing them joined would put a walking route on
+    // the map that no router ever planned.
+    const plan = planForEntry(walked(), source({ drawings: [] }));
+    expect(plan).toMatchObject({ name: "plan_route", geom: { kind: "none" } });
+  });
+
+  it("keys on the line it made, so two walks from one place coexist", () => {
+    // A write's target is the artifact it made, exactly as for `draw_shape` —
+    // not the places it names. Keying on the origins would make a second walk
+    // out of the same station cut the first one's ink short, and both lines are
+    // on the map.
+    const first = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    const second = planForEntry(
+      walked({
+        refIds: ["drawing:route2"],
+        fx: { origin: WALK_ENDS.origin, originB: [121.6, 25.05] },
+      }),
+      source({ drawings: [ROUTE, { ...ROUTE, id: "drawing:route2" }] }),
+    );
+    expect(second?.keys).toEqual(["drawing:route2"]);
+    expect(keysClash(first!.keys, second!.keys)).toBe(false);
+  });
+
+  it("lets a removal of that route cut its ink short", () => {
+    // The inverse of the rule above: the ink is drawing a line that has just
+    // left the map, and must stop.
+    const drawn = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:route"] }),
+      source({ drawings: [], ghostOf: () => ({ positions: [[121.5, 25]], closed: false }) }),
+    );
+    expect(keysClash(drawn!.keys, removal!.keys)).toBe(true);
+  });
+});
+
+/**
  * The seam between the tool layer's geometry echo (T-70) and this registry.
  *
  * These do not restate what `describeCall` puts in `fx` — `activity.test.ts`
@@ -460,6 +565,36 @@ describe("against the real tool-layer echo", () => {
       a: [121.53609, 25.03045],
       b: [121.5436, 25.0334],
       radius_m: 500,
+    });
+  });
+
+  it("runs plan_route's ink along the drawing, between the ends it resolved", () => {
+    // The row the real summariser writes carries the drawing in `refIds` and
+    // the two ends in `fx` — this is the assertion that the effect reads both,
+    // and the reason the tool layer echoes a second origin for a tool that
+    // draws its own geometry.
+    const entry = entryFor(
+      "plan_route",
+      { from: "Daan Station", to: "Daan Forest Park" },
+      {
+        drawing_id: "drawing:route",
+        label: "walk: 大安站 → 大安森林公園",
+        distance_m: 1240,
+        duration_s: 921,
+        points: 3,
+        from: { lng: 121.5436, lat: 25.0334, name: "大安站" },
+        to: { lng: 121.53609, lat: 25.03045, name: "大安森林公園" },
+      },
+    );
+    expect(planForEntry(entry, source({ drawings: [ROUTE] }))?.geom).toMatchObject({
+      kind: "route",
+      from: [121.5436, 25.0334],
+      to: [121.53609, 25.03045],
+      positions: [
+        [121.54355, 25.03335],
+        [121.54021, 25.03312],
+        [121.53615, 25.03051],
+      ],
     });
   });
 

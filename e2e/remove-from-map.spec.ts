@@ -26,7 +26,7 @@ import type { Page } from "@playwright/test";
 import { decodeShareState } from "@/lib/map-tools/share";
 import { callTool } from "./mcp";
 import { expect, test } from "./fixtures";
-import { waitForFeatures, waitForLiveMap, waitForStoreHandle, waitForTools } from "./helpers";
+import { waitForAwake, waitForFeatures, waitForLiveMap, waitForStoreHandle, waitForTools } from "./helpers";
 
 const CENTER = { lng: 121.5175, lat: 25.0478 };
 
@@ -279,9 +279,7 @@ test.describe("remove_from_map (T-90)", () => {
     // refusal (B4): a per-id refusal is not a batch error, and "Refused — …"
     // would tell a reader watching the feed that nothing happened here --
     // hiding, in a bigger batch, the removals that really did succeed.
-    await expect
-      .poll(() => page.evaluate(() => document.body.dataset.awaken), { timeout: 2500 })
-      .toBe("awake");
+    expect(await waitForAwake(page, 2500)).toBe("awake");
     const row = page.locator('[data-testid="activity-call"][data-tool="remove_from_map"]').last();
     await expect(row).toBeVisible();
     const text = await row.innerText();
@@ -342,9 +340,7 @@ test.describe("remove_from_map (T-90)", () => {
     // Contrast with the refusal test above: a top-level error DOES read as
     // "Refused —", because unlike a per-id refusal nothing in this batch
     // succeeded, so there is no successful removal the wording could hide.
-    await expect
-      .poll(() => page.evaluate(() => document.body.dataset.awaken), { timeout: 2500 })
-      .toBe("awake");
+    expect(await waitForAwake(page, 2500)).toBe("awake");
     const row = page.locator('[data-testid="activity-call"][data-tool="remove_from_map"]').last();
     await expect(row).toContainText("Refused —");
   });

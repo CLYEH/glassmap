@@ -40,7 +40,7 @@ import {
 } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { DATASETS, isFeatureCategory } from "@/lib/data/schema";
-import { isMapCategory } from "@/lib/store/tier2";
+import { isMapCategory, TIER2_TEXT_FIELDS } from "@/lib/store/tier2";
 import { DEFAULT_CIRCLE_RADIUS_M, truncate } from "./shapes";
 import { DEFAULT_SURROUNDINGS_RADIUS_M } from "./surroundings";
 import { round5 } from "./state";
@@ -429,6 +429,24 @@ const SUMMARISERS: Record<string, Summariser> = {
     return {
       summary: `Measured ${target}${size ? ` — ${size}` : ""}`,
       ...(target ? { refIds: [target] } : {}),
+    };
+  },
+
+  get_place_details: (input, result) => {
+    // The name the tool answered with, not the id the caller typed: a row
+    // reading "Looked up osm:node:112" tells the human nothing about the map
+    // they are looking at. The id is still in refIds, typeset as code.
+    const id = str(result.id) ?? str(input.id)?.trim() ?? "";
+    const name = str(result.name)?.trim() || id;
+    // How much OSM actually had, counted off the answer itself, so the row
+    // cannot claim a field the agent was not given. "no details recorded" is
+    // the honest zero: the place is real and on the map, nobody has tagged it.
+    const details = TIER2_TEXT_FIELDS.filter((field) => str(result[field])).length;
+    return {
+      summary: `Looked up ${text(name)} — ${
+        details ? `${group(details)} ${details === 1 ? "detail" : "details"}` : "no details recorded"
+      }`,
+      ...(id ? { refIds: [id] } : {}),
     };
   },
 

@@ -805,14 +805,25 @@ describe("what the agent is told about categories", () => {
   });
 
   it("registers no new tool: this is a wider contract, not a bigger surface", async () => {
-    const { byName } = tier2Ready();
-    // Compared against the tools of a page that has no tier-2 data at all,
-    // rather than against a number. The claim is that loading points of
-    // interest widens the tools that already exist instead of adding one of
-    // its own; a hard-coded count only ever trips up whichever unrelated tool
-    // ships next, and says nothing about tier-2 when it does.
+    /*
+     * Two halves of one claim, converged on by two branches independently.
+     * The set half: loading points of interest widens the tools that already
+     * exist instead of adding one of its own — compared against a page with
+     * no tier-2 data at all, never against a number (a hard-coded count only
+     * ever trips up whichever unrelated tool ships next). The shape half:
+     * what must never appear is a tool about *loading* — a load_category, a
+     * per-category tool, anything an agent has to call before it is allowed
+     * to ask its question. That would make the fetch the agent's bookkeeping
+     * instead of the map's. get_place_details (T-97) passes both: it exists
+     * on the tier-2-less page too, and it is a question, not a step.
+     */
+    const names = Object.keys(tier2Ready().byName);
     const withoutTier2 = createMapTools(createMemoryToolStore()).map((t) => t.name);
-    expect(Object.keys(byName).sort()).toEqual([...withoutTier2].sort());
+    expect([...names].sort()).toEqual([...withoutTier2].sort());
+    for (const category of TIER2_CATEGORIES) {
+      expect(names.some((n) => n.includes(category)), category).toBe(false);
+    }
+    expect(names.filter((n) => /load|fetch|categor/.test(n))).toEqual([]);
   });
 
   it("names the POI category in the activity feed a human reads", async () => {

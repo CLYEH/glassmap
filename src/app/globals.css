@@ -1887,9 +1887,12 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
 /* The tags a place carries: a label column narrow enough to read as a margin
    note, and a value column that wraps rather than clipping — the model has
    already folded anything long (DETAIL_CHARS), and the full value is on the
-   row's `title`. Grows with the fields T-97 adds; nothing here counts rows,
-   and the label column sizes itself to the longest label rather than to a
-   number measured against today's three (Wheelchair alone is 68px). */
+   row's `title`. Nothing here counts rows, and the label column sizes itself
+   to the longest label rather than to a number measured against three of them.
+   Measured after T-97 at 1440x900: seven rows ending in "Wheelchair" give a
+   68px label column and a 134px value column; a place of worship, whose
+   "Denomination" is the widest label the table can produce, gives 81px and
+   121px. Both cards are 238px wide and neither clips. */
 .otm-details {
   margin-top: 7px;
   padding-top: 7px;
@@ -1921,6 +1924,21 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   margin: 0;
   color: var(--text-mid);
   overflow-wrap: anywhere;
+}
+/* The website row. Underlined rather than coloured, the same restraint the
+   attribution link uses: the card has one accent (the category swatch) and a
+   second one here would compete with it for a row that is not the point of the
+   card. The underline is what says "this one is followable" — the row is
+   otherwise identical to the four around it. */
+.otm-detail dd a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(206, 214, 221, 0.55);
+}
+.otm-detail dd a:hover {
+  color: var(--text-hi);
+  text-decoration-color: #ced6dd;
 }
 .otm-prov {
   margin-top: 8px;

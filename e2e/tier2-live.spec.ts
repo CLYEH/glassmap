@@ -3,7 +3,7 @@ import { BEAD_CLUSTER_LAYER, BEAD_LAYER, BROWSE_BEAD_LAYER, BROWSE_GRAIN_LAYER }
 import { browseTierMinimum, countedClusterThreshold } from "@/components/bead-style";
 import { SELECTION_RING_LAYER } from "@/components/map-style";
 import { callTool } from "./mcp";
-import { waitForLiveMap, waitForTools } from "./helpers";
+import { waitForAwake, waitForLiveMap, waitForTools } from "./helpers";
 import { expect, test } from "./fixtures";
 
 /**
@@ -163,9 +163,7 @@ test.describe("tier-2 POI rendering (opt-in, local pre-release only)", () => {
     // budget is computed over (MapCanvas.tsx's `inspectorLane()`).
     const call = await callTool(page, "get_map_state");
     expect(call.error).toBeUndefined();
-    await expect
-      .poll(() => page.evaluate(() => document.body.dataset.awaken), { timeout: 2500 })
-      .toBe("awake");
+    expect(await waitForAwake(page, 2500)).toBe("awake");
 
     await page.evaluate(() => window.__glassmapBrowse!.getState().browse("cafe"));
     await expect

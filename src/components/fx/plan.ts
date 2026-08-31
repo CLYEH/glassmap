@@ -48,6 +48,7 @@ export type FxName =
   | "describe_surroundings"
   | "compare_areas"
   | "measure"
+  | "get_place_details"
   | "get_share_link"
   | "human_draw"
   | "human_note"
@@ -88,6 +89,8 @@ export type FxGeom =
   | { kind: "route"; positions: LngLat[]; from: LngLat; to: LngLat }
   | { kind: "measure"; positions: LngLat[]; closed: boolean }
   | { kind: "pin"; at: LngLat; id: string }
+  /** One place, being read: `get_place_details` looked this feature up. */
+  | { kind: "place"; at: LngLat }
   | { kind: "compass"; at: LngLat; radius_m: number }
   | { kind: "twin"; a: LngLat; b: LngLat; radius_m: number }
   /** One ghost per mark that left the map: the human's ✕, or `remove_from_map`. */
@@ -347,6 +350,32 @@ export function planForEntry(entry: FxEntry, source: FxSource): FxPlan | null {
         "measure",
         drawing ? [drawing.id] : [],
         path ? { kind: "measure", ...path } : { kind: "none" },
+      );
+    }
+
+    case "get_place_details": {
+      // The narrowest read on the map: one question about one place. Its row
+      // states no `fx` at all (`map-tools/activity.ts`), so the anchor comes
+      // from the feature itself, exactly the way a deselected place answers
+      // `remove_from_map`.
+      //
+      // Anchoring rather than echoing is the right way round here, and it is
+      // the one place in this table where that is true. The tool's answer DOES
+      // carry a `coordinate` — an echo could be added — but the store's anchor
+      // is the point the map has already drawn this feature at, so the glint
+      // lands on the mark the human is looking at instead of on a second
+      // opinion about where it is. Every other tool in this file is echoed
+      // because it resolved a *name* the page holds no mark for.
+      //
+      // An id nothing has loaded contributes no point rather than a guessed
+      // one: a glint on the view centre would claim the agent looked somewhere
+      // it never did.
+      const id = refIds?.[0];
+      const at = id ? source.anchorOf(id) : null;
+      return plan(
+        "get_place_details",
+        id ? [id] : [],
+        at ? { kind: "place", at } : { kind: "none" },
       );
     }
 

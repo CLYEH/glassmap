@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all thirteen tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `plan_route`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all fourteen tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `plan_route`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_place_details`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,7 +33,7 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 
 ## Tools
 
-Three layers, thirteen of fourteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, fourteen of fifteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
@@ -44,7 +44,8 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 ├─ describe_surroundings ✅                                           ├─ remove_from_map ✅
 │                                                                     └─ get_share_link ✅
 ├─ measure ✅
-└─ compare_areas ✅
+├─ compare_areas ✅
+└─ get_place_details ✅
 ```
 
 ✅ = implemented and covered by unit tests. Everything else is planned — see [Roadmap](#roadmap).
@@ -63,6 +64,7 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
 | `compare_areas` | Compares two places in one call: per-category counts of what's within `radius_m` of each, plus the nearest match of each category on each side; if a place name doesn't resolve, the error names which side (`a` or `b`) failed. | `a`, `b`, `radius_m`, `categories` |
 | `measure` | Measures one drawing or loaded feature: area and perimeter for a circle or polygon, length for a line. A point has no extent and is refused, with a pointer to `find_features` for distances instead. | `target` |
+| `get_place_details` | Everything the page knows about one place — address, phone, website, opening hours, wheelchair (as OpenStreetMap reports it, not a verified accessibility claim) and category-specific facts — for the questions a list answer is too lean for. Fields exist only where OSM has them; absent means absent. | `id` |
 | `get_share_link` | Builds a link that reproduces this map for whoever opens it — camera, selection, every drawing and every note, encoded in the URL itself, nothing uploaded. Returns `{ url, bytes }`; a map too large to fit in a URL (over 8 KB) is refused with an error naming what to remove. | *(none)* |
 
 `within: "drawing:<n>"` on `find_features` and `select_features` is the read half of the collaborative loop: any circle or polygon on the map — agent-drawn or hand-drawn by a human — becomes something an agent can query by id, not just something rendered on screen. (A line has no inside, so `within` does not apply to it.)

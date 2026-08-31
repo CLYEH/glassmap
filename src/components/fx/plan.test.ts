@@ -104,7 +104,7 @@ describe("the tool → effect registry", () => {
   it("gives every imperative tool an effect, and names it after the tool", () => {
     // Derived from the roster the landing screen prints — which
     // `tool-roster.test.ts` holds equal to the tools actually registered — so a
-    // thirteenth tool cannot ship drawing nothing. The feed row, the spec, the
+    // fourteenth tool cannot ship drawing nothing. The feed row, the spec, the
     // mockup and `data-fx-name` all say the tool's name; a second vocabulary
     // here would make a frame unreadable against shots-v3.
     const expected = IMPERATIVE_TOOLS.filter((tool) => !WITHOUT_EFFECT.includes(tool));
@@ -508,6 +508,68 @@ describe("plan_route", () => {
 });
 
 /**
+ * The lookup effect, which is the only read whose geometry comes from the
+ * store rather than from an echo: `get_place_details` is handed an id, so its
+ * row states `refIds` and no `fx` at all (`map-tools/activity.ts`). Everything
+ * here is about that one substitution being made honestly.
+ */
+describe("get_place_details", () => {
+  it("glints the place at the anchor the map already drew it on", () => {
+    // The row names an id and nothing else. The point comes from the loaded
+    // feature — the same anchor the selection halo uses — so the glint lands on
+    // the mark under the human's eyes rather than on a second opinion about
+    // where that place is.
+    const plan = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(plan).toMatchObject({ name: "get_place_details", keys: ["osm:node:1"] });
+    expect(plan?.geom).toEqual({ kind: "place", at: [121.6, 25.05] });
+  });
+
+  it("degrades to a feed-row glow for an id this page has not loaded", () => {
+    // An agent may look up an id it got from a share link before that link's
+    // category has arrived. Glinting the view centre would say the agent read a
+    // place that is not there; the row still lights, and the map stays calm.
+    const plan = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:9999"] }),
+      source(),
+    );
+    expect(plan).toMatchObject({ name: "get_place_details", geom: { kind: "none" } });
+  });
+
+  it("never leaves itself keyless, so a re-asked lookup preempts the first", () => {
+    const bare = planForEntry(entry({ tool: "get_place_details" }), source());
+    expect(bare?.keys).toEqual(["tool:get_place_details"]);
+    expect(bare?.geom.kind).toBe("none");
+  });
+
+  it("keys on the place, so removing it cuts the glint short", () => {
+    // The read is about that feature. A `remove_from_map` that takes it out of
+    // the highlight while the glint is still lit must stop it — the same rule
+    // that stops `draw_shape`'s ink over a shape that just left.
+    const lookup = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(keysClash(lookup!.keys, removal!.keys)).toBe(true);
+  });
+
+  it("does not clash with a lookup of a different place", () => {
+    // Two questions about two places are two independent reads and coexist,
+    // exactly as two draws on two shapes do. Keying by effect name would have
+    // made the second one erase the first.
+    const one = planForEntry(entry({ tool: "get_place_details", refIds: ["osm:node:1"] }), source());
+    const two = planForEntry(entry({ tool: "get_place_details", refIds: ["osm:node:2"] }), source());
+    expect(keysClash(one!.keys, two!.keys)).toBe(false);
+  });
+});
+
+/**
  * The seam between the tool layer's geometry echo (T-70) and this registry.
  *
  * These do not restate what `describeCall` puts in `fx` — `activity.test.ts`
@@ -640,6 +702,31 @@ describe("against the real tool-layer echo", () => {
       shape: null,
       hits: [[121.6, 25.05]],
     });
+  });
+
+  it("lights get_place_details from the id the real row carries, not from an echo", () => {
+    // The tool answers with a `coordinate`, and the summariser deliberately does
+    // not echo it: the row states the id, and the map resolves it. This is the
+    // assertion that the two halves agree about that — a summariser that
+    // stopped writing `refIds` would leave the fourteenth tool as the one call
+    // that animates nothing, and no other test in the repo would notice.
+    const entry = entryFor(
+      "get_place_details",
+      { id: "osm:node:1" },
+      {
+        id: "osm:node:1",
+        name: "伯朗咖啡館",
+        name_en: "Mr. Brown",
+        category: "cafe",
+        coordinate: { lng: 121.55, lat: 25.04 },
+        wheelchair: "yes",
+      },
+    );
+    expect(entry.refIds).toEqual(["osm:node:1"]);
+    expect(entry.fx).toBeUndefined();
+    // The store's anchor for that id — NOT the coordinate in the answer, which
+    // is the point of anchoring rather than echoing.
+    expect(planForEntry(entry, source())?.geom).toEqual({ kind: "place", at: [121.6, 25.05] });
   });
 
   it("leaves the map calm for the tools whose answers state no point", () => {

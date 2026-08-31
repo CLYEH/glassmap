@@ -21,6 +21,7 @@ import { withActivity } from "./activity";
 import {
   boundsIntersect,
   describeFeature,
+  describePlaceDetails,
   featureBounds,
   featureCenter,
   type FeatureOutput,
@@ -145,6 +146,10 @@ export interface CompareAreasInput {
 
 export interface MeasureInput {
   target?: unknown;
+}
+
+export interface GetPlaceDetailsInput {
+  id?: unknown;
 }
 
 export interface ListFeaturesInViewInput {
@@ -1418,6 +1423,56 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  const getPlaceDetails: GlassMapTool<GetPlaceDetailsInput> = {
+    name: "get_place_details",
+    description:
+      "Everything this map holds about one place, for the questions a list answer is too lean to carry: opening hours, phone, address, website, wheelchair, and whatever its kind of place is tagged with - a hotel's star rating, a car park's fee and capacity, a pharmacy's dispensing, a place of worship's religion and denomination, a hospital's emergency department. Takes one feature id per call, as returned by find_features, list_features_in_view, describe_surroundings or select_features: those answer with a name, a category and a distance for many places, and this answers with one place in full, including its coordinate and every category it is tagged in. Every field comes from OpenStreetMap and exists only where a contributor entered it, so a field that is absent means nobody has recorded it - not that the place has none; say it that way round, and expect most places to carry only some of them. \"wheelchair\" is the OSM tag as tagged (yes, no or limited): report it as what OpenStreetMap says, never as a verified accessibility claim, and tell the human to ring ahead if it matters. Shapes and notes on the map are not places - use measure for a drawing's size and get_map_state for what is drawn or noted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            'The feature id to look up, e.g. "osm:node:123" - one per call, exactly as an earlier answer spelled it. A point-of-interest id only resolves once its category has been loaded, which is what naming that category in find_features or select_features does.',
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    // Every field in the answer is OSM text, including the name.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      if (typeof inp.id !== "string" || !inp.id.trim()) {
+        return {
+          error:
+            'id is required: one feature id, e.g. "osm:node:123", as returned by find_features',
+        };
+      }
+      const id = inp.id.trim();
+      // A mark id must not fall through to the feature lookup and come back as
+      // "unknown": the thing is right there on the map, and the caller would go
+      // looking for a spelling mistake instead of for the right tool.
+      const mark = id.startsWith(DRAWING_PREFIX)
+        ? "a shape on the map"
+        : id.startsWith(ANNOTATION_PREFIX)
+          ? "a note on the map"
+          : null;
+      if (mark) {
+        return {
+          error: `${id} is ${mark}, not a place: this tool describes loaded features. Use measure for a drawing's length or area, or get_map_state for the shapes and notes themselves.`,
+        };
+      }
+      const feature = store.getFeatures().find((f) => f.properties?.id === id);
+      if (!feature) {
+        return {
+          error: `unknown feature id: no loaded feature has id ${id}. Use find_features to look the place up by name or category and take the id from its answer; a point-of-interest id resolves only once a call has named its category and loaded it.`,
+        };
+      }
+      return describePlaceDetails(feature);
+    },
+  };
+
   const getShareLink: GlassMapTool = {
     name: "get_share_link",
     description:
@@ -1545,6 +1600,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     describeSurroundings as GlassMapTool,
     compareAreas as GlassMapTool,
     measure as GlassMapTool,
+    getPlaceDetails as GlassMapTool,
     getShareLink,
   ].map((tool) => withActivity(tool, store));
 }

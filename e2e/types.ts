@@ -69,6 +69,30 @@ export interface ToolResult {
   to?: { lng: number; lat: number; name?: string };
   /** Which of two named ends a resolution error is about ("from" | "to"). */
   field?: string;
+  // get_place_details (T-97) success responses flatten PlaceDetailsOutput here
+  // -- the fields FeatureResult/PlaceCandidateResult never carry (lists stay
+  // lean; see src/lib/map-tools/output.ts).
+  id?: string;
+  name?: string;
+  name_en?: string;
+  category?: string;
+  categories?: string[];
+  sample?: true;
+  coordinate?: { lng: number; lat: number };
+  cuisine?: string;
+  brand?: string;
+  opening_hours?: string;
+  address?: string;
+  phone?: string;
+  website?: string;
+  wheelchair?: string;
+  stars?: string;
+  fee?: string;
+  capacity?: string;
+  dispensing?: string;
+  religion?: string;
+  denomination?: string;
+  emergency?: string;
 }
 
 /** One id `remove_from_map` actually took off the map. */

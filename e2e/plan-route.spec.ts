@@ -37,7 +37,7 @@ import { ROUTE_ATTRIBUTION, ROUTE_SERVICE_URL, routeUrl } from "@/lib/map-tools/
 import type { LngLat } from "@/lib/store/map-store";
 import { callTool } from "./mcp";
 import { expect, mockExternalHost, test } from "./fixtures";
-import { waitForFeatures, waitForLiveMap, waitForTools } from "./helpers";
+import { waitForAwake, waitForFeatures, waitForLiveMap, waitForTools } from "./helpers";
 
 /**
  * The two ends this file plans every walk between: real entries from
@@ -143,9 +143,7 @@ test.describe("plan_route (T-94)", () => {
     await expect(page.getByTestId("drawing-count")).toHaveText("1");
 
     // The feed row a human reads.
-    await expect
-      .poll(() => page.evaluate(() => document.body.dataset.awaken), { timeout: 2500 })
-      .toBe("awake");
+    expect(await waitForAwake(page, 2500)).toBe("awake");
     const row = page.locator('[data-testid="activity-call"][data-tool="plan_route"]').last();
     await expect(row).toBeVisible();
     await expect(row).toContainText("Planned a walk");
@@ -247,9 +245,7 @@ test.describe("plan_route (T-94)", () => {
     await expect(page.getByTestId("drawing-count")).toHaveText(String(before));
     await expect(page.getByTestId("route-attribution")).toHaveCount(0);
 
-    await expect
-      .poll(() => page.evaluate(() => document.body.dataset.awaken), { timeout: 2500 })
-      .toBe("awake");
+    expect(await waitForAwake(page, 2500)).toBe("awake");
     const row = page.locator('[data-testid="activity-call"][data-tool="plan_route"]').last();
     await expect(row).toContainText("Refused —");
   });

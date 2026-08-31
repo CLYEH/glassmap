@@ -85,6 +85,64 @@ const CATEGORY_TAGS = [
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// T-97: general enrichment field caps. `address` composes a whole line
+// (occasionally addr:full already includes a postcode prefix), category
+// fields (stars/fee/capacity/dispensing/religion/denomination/emergency)
+// are short tag values but capped defensively since they are still free text.
+const ADDRESS_MAX = 120;
+const CATEGORY_FIELD_MAX = 60;
+const WHEELCHAIR_VALUES = new Set(["yes", "no", "limited"]);
+
+/** First non-empty string tag among `keys`, trimmed. Used for phone/website's
+ *  "prefer X, fall back to contact:X" rule. */
+function pickString(tags, ...keys) {
+  for (const key of keys) {
+    const value = tags[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** website/contact:website, http(s) only - Overpass carries some `website`
+ *  values that are bare social handles or empty strings, which are not URLs. */
+function pickWebsite(tags) {
+  const raw = pickString(tags, "website", "contact:website");
+  return raw && /^https?:\/\//i.test(raw) ? raw : undefined;
+}
+
+/** OSM's `wheelchair` tag also carries free-text values in practice
+ *  (e.g. "designated", "no"); only the three enumerated values are kept. */
+function pickWheelchair(tags) {
+  const raw = tags.wheelchair;
+  return typeof raw === "string" && WHEELCHAIR_VALUES.has(raw) ? raw : undefined;
+}
+
+/**
+ * One composed address line from addr:* tags, in the order Taiwanese
+ * addresses read (city -> district -> street -> house number, largest unit
+ * first, no separators - matches every addr:* sample checked for this bbox,
+ * which is Han-script throughout with no addr:city or addr:street value seen
+ * in Latin script). `addr:full` is used verbatim when present (it is already
+ * composed by the OSM contributor, and often keeps a postcode prefix that
+ * only addr:full carries, e.g. "111台北市士林區德行西路5號") rather than
+ * rebuilt from the individual addr:* tags, which would discard that
+ * already-correct string. addr:housenumber occasionally already ends in
+ * "號" ("60號"); it is only appended when missing.
+ */
+function composeAddress(tags) {
+  const full = tags["addr:full"];
+  if (typeof full === "string" && full.trim()) return full.trim().slice(0, ADDRESS_MAX);
+
+  const city = typeof tags["addr:city"] === "string" ? tags["addr:city"] : "";
+  const district = typeof tags["addr:district"] === "string" ? tags["addr:district"] : "";
+  const street = typeof tags["addr:street"] === "string" ? tags["addr:street"] : "";
+  let housenumber = typeof tags["addr:housenumber"] === "string" ? tags["addr:housenumber"] : "";
+  if (housenumber && !housenumber.endsWith("號")) housenumber = `${housenumber}號`;
+
+  const composed = `${city}${district}${street}${housenumber}`;
+  return composed ? composed.slice(0, ADDRESS_MAX) : undefined;
+}
+
 function inBbox(lng, lat) {
   return (
     Number.isFinite(lng) &&
@@ -140,9 +198,14 @@ async function overpassQuery(ql) {
  * ways/relations give Overpass's `out center` centroid.
  *
  * Unnamed features are skipped entirely per the tier-2 contract. Optional
- * enrichment tags (cuisine, brand, opening_hours) are carried when present;
- * opening_hours is truncated to 120 chars (free-text tag, occasionally very
- * long in OSM). No other tags are kept.
+ * enrichment tags are carried when present: cuisine, brand, opening_hours
+ * (truncated to 120 chars, free-text and occasionally very long in OSM),
+ * plus (T-97) address (composed from addr:*, see composeAddress), phone
+ * (phone / contact:phone), website (website / contact:website, http(s)
+ * only), wheelchair (yes/no/limited only), and category-specific fields
+ * that are only meaningful for one category each: stars (hotel), fee +
+ * capacity (parking), dispensing (pharmacy), religion + denomination
+ * (place_of_worship), emergency (hospital). No other tags are kept.
  */
 async function fetchCategory(category, key, value) {
   const ql = `[out:json][timeout:180];
@@ -183,6 +246,38 @@ out center;`;
       properties.opening_hours = tags.opening_hours.slice(0, 120);
     }
 
+    const address = composeAddress(tags);
+    if (address) properties.address = address;
+    const phone = pickString(tags, "phone", "contact:phone");
+    if (phone) properties.phone = phone;
+    const website = pickWebsite(tags);
+    if (website) properties.website = website;
+    const wheelchair = pickWheelchair(tags);
+    if (wheelchair) properties.wheelchair = wheelchair;
+
+    // Category-specific fields: only extracted for the category they are
+    // meaningful for, even if the raw tag happens to appear elsewhere.
+    if (category === "hotel") {
+      const stars = pickString(tags, "stars");
+      if (stars) properties.stars = stars.slice(0, CATEGORY_FIELD_MAX);
+    } else if (category === "parking") {
+      const fee = pickString(tags, "fee");
+      if (fee) properties.fee = fee.slice(0, CATEGORY_FIELD_MAX);
+      const capacity = pickString(tags, "capacity");
+      if (capacity) properties.capacity = capacity.slice(0, CATEGORY_FIELD_MAX);
+    } else if (category === "pharmacy") {
+      const dispensing = pickString(tags, "dispensing");
+      if (dispensing) properties.dispensing = dispensing.slice(0, CATEGORY_FIELD_MAX);
+    } else if (category === "place_of_worship") {
+      const religion = pickString(tags, "religion");
+      if (religion) properties.religion = religion.slice(0, CATEGORY_FIELD_MAX);
+      const denomination = pickString(tags, "denomination");
+      if (denomination) properties.denomination = denomination.slice(0, CATEGORY_FIELD_MAX);
+    } else if (category === "hospital") {
+      const emergency = pickString(tags, "emergency");
+      if (emergency) properties.emergency = emergency.slice(0, CATEGORY_FIELD_MAX);
+    }
+
     features.push({
       type: "Feature",
       properties,
@@ -204,11 +299,23 @@ function validate(category, features) {
   const ids = new Set();
   const problems = [];
   for (const f of features) {
+    const props = f.properties;
     const [lng, lat] = f.geometry.coordinates;
-    if (!Number.isFinite(lng) || !Number.isFinite(lat)) problems.push(`${f.properties.id}: NaN coordinate`);
-    else if (!inBbox(lng, lat)) problems.push(`${f.properties.id}: out of bbox (${lng},${lat})`);
-    if (ids.has(f.properties.id)) problems.push(`${f.properties.id}: duplicate id within ${category}.geojson`);
-    ids.add(f.properties.id);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) problems.push(`${props.id}: NaN coordinate`);
+    else if (!inBbox(lng, lat)) problems.push(`${props.id}: out of bbox (${lng},${lat})`);
+    if (!props.id) problems.push(`(no id): missing id`);
+    if (props.id && ids.has(props.id)) problems.push(`${props.id}: duplicate id within ${category}.geojson`);
+    ids.add(props.id);
+    if (!props.name) problems.push(`${props.id}: missing name`);
+    if (props.category !== category) problems.push(`${props.id}: category "${props.category}" does not match file`);
+    // T-97 enrichment fields: defence in depth on top of pickWheelchair/
+    // pickWebsite already only setting valid values.
+    if (props.wheelchair !== undefined && !WHEELCHAIR_VALUES.has(props.wheelchair)) {
+      problems.push(`${props.id}: invalid wheelchair value "${props.wheelchair}"`);
+    }
+    if (props.website !== undefined && !/^https?:\/\//i.test(props.website)) {
+      problems.push(`${props.id}: invalid website "${props.website}"`);
+    }
   }
   return problems;
 }

@@ -242,22 +242,26 @@ export const beadSourceSpec = () => ({
 
 /**
  * The name of the browsed-category slot a browse point was painted under: its
- * index in the browsed set, 0-based. Not the category itself, because what the
- * style has to decide is only ever "do these agree?", and a number the source
- * can take a min and a max of answers that without the cluster properties
- * having to be rebuilt every time a person taps a chip.
+ * index in the browsed set, 0-based. Not the category itself, because the only
+ * question ever asked of it is "do these agree?", and a number the source can
+ * take a min and a max of answers that without the cluster properties having
+ * to be rebuilt every time a person taps a chip.
  */
 export const BROWSE_SLOT = "slot";
 
 /**
- * The browse source. Browsing is a human act, so every mark from it is rose.
+ * The browse source. Browsing is a human act, so every mark from it is rose —
+ * a lone grain, a cluster of one kind and a cluster of three, all of them.
  *
- * `smin`/`smax` are the lowest and highest slot inside a cluster, which makes
- * "every place in here is the same kind" decidable in the style itself
- * (`smin === smax`) — the same trick the selection source plays with `user`
- * against `point_count`, for the same reason: a cluster's colour is a claim
- * about all of its members, so the style needs an aggregate rather than a
- * sample.
+ * `smin`/`smax` are the lowest and highest slot inside a cluster, so
+ * `smin === smax` means every place under that mark is the same kind of place.
+ * Nothing paints from them today, and that is deliberate rather than an
+ * oversight: the two inks are a provenance grammar (teal is the agent, rose is
+ * the human) and there is no third one to spend on categories, so how a
+ * mixed-kind cluster should read is an open design item (design2-v5 §9). What
+ * the aggregate buys now is that the question is answerable at all — from a
+ * rendered feature, in a test, or by whatever §9 eventually decides — instead
+ * of being lost the moment supercluster coalesces the points.
  */
 export const browseSourceSpec = () => ({
   type: "geojson" as const,
@@ -281,29 +285,6 @@ const beadIcon = (kind: "bead" | "cluster") => [
 const clusterIcon = [
   "case",
   ["==", ["get", "user"], ["get", "point_count"]],
-  beadImageId("cluster", "user"),
-  beadImageId("cluster", "agent"),
-];
-
-/**
- * A counted browse bead: rose while every place under the numeral is the same
- * kind, teal the moment two categories coalesce into it.
- *
- * The owner's mixed-cluster=teal ruling, applied to the axis multi-category
- * browsing added. A numeral is the loudest mark this map draws and it is read
- * as "38 of the thing you asked for"; with three categories painted at once,
- * on the rose that says "you asked for this", that sentence is only true while
- * the 38 agree. Teal is the map's existing word for "this mark is not one
- * person's single act", and Ruling 3 already settled which way to err: a mark
- * that under-claims is the safe error, a mark that over-claims is not.
- *
- * The grains keep their rose whatever they hold: the grain field is texture,
- * and texture makes no claim to be about one kind. The colour only moves where
- * a number is put on it.
- */
-const browseClusterIcon = [
-  "case",
-  ["==", ["get", "smin"], ["get", "smax"]],
   beadImageId("cluster", "user"),
   beadImageId("cluster", "agent"),
 ];
@@ -361,7 +342,16 @@ export function buildBeadLayerSpecs(threshold = Number.POSITIVE_INFINITY): AddLa
       source: BROWSE_SOURCE,
       filter: browseBeadFilter(threshold),
       layout: {
-        "icon-image": browseClusterIcon,
+        // Rose, whatever kinds of place are under the numeral. The two colours
+        // on this map are a provenance grammar, not a category legend — teal
+        // is the agent, and a browse cluster has no agent in it by definition,
+        // so tinting a mixture teal would say an agent had been here. The
+        // numeral does not name a category either: "38 places you asked to
+        // see" is exactly true of a mixture, and the dock strip below names
+        // the kinds that are painted. A signal for mixed *kinds* is still an
+        // open design item (design2-v5 §9), and `smin`/`smax` are what it
+        // would be built from.
+        "icon-image": beadImageId("cluster", "user"),
         "icon-size": clusterIconSize(BROWSE_CLUSTER_RAMP),
         ...NEVER_HIDE,
         ...countLabel(BROWSE_CLUSTER_RAMP),

@@ -404,39 +404,38 @@ describe("the bead layers", () => {
 
   it("paints the browse grains in the human's rose, whatever they hold", () => {
     // Browsing is something a person did, so its ink is the human's — the same
-    // colour a hand-drawn shape uses. The grain field stays one colour even
-    // with three categories painted: it is texture, and texture claims nothing
-    // about being one kind of place. Only a numeral makes that claim.
+    // colour a hand-drawn shape uses. One colour for the whole field even with
+    // three categories painted: the ink says who asked, and all of it was
+    // asked for by the same person.
     expect(paintOf(BROWSE_GRAIN_LAYER)["circle-color"]).toBe("#c2255c");
   });
 
   it("counts whether a browse cluster holds one kind of place or several", () => {
     // The lowest and the highest browsed slot inside the cluster: equal means
     // every place under the numeral is the same kind. Aggregated by the source
-    // because a cluster's colour is a claim about all of its members, and
-    // because these two survive a person adding a category — the properties
-    // never mention which categories are browsed, only which slot each place
-    // was painted under.
+    // because the answer is otherwise lost the moment supercluster coalesces
+    // the points, and written in slots rather than category names so it
+    // survives a person adding a category without the source being rebuilt.
+    // Nothing paints from it yet — see the next test for why.
     const properties = JSON.stringify(browseSourceSpec().clusterProperties);
     expect(properties).toContain('"smin":["min",["get","slot"]]');
     expect(properties).toContain('"smax":["max",["get","slot"]]');
   });
 
-  it("tints a browse cluster of mixed kinds teal", () => {
-    // mixed-cluster=teal, on the axis multi-category browsing added. A numeral
-    // on rose reads as "38 of the thing you asked for"; with three kinds
-    // painted at once that sentence is only true while the 38 agree, and teal
-    // is this map's existing word for a mark that is not one clean act. Ruling
-    // 3's direction holds: under-claiming is the safe error.
-    const icon = JSON.stringify(layoutOf(BROWSE_BEAD_LAYER)["icon-image"]);
-    expect(icon).toBe(
-      JSON.stringify([
-        "case",
-        ["==", ["get", "smin"], ["get", "smax"]],
-        beadImageId("cluster", "user"),
-        beadImageId("cluster", "agent"),
-      ]),
-    );
+  it("keeps the browse numeral rose however many kinds are under it", () => {
+    // The two inks are a provenance grammar, not a category legend: teal means
+    // an agent acted, and a browse cluster contains no agent by definition. A
+    // mixture tinted teal would tell a person an agent had been here, on the
+    // same screen as the tray line promising the rose means they asked for it
+    // themselves — and with two categories painted in central Taipei that was
+    // nearly every counted bead on screen, measured.
+    //
+    // The numeral makes no claim the mixture breaks, either: it never named a
+    // category. "38 places you asked to see" is exactly true of 20 cafes and
+    // 18 banks, and the dock strip names the kinds. mixed-cluster=teal
+    // (design2-v5:327) is the PROVENANCE rule — false-rose hides an agent —
+    // and multi-category browse paint is still §9's open item.
+    expect(layoutOf(BROWSE_BEAD_LAYER)["icon-image"]).toBe(beadImageId("cluster", "user"));
   });
 
   it("grades a grain that stands for a cluster by how many it stands for", () => {

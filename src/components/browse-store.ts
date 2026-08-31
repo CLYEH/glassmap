@@ -30,12 +30,16 @@ import type { Tier2Category } from "@/lib/store/tier2";
 /**
  * How many kinds of place may be painted at once.
  *
- * Three is the ceiling the tier-2 study set for concurrent categories, and the
- * budget below is why it is a ceiling at all rather than a preference: the ink
- * budget is one shared allowance of twelve numerals over the whole painted
- * set, so every category added divides the same twelve. At three the map still
- * reads as three answers to "what is around here"; past it the counted beads
- * stop belonging to anything a person can name.
+ * The ink is the reason, and it is a hard one: the budget is a single
+ * allowance of twelve numerals over the whole painted set (see `threshold`),
+ * so every category added divides the same twelve between more kinds of place.
+ * At three the map still reads as three answers to "what is around here"; past
+ * it the counted beads stop belonging to anything a person can name.
+ *
+ * The tier-2 study's round-5 clause lands on the same number from the adjacent
+ * question — it caps how many large categories may be *loaded* at once on a
+ * phone, not how many may be painted, and browsing here loads without ever
+ * unloading — so it is corroboration for the figure rather than its authority.
  */
 export const BROWSE_MAX = 3;
 
@@ -65,7 +69,17 @@ interface BrowseStore {
    * and adding and removing categories is now that switch several times over.
    */
   threshold: number;
-  browse: (category: Tier2Category) => Promise<void>;
+  /**
+   * Paint a category, loading its file first. Resolves with the category the
+   * cap pushed off the map to make room, or null — nothing was evicted, the
+   * file did not load, or the human took the pick back while it was in flight.
+   *
+   * The answer comes from here because only the write that evicted knows: a
+   * caller comparing the set before and after its own `await` cannot tell the
+   * cap's eviction from a category the person removed with its × meanwhile,
+   * and would blame the cap for a chip they closed themselves.
+   */
+  browse: (category: Tier2Category) => Promise<Tier2Category | null>;
   /** Stop painting one category, leaving the others alone. */
   remove: (category: Tier2Category) => void;
   clear: () => void;
@@ -78,24 +92,28 @@ export const useBrowseStore = create<BrowseStore>((set, get) => ({
   threshold: Number.POSITIVE_INFINITY,
   browse: async (category) => {
     const { categories, pending } = get();
-    if (categories.includes(category) || pending.includes(category)) return;
+    if (categories.includes(category) || pending.includes(category)) return null;
     set({ pending: [...pending, category] });
     const result = await useMapStore.getState().restoreTier2Categories([category]);
-    set((s) => ({
+    let evicted: Tier2Category | null = null;
+    set((s) => {
       // Two reasons this category may still not be painted. A file that would
       // not load paints nothing: "no cafes here" and "the cafe file never
       // arrived" must never look the same. And a pick the human took back
       // while it was in flight is no longer pending — `clear`/`remove` drop it
       // — so it must not land on the map a second or two after they said no.
-      categories:
-        result.ok && s.pending.includes(category)
-          ? // Oldest out, and only here: eviction is what makes the fourth tap
-            // an answer rather than a refusal. The tray reads the difference
-            // back off this array and says which one went.
-            [...s.categories, category].slice(-BROWSE_MAX)
-          : s.categories,
-      pending: s.pending.filter((c) => c !== category),
-    }));
+      const paint = result.ok && s.pending.includes(category);
+      const pending = s.pending.filter((c) => c !== category);
+      if (!paint) return { categories: s.categories, pending };
+      // Oldest out, and only here: eviction is what makes the fourth tap an
+      // answer rather than a refusal. Reported from inside this write because
+      // this is the only place that can tell it apart from a category the
+      // human closed by hand while the file was arriving.
+      const next = [...s.categories, category];
+      if (next.length > BROWSE_MAX) evicted = next[0];
+      return { categories: next.slice(-BROWSE_MAX), pending };
+    });
+    return evicted;
   },
   remove: (category) =>
     set((s) => ({

@@ -101,22 +101,22 @@ export function PlacesDock() {
       // The live set, not this render's: two taps inside one frame both run
       // against the same stale props, and the second would report a category
       // that is merely still loading as one that could not load.
-      const { categories: before, pending: inFlight } = useBrowseStore.getState();
+      const { categories, pending: inFlight } = useBrowseStore.getState();
       if (inFlight.includes(next)) return;
-      if (before.includes(next)) {
+      if (categories.includes(next)) {
         drop(next);
         return;
       }
-      await browse(next);
-      const after = useBrowseStore.getState().categories;
+      const wasEvicted = await browse(next);
       // `browse` swallows a failed load on purpose (a category that would not
       // load must paint nothing), so the tray asks the store what actually
-      // happened rather than assuming the tap worked — and, for the same
-      // reason, reads the eviction off the difference instead of predicting
-      // it: only the store knows what the set looked like when the file
-      // finally landed.
-      if (!after.includes(next)) setFailed(next);
-      else setEvicted(before.find((c) => !after.includes(c)) ?? null);
+      // happened rather than assuming the tap worked. The eviction is the
+      // store's answer too, for a sharper reason: a set compared across this
+      // await cannot tell what the cap pushed out from what the human closed
+      // with its × while the file was arriving, and would blame the cap for
+      // their own tap.
+      if (!useBrowseStore.getState().categories.includes(next)) setFailed(next);
+      else setEvicted(wasEvicted);
     },
     [browse, drop],
   );

@@ -82,6 +82,47 @@ describe("browse store", () => {
     expect(browse().categories).toEqual(["bar", "bakery", "museum"]);
   });
 
+  it("says which kind the cap pushed off, and nothing when it pushed none", async () => {
+    // The tray's foot line is written from this answer, so it has to come from
+    // the write that evicted. The alternative — compare the set before and
+    // after the await — cannot tell the cap's doing from the human's.
+    expect(await browse().browse("cafe")).toBeNull();
+    expect(await browse().browse("bar")).toBeNull();
+    expect(await browse().browse("bakery")).toBeNull();
+    expect(await browse().browse("museum")).toBe("cafe");
+    expect(await browse().browse("bank")).toBe("bar");
+  });
+
+  it("blames the cap for nothing when the human closed a kind mid-fetch", async () => {
+    // Three painted, a fourth on its way, and the person takes one off with
+    // its × while the file is arriving. The fourth then fits, so nothing was
+    // evicted — and the tray must not say "came off the map, three at a time"
+    // about a chip they closed themselves.
+    for (const category of ["cafe", "bar", "bakery"] as const) await browse().browse(category);
+    const release = restoreOnCommand();
+    const inFlight = browse().browse("museum");
+    browse().remove("bar");
+    release();
+
+    expect(await inFlight).toBeNull();
+    expect(browse().categories).toEqual(["cafe", "bakery", "museum"]);
+  });
+
+  it("says nothing was evicted when the file never arrived", async () => {
+    // A failed fourth costs the human nothing: the three they had stay, and
+    // the tray has one thing to report, not two.
+    for (const category of ["cafe", "bar", "bakery"] as const) await browse().browse(category);
+    restoreReturns(false);
+    expect(await browse().browse("museum")).toBeNull();
+    expect(browse().categories).toEqual(["cafe", "bar", "bakery"]);
+  });
+
+  it("says nothing was evicted for a kind that is already painted", async () => {
+    // The re-ask is a no-op, and a no-op has no casualty to report.
+    await browse().browse("cafe");
+    expect(await browse().browse("cafe")).toBeNull();
+  });
+
   it("never paints a kind twice, and re-asking does not move it in the queue", async () => {
     // Otherwise the same grains would be pushed into the source under two
     // slots, and a place would be counted twice inside one cluster's numeral.

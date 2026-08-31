@@ -100,7 +100,7 @@ A task is done only when **all** of these hold. Anything missing must be stated 
 
 - Tests exist for the behaviour and encode *why* it matters; `pnpm check` green, no skipped tests.
 - Relevant e2e spec green.
-- No `alert` / `confirm` / `prompt`; no API keys; nothing from the banned list (Shopify, Google Maps, geocoders, QR, GPS). No external API calls, with ONE user-approved exception (2026-08-31): `plan_route` calls the keyless FOSSGIS OSRM service (`routing.openstreetmap.de`) at runtime — throttled to their published 1 request/second policy, attributed on the page, failing honestly when unreachable, and mocked in every test (the suite stays network-isolated). No other runtime external call is permitted.
+- No `alert` / `confirm` / `prompt`; no API keys; nothing from the banned list (Shopify, Google Maps, geocoders, QR, GPS). No external API calls, with ONE user-approved exception (2026-08-31): `plan_route` calls the keyless FOSSGIS OSRM service (`routing.openstreetmap.de`) at runtime — throttled to their published 1 request/second policy, attributed on the page, failing honestly when unreachable, and mocked or network-blocked in every test (the suite stays network-isolated). No other runtime external data call is permitted (the keyless OpenFreeMap basemap tiles predate this rule and stay display-only).
 - Docs updated if the change is visible to judges or users.
 - Everything in the repo is English. The only permitted CJK is inside string literals that are genuine data — OSM tag values in queries, place-name test inputs. Comments, prose and commit messages are always English.
 - A PR whose suite contains `test.fail()`-marked known-defect tests must say so explicitly in "How verified" — green CI must never hide a known defect.

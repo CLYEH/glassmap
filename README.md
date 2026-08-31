@@ -198,7 +198,7 @@ Branching, worktrees, commit and PR conventions are in [CONTRIBUTING.md](./CONTR
 
 ## Architecture
 
-Single Next.js app on Vercel. **No backend, no database, no API keys, no login.** One keyless external service: `plan_route` asks the [FOSSGIS OSRM instance](https://routing.openstreetmap.de/) for walking routes at call time — throttled to their 1 request/second policy, credited on the page while a route from it is in play, and answering with an honest error (map unchanged) when unreachable. Everything else runs entirely in the browser.
+Single Next.js app on Vercel. **No backend, no database, no API keys, no login.** One keyless external data service: `plan_route` asks the [FOSSGIS OSRM instance](https://routing.openstreetmap.de/) for walking routes at call time — throttled to their 1 request/second policy, credited on the page for the rest of the session once a route has been planned, and answering with an honest error (map unchanged) when unreachable. Everything else runs on bundled data entirely in the browser; the only other network the app touches is the keyless OpenFreeMap basemap tiles below, which stay display-only.
 
 - [MapLibre GL JS](https://maplibre.org/) with [OpenFreeMap](https://openfreemap.org/) vector tiles (no key required)
 - Bundled GeoJSON under `public/data/` (Taipei MRT stations, districts, parks, schools, supermarkets, sample listings)

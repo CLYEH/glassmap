@@ -35,10 +35,20 @@ button.
    Awakening. When the first agent act later fires, the controller runs the
    story as designed; at the moment `waking` begins, the panel resets to
    `null` so the choreography plays from the clean human chrome it measures.
-2. **Closed-by-hand stays closed against the agent.** Tool calls while
-   `panel === "closed"` do not reopen the chrome (the machine may be `awake`
-   underneath; rendering follows the panel). The collapsed control carries a
-   pulse and an unseen-call count.
+2. **Closed-by-hand stays closed against the agent, once the story has been
+   spent.** Tool calls while `panel === "closed"` do not reopen the chrome (the
+   machine may be `awake` underneath; rendering follows the panel). The
+   collapsed control carries a pulse and an unseen-call count.
+   **The one exception is a close made before any agent has acted**: the first
+   arrival beats it, because `idle → waking` resets the panel to `null`
+   (`panel-store.ts` subscribes to the machine and calls `followMachine()`) —
+   the same reset ruling 1 needs. Keeping such a close would cost one of two
+   things and neither is acceptable: either the 1.8 s choreography plays into
+   DOM that is not mounted (the v1 failure mode this design exists to avoid),
+   or the once-per-document story is spent unseen and the page can never show
+   it again. After the story, a close is absolute for the rest of the document
+   — including the restored-link case, where the machine boots `awake` and
+   never transitions, so nothing resets the panel.
 3. **Manual flips are instant** (no choreography); they are mount/unmount +
    stylesheet transitions. Component-state loss on unmount (feed scroll,
    inspector tab) is accepted and documented.
@@ -83,7 +93,10 @@ self-consistently. Binding requirements:
 - The feed/ticker "live" pulse is gated on `calls > 0`, not on
   `data-restored` — a hand-opened chrome on a virgin page must not animate
   the ring (this also subsumes the restored case). Empty-state copy is
-  already honest and stays.
+  already honest and stays. **The collapsed spark's ring is that same ring on
+  the button the feed folded into, so it takes the same gate**
+  (`sparkIsWaiting` = `panel === "closed" && feedIsLive(calls)`): gating it on
+  the machine instead would animate it over a restored link's empty log.
 - The landing hint gates on agent-state (`isAgentState`), not on chrome mode:
   after a manual close over agent work, the hint must NOT return.
 - The unseen count is `activitySeq - seqAtClose` (exact past the 50-row feed

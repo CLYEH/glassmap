@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAwakenStore } from "./awaken/mode-store";
-import { chromeVisible, unseenCalls, usePanelStore, type ChromePanel } from "./panel-store";
+import {
+  chromeVisible,
+  sparkIsWaiting,
+  unseenCalls,
+  usePanelStore,
+  type ChromePanel,
+} from "./panel-store";
 
 const panel = () => usePanelStore.getState();
 const setMode = (mode: "idle" | "waking" | "awake") => useAwakenStore.getState().setMode(mode);
@@ -116,6 +122,33 @@ describe("unseenCalls", () => {
     // A store reset (dev harness, a future "clear the feed") must never make
     // the control print "-3 calls".
     expect(unseenCalls(2, 6)).toBe(0);
+  });
+});
+
+describe("sparkIsWaiting — what the collapsed spark is allowed to claim", () => {
+  it("says nothing at all while the chrome is on screen", () => {
+    // The spark only stands in for a chrome that is folded away; with the
+    // panels mounted the feed is making these claims itself.
+    expect(sparkIsWaiting(null, 4)).toBe(false);
+    expect(sparkIsWaiting("open", 4)).toBe(false);
+  });
+
+  it("holds still over a closed chrome with no calls behind it", () => {
+    // The bug this gate replaces, and the reason it counts calls rather than
+    // asking the machine. Both empty agent chromes reach this state: a restored
+    // share link boots `awake` from the hash with an empty log, and a manual
+    // preview (design ruling 1) never enters the machine at all. Under
+    // `closed && mode === "awake"` the first one animated a "live" ring over
+    // zero calls — beside a count chip that correctly refused to render, and
+    // next to a feed whose own `data-live` was absent.
+    expect(sparkIsWaiting("closed", 0)).toBe(false);
+  });
+
+  it("pulses once a call this page recorded is behind it", () => {
+    // The claim it exists to make: an agent acted here, its view is folded
+    // away, and the way back is this button.
+    expect(sparkIsWaiting("closed", 1)).toBe(true);
+    expect(sparkIsWaiting("closed", 120)).toBe(true);
   });
 });
 

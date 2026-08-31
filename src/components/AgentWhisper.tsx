@@ -2,8 +2,8 @@
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { useMapStore } from "@/lib/store/map-store";
-import { callCountLabel } from "./activity-model";
-import { unseenCalls, usePanelStore } from "./panel-store";
+import { callCountLabel, selectActivity } from "./activity-model";
+import { sparkIsWaiting, unseenCalls, usePanelStore } from "./panel-store";
 import { ASK_CARDS } from "./TryAsking";
 import { useAwakenMode } from "./useAwakenMode";
 
@@ -92,15 +92,19 @@ export function AgentWhisper() {
   const seqAtClose = usePanelStore((s) => s.seqAtClose);
   const openChrome = usePanelStore((s) => s.open);
   const activitySeq = useMapStore((s) => s.activitySeq);
+  const calls = useMapStore((s) => selectActivity(s).length);
   const closed = panel === "closed";
   const waking = mode === "waking";
   /**
-   * The chrome is folded away and there is really something behind it. The
-   * pulse is a claim about the machine (`awake` — an agent acted on this page),
-   * never about the panel: closing a chrome nobody opened for you leaves a
-   * plain spark, because nothing is waiting.
+   * The chrome is folded away and there is really something behind it —
+   * `sparkIsWaiting`, which is the feed's own `feedIsLive` rule applied to the
+   * button the feed folded into. A claim about calls this page recorded, never
+   * about the machine's mode: a restored share link is `awake` with an empty
+   * log, and closing it by hand must leave a plain spark, because nothing is
+   * waiting. Everything the collapsed control says hangs off this one flag, so
+   * the ring, the copy and the count can never disagree with each other.
    */
-  const waiting = closed && mode === "awake";
+  const waiting = sparkIsWaiting(panel, calls);
   const unseen = waiting ? unseenCalls(activitySeq, seqAtClose) : 0;
 
   const onSpark = useCallback(() => {

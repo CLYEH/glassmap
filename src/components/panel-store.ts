@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AwakenMode } from "@/lib/awaken";
+import { feedIsLive } from "./activity-model";
 import { useAwakenStore } from "./awaken/mode-store";
 
 /**
@@ -72,6 +73,25 @@ export function chromeVisible(mode: AwakenMode, panel: ChromePanel): boolean {
 export function unseenCalls(activitySeq: number, seqAtClose: number | null): number {
   if (seqAtClose === null) return 0;
   return Math.max(activitySeq - seqAtClose, 0);
+}
+
+/**
+ * Is the collapsed spark standing in for something — the one fact its pulsing
+ * ring, its "an agent has acted" copy and its count chip are all allowed to
+ * claim.
+ *
+ * Two conditions, and the second one is `feedIsLive`, deliberately: the ring on
+ * the spark IS the feed's ring, on the button the feed folded into, so it obeys
+ * the feed's rule (`activity-model.ts`, design §"Honesty rulings": live
+ * requires a call). Gating it on the machine instead — `mode === "awake"` —
+ * animated it over zero calls on the one page that can be awake without any: a
+ * restored share link boots `awake` from the hash, and closing that chrome by
+ * hand produced a live ring beside a count chip that correctly refused to
+ * render, while the feed on the same page held still. One rule, one animation,
+ * and the restored case falls out of it rather than being special-cased.
+ */
+export function sparkIsWaiting(panel: ChromePanel, calls: number): boolean {
+  return panel === "closed" && feedIsLive(calls);
 }
 
 interface PanelStore {

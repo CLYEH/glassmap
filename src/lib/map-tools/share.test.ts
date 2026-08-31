@@ -15,6 +15,7 @@
  *     treat it as hostile: no unbounded text, no shape larger than draw_shape
  *     would accept, no claiming that the human drew something they did not.
  */
+import type { LineString } from "geojson";
 import { describe, expect, it } from "vitest";
 import {
   decodeShareState,
@@ -23,19 +24,21 @@ import {
   restoredAgentStateOf,
   restoredSelectionSources,
   selectionAttributionExplicit,
+  SHARE_POLYLINE_THRESHOLD_BYTES,
   userSelectedIds,
   utf8Bytes,
   type ShareAnnotation,
   type ShareDrawing,
   type ShareState,
 } from "./share";
+import { encodePolyline } from "./polyline";
 import { createMapTools } from "./index";
 import {
   createMemoryToolStore,
   type MapView,
   type MemoryToolStore,
 } from "@/lib/store/map-store";
-import { SELECTION_ID_LIMIT, type MapStateOutput } from "./state";
+import { round5, SELECTION_ID_LIMIT, type MapStateOutput } from "./state";
 import { TIER2_CATEGORIES, type FetchJson } from "@/lib/store/tier2";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { circleGeometry, MAX_SHAPE_POINTS } from "./shapes";
@@ -85,6 +88,23 @@ const CIRCLE: ShareDrawing = {
   radius_m: 800,
   geometry: circleGeometry([121.5436, 25.0334], 800),
 };
+
+/**
+ * A traced path through Taipei: `points` points about 40 m apart, wandering the
+ * way a hand-drawn outline or a planned route does rather than running straight.
+ * Already rounded to 5 decimals, so a decoded copy can be compared for equality
+ * against the original object.
+ */
+function routeOf(points: number): ShareDrawing {
+  const coordinates: [number, number][] = [];
+  for (let i = 0; i < points; i++) {
+    coordinates.push([
+      round5(121.5 + i * 0.0004 + Math.sin(i / 7) * 0.0002),
+      round5(25.03 + i * 0.0002 + Math.cos(i / 5) * 0.0002),
+    ]);
+  }
+  return { source: "user", kind: "line", geometry: { type: "LineString", coordinates } };
+}
 
 /** The demo state: a camera, a handful of selected features, both sides' shapes and notes. */
 const DEMO: ShareState = {
@@ -346,18 +366,45 @@ describe("get_share_link", () => {
     expect((await call()).omitted).toBeUndefined();
   });
 
+  it("hands out a link for a map the old wire could not carry at all", async () => {
+    // The point of v3, through the tool that promises the link: a 500-point
+    // route is a legal draw_shape call and used to cost more than the whole
+    // budget in JSON numbers (measured below, "a drawing too big to write as
+    // numbers"). `omitted` is the assertion that matters most - it comes from
+    // get_share_link reading its own link back, so an encoding that lost the
+    // shape would report it here rather than in someone else's browser.
+    const line = routeOf(MAX_SHAPE_POINTS);
+    const { call } = shareTool({ drawings: [{ id: "drawing:1", ...line }] });
+    const out = await call();
+    expect(out.error).toBeUndefined();
+    expect(out.url).toContain("#v3.");
+    expect(out.bytes!).toBeLessThan(MAX_SHARE_URL_BYTES);
+    expect(out.omitted).toBeUndefined();
+
+    const restored = decodeShareState(out.url!.slice(out.url!.indexOf("#")));
+    if ("error" in restored) throw new Error(restored.error);
+    expect(restored.drawings).toEqual([line]);
+  });
+
   it("refuses to hand out a link too long to survive being pasted", async () => {
-    // A 500-point shape is legal for draw_shape and still overflows a URL, so
-    // this is a real state, not a hypothetical one: the answer has to say which
-    // part to remove instead of returning a link that arrives truncated.
-    const ring = Array.from({ length: MAX_SHAPE_POINTS }, (_, i) => [
-      121.5 + Math.cos((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
-      25 + Math.sin((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
-    ]);
+    // Still a real state after v3, and not a hypothetical one: draw_shape caps
+    // the points in one shape, nothing caps how many shapes a map holds, and
+    // delta-encoding buys a factor of about five rather than infinity. Eight
+    // traced outlines and the answer has to say which part to remove instead
+    // of returning a link that arrives truncated.
+    const outline = (n: number): ShareDrawing => {
+      const ring = Array.from({ length: MAX_SHAPE_POINTS }, (_, i) => [
+        121.5 + n / 50 + Math.cos((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+        25 + Math.sin((i / MAX_SHAPE_POINTS) * 2 * Math.PI) / 100,
+      ]);
+      return {
+        source: "user",
+        kind: "polygon",
+        geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
+      };
+    };
     const { call } = shareTool({
-      drawings: [
-        { id: "drawing:1", source: "user", kind: "polygon", geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] } },
-      ],
+      drawings: Array.from({ length: 8 }, (_, n) => ({ id: `drawing:${n}`, ...outline(n) })),
     });
     const out = await call();
     expect(out.url).toBeUndefined();
@@ -426,6 +473,15 @@ describe("get_share_link", () => {
 const V1_DEMO_LINK =
   "v1.eyJjIjpbMTIxLjUzNzUsMjUuMDMyNV0sInoiOjE0LCJzIjpbIm9zbTpub2RlOjIiLCJvc206bm9kZTozMCIsIm9zbTp3YXk6MTAiLCJsaXN0aW5nOjAxIl0sImQiOlt7ImsiOiJjaXJjbGUiLCJvIjoiYWdlbnQiLCJsIjoiMTAtbWludXRlIHdhbGsiLCJjIjpbMTIxLjU0MzYsMjUuMDMzNF0sInIiOjgwMH0seyJrIjoicG9seWdvbiIsIm8iOiJ1c2VyIiwibCI6Im15IHdhbGsiLCJnIjpbMTIxLjU0LDI1LjAzMSwxMjEuNTQ2LDI1LjAzMSwxMjEuNTQ2LDI1LjAzNiwxMjEuNTQsMjUuMDM2XX0seyJrIjoibGluZSIsIm8iOiJ1c2VyIiwiZyI6WzEyMS41MywyNS4wMywxMjEuNTQsMjUuMDNdfV0sImEiOlt7Im8iOiJhZ2VudCIsInAiOlsxMjEuNTQzNiwyNS4wMzM0XSwibiI6Ik5lYXJlc3Qgc3VwZXJtYXJrZXQsIDIwMCBtIiwiaSI6InN0YXIifSx7Im8iOiJ1c2VyIiwicCI6WzEyMS41MzUsMjUuMDMzXSwibiI6IuWkp-Wuieajruael-WFrOWckuermSAyIOiZn-WHuuWPoyDwn5qHIiwiaSI6IvCfmocifV19";
 
+/**
+ * The same map with two categories declared, as the build that introduced `t`
+ * wrote it (T-63). Frozen for the same reason as the v1 link above: a link
+ * someone sent before v3 existed has to keep meaning exactly what it meant,
+ * and a codec that changed one byte of it would only be caught by a fixture.
+ */
+const V2_DEMO_LINK =
+  "v2.eyJjIjpbMTIxLjUzNzUsMjUuMDMyNV0sInoiOjE0LCJzIjpbIm9zbTpub2RlOjIiLCJvc206bm9kZTozMCIsIm9zbTp3YXk6MTAiLCJsaXN0aW5nOjAxIl0sImQiOlt7ImsiOiJjaXJjbGUiLCJvIjoiYWdlbnQiLCJsIjoiMTAtbWludXRlIHdhbGsiLCJjIjpbMTIxLjU0MzYsMjUuMDMzNF0sInIiOjgwMH0seyJrIjoicG9seWdvbiIsIm8iOiJ1c2VyIiwibCI6Im15IHdhbGsiLCJnIjpbMTIxLjU0LDI1LjAzMSwxMjEuNTQ2LDI1LjAzMSwxMjEuNTQ2LDI1LjAzNiwxMjEuNTQsMjUuMDM2XX0seyJrIjoibGluZSIsIm8iOiJ1c2VyIiwiZyI6WzEyMS41MywyNS4wMywxMjEuNTQsMjUuMDNdfV0sImEiOlt7Im8iOiJhZ2VudCIsInAiOlsxMjEuNTQzNiwyNS4wMzM0XSwibiI6Ik5lYXJlc3Qgc3VwZXJtYXJrZXQsIDIwMCBtIiwiaSI6InN0YXIifSx7Im8iOiJ1c2VyIiwicCI6WzEyMS41MzUsMjUuMDMzXSwibiI6IuWkp-Wuieajruael-WFrOWckuermSAyIOiZn-WHuuWPoyDwn5qHIiwiaSI6IvCfmocifV0sInQiOlsiYmFrZXJ5IiwiY2FmZSJdfQ";
+
 /** A v2 hash built by hand, for payloads encodeShareState would never write. */
 const wireV2 = (payload: unknown) =>
   `v2.${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
@@ -491,6 +547,22 @@ describe("share codec: the categories a link declares", () => {
     expect(encodeShareState(decoded(WITH_CATEGORIES))).toBe(encodeShareState(WITH_CATEGORIES));
   });
 
+  it("writes and reads the exact v2 bytes it wrote when the version shipped", () => {
+    // The other half of the frozen-fixture law, added when v3 arrived: every
+    // later version has to leave both older ones alone, in both directions.
+    // Byte equality on the encode side and a full restore on the decode side,
+    // because a link in a chat window is only worth what it still opens as.
+    expect(encodeShareState(WITH_CATEGORIES)).toBe(V2_DEMO_LINK);
+
+    const out = decodeShareState(V2_DEMO_LINK);
+    if ("error" in out) throw new Error(out.error);
+    expect(out.view).toEqual(VIEW);
+    expect(out.selection).toEqual(DEMO.selection);
+    expect(out.categories).toEqual(["bakery", "cafe"]);
+    expect(out.drawings).toEqual(decoded(DEMO).drawings);
+    expect(out.annotations).toEqual(DEMO.annotations);
+  });
+
   it("drops a name this build cannot load instead of failing the whole link", () => {
     // Only a newer build can name a category this one has no file for. The map,
     // the shapes and the notes still arrive; the features of that category are
@@ -532,6 +604,207 @@ describe("share codec: the categories a link declares", () => {
       }),
     );
     expect(cost).toBeLessThan(nineIds - utf8Bytes(encodeShareState(bare)));
+  });
+});
+
+/** A v3 hash built by hand, for payloads encodeShareState would never write. */
+const wireV3 = (payload: unknown) =>
+  `v3.${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+
+/** The link this codec wrote before v3: the same line, with its points as JSON numbers. */
+function flatLink(line: ShareDrawing): string {
+  const coordinates = (line.geometry as LineString).coordinates;
+  return wire({ c: VIEW.center, z: VIEW.zoom, d: [{ k: "line", o: "user", g: coordinates.flat() }] });
+}
+
+/**
+ * A drawing too big to write as numbers — `v3`.
+ *
+ * A coordinate as JSON says nothing about the point before it, though a traced
+ * outline's points differ in their last two digits, so a 500-point shape cost
+ * more than the entire URL budget and the map holding one had no link at all.
+ * v3 writes the differences instead. Three things have to be true of that, and
+ * the third is the one worth breaking a build over:
+ *
+ *  1. The link fits. That is the only reason to have written any of this.
+ *  2. The link decodes to the same map, point for point, at the same 5
+ *     decimals every tool answer prints — not to a simplified one. Losing
+ *     points is a decision about somebody's map and is never taken quietly by
+ *     the thing that spells it.
+ *  3. Nothing older changes. A version that fits a bigger map is worth nothing
+ *     if it costs the links people have already sent, so v3 appears only where
+ *     the alternative was no link, and every smaller map still writes the v1 or
+ *     v2 bytes it wrote yesterday.
+ */
+describe("share codec: a drawing too big to write as numbers", () => {
+  const CAMERA_ONLY: ShareState = { view: VIEW, selection: [], drawings: [], annotations: [] };
+
+  it("fits a 500-point route into a whole demo map's link", () => {
+    // The measurement the feature exists for. "Before" is the route on an
+    // otherwise empty map, because that is already over the budget; "after" is
+    // the same route on top of the full demo map - camera, four selected
+    // features, three other shapes and two notes.
+    const line = routeOf(MAX_SHAPE_POINTS);
+    const before = utf8Bytes(flatLink(line));
+    const after = utf8Bytes(encodeShareState({ ...DEMO, drawings: [...DEMO.drawings, line] }));
+    // Measured: 12 453 bytes for the route and a camera, half as much again as
+    // a URL may be, against 3 341 for the whole demo map with the route on it.
+    expect(before).toBeGreaterThan(MAX_SHARE_URL_BYTES);
+    expect(after).toBeLessThan(MAX_SHARE_URL_BYTES);
+    expect(after).toBeLessThan(before / 3);
+  });
+
+  it("restores the sender's points, every one of them, to the same 5 decimals", () => {
+    // Claim 2. `toEqual` against the drawing that went in, not a tolerance or a
+    // point count: a route the recipient sees a metre off, or 499 points of,
+    // is a map the two sides quietly disagree about.
+    const line = routeOf(MAX_SHAPE_POINTS);
+    const out = decoded({ ...CAMERA_ONLY, drawings: [line] });
+    expect(out.drawings).toEqual([line]);
+  });
+
+  it("spells the same map differently, rather than encoding a smaller one", () => {
+    // The anti-simplification law, stated where it can fail: the flat form and
+    // the polyline form of one drawing decode to the identical shape. If a
+    // future "optimisation" ever dropped a point, this is what would catch it.
+    const line = routeOf(120);
+    const flat = decodeShareState(flatLink(line));
+    const packed = decoded({ ...CAMERA_ONLY, drawings: [line] });
+    if ("error" in flat) throw new Error(flat.error);
+    expect(packed.drawings).toEqual(flat.drawings);
+  });
+
+  it("switches versions on size, so a map that fits keeps writing v1", () => {
+    // The write rule, exactly as documented: the flat form goes out unless it
+    // is over the threshold. A 4-point polygon would be a few bytes shorter as
+    // a polyline and still must not flip - a v1 build refuses a v3 link whole,
+    // and that is not a price worth paying to save bytes nobody needed.
+    const versions = new Set<string>();
+    for (const points of [4, 40, 200, 300, 400, MAX_SHAPE_POINTS]) {
+      const line = routeOf(points);
+      const hash = encodeShareState({ ...CAMERA_ONLY, drawings: [line] });
+      const flatBytes = utf8Bytes(flatLink(line));
+      expect(hash.startsWith("v3."), `${points} points, ${flatBytes} flat bytes`).toBe(
+        flatBytes > SHARE_POLYLINE_THRESHOLD_BYTES,
+      );
+      versions.add(hash.slice(0, 3));
+    }
+    // Both branches were actually taken, or the assertion above proves nothing.
+    expect([...versions].sort()).toEqual(["v1.", "v3."]);
+    expect(encodeShareState(DEMO)).toBe(V1_DEMO_LINK);
+  });
+
+  it("leaves a map made large by its selection alone on the version it was on", () => {
+    // Polylines shrink coordinates, not ids. Re-labelling this map v3 would
+    // cost every older reader and save nothing, so the encoder keeps the
+    // smaller-or-equal form: the same bytes under a version fewer builds
+    // understand is not a trade.
+    const many: ShareState = {
+      ...CAMERA_ONLY,
+      selection: Array.from({ length: 500 }, (_, i) => `osm:node:${100000 + i}`),
+    };
+    const hash = encodeShareState(many);
+    expect(utf8Bytes(hash)).toBeGreaterThan(SHARE_POLYLINE_THRESHOLD_BYTES);
+    expect(hash.startsWith("v1.")).toBe(true);
+  });
+
+  it("still declares its categories, so a big map is not a downgraded one", () => {
+    // v3 supersedes v2 rather than replacing it. A link that dropped `t` on the
+    // way to fitting would hand the recipient a selection of points of interest
+    // nothing on their page will ever resolve.
+    const big: ShareState = {
+      ...CAMERA_ONLY,
+      selection: ["osm:node:100"],
+      drawings: [routeOf(MAX_SHAPE_POINTS)],
+      categories: ["cafe"],
+    };
+    expect(encodeShareState(big).startsWith("v3.")).toBe(true);
+    expect(decoded(big).categories).toEqual(["cafe"]);
+  });
+
+  it("re-encodes a v3 link byte for byte, so opening one does not rewrite the bar", () => {
+    // Same law as v1 and v2: the address-bar mirror compares strings, so a
+    // decode/encode cycle that drifted would rewrite the URL and push a history
+    // entry for a map nobody moved.
+    const big: ShareState = { ...DEMO, drawings: [...DEMO.drawings, routeOf(MAX_SHAPE_POINTS)] };
+    const hash = encodeShareState(big);
+    expect(hash.startsWith("v3.")).toBe(true);
+    expect(encodeShareState(decoded(big))).toBe(hash);
+  });
+});
+
+describe("share codec: v3 links written by someone else", () => {
+  const HOSTILE_V3: { name: string; hash: string }[] = [
+    { name: "not base64url", hash: "v3.@@@@" },
+    { name: "base64 of not-JSON", hash: `v3.${Buffer.from("hello", "utf8").toString("base64url")}` },
+    { name: "no camera", hash: wireV3({ d: [{ k: "line", o: "user", e: "AABB" }] }) },
+  ];
+
+  it.each(HOSTILE_V3)("returns an error string for $name, never a throw", ({ hash }) => {
+    const out = decodeShareState(hash);
+    expect(out, hash.slice(0, 24)).toHaveProperty("error");
+  });
+
+  it("drops the shapes whose polyline it cannot read and keeps the rest of the map", () => {
+    // The established failure shape, unchanged: a whole-payload problem loses
+    // the link, an item-level one loses the item. One mangled shape in a
+    // hand-edited link must not cost the other shapes, the notes or the camera
+    // - and get_share_link reads its own links back, so a shape lost this way
+    // is reported to the human as `omitted` rather than discovered elsewhere.
+    const out = decodeShareState(
+      wireV3({
+        c: [121.5, 25],
+        z: 14,
+        d: [
+          { k: "line", o: "user", e: "AA*AA" }, // a character from no alphabet of ours
+          { k: "line", o: "user", e: "AAAA_" }, // truncated mid-number
+          { k: "line", o: "user", e: encodePolyline([181, 91, 182, 92]) }, // off the planet
+          { k: "line", o: "user" }, // no coordinates at all
+          { k: "line", o: "agent", e: encodePolyline([121.5, 25, 121.6, 25.1]) },
+        ],
+        a: [{ o: "agent", p: [121.5, 25], n: "kept" }],
+      }),
+    );
+    if ("error" in out) throw new Error(out.error);
+    expect(out.drawings.map((d) => d.source)).toEqual(["agent"]);
+    expect(out.annotations.map((a) => a.note)).toEqual(["kept"]);
+    expect(out.view.center).toEqual([121.5, 25]);
+  });
+
+  it("holds a polyline to the same ceiling draw_shape enforces on a list", () => {
+    // The compact form must not become a way around the tool layer's limits:
+    // one paste and the human's map renders a million points per frame.
+    const tooMany = encodePolyline(
+      Array.from({ length: (MAX_SHAPE_POINTS + 1) * 2 }, (_, i) =>
+        i % 2 ? 25 + i / 1e6 : 121.5 + i / 1e6,
+      ),
+    );
+    const out = decodeShareState(wireV3({ c: [121.5, 25], z: 14, d: [{ k: "line", o: "user", e: tooMany }] }));
+    if ("error" in out) throw new Error(out.error);
+    expect(out.drawings).toEqual([]);
+  });
+
+  it("reads a polyline only from a link that calls itself v3", () => {
+    // The version prefix is the whole compatibility contract. If a v1-labelled
+    // link could carry v3 geometry, a build that only knows v1 would accept the
+    // link, restore the map without that shape, and tell nobody - the
+    // half-applied restore the prefix exists to prevent.
+    const drawing = { k: "line", o: "user", e: encodePolyline([121.5, 25, 121.6, 25.1]) };
+    const asV1 = decodeShareState(wire({ c: [121.5, 25], z: 14, d: [drawing] }));
+    const asV3 = decodeShareState(wireV3({ c: [121.5, 25], z: 14, d: [drawing] }));
+    if ("error" in asV1 || "error" in asV3) throw new Error("expected both links to decode");
+    expect(asV1.drawings).toEqual([]);
+    expect(asV3.drawings).toHaveLength(1);
+  });
+
+  it("still reads a flat list inside a v3 link", () => {
+    // v3 is a superset, not a replacement: a newer build that mixed the forms
+    // - or a link hand-edited from a v1 one - has to open here.
+    const out = decodeShareState(
+      wireV3({ c: [121.5, 25], z: 14, d: [{ k: "line", o: "user", g: [121.5, 25, 121.6, 25.1] }] }),
+    );
+    if ("error" in out) throw new Error(out.error);
+    expect(out.drawings).toHaveLength(1);
   });
 });
 

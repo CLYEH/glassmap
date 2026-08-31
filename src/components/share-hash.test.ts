@@ -125,7 +125,11 @@ describe("planHashUpdate", () => {
   });
 
   it("stops writing once the map outgrows a URL, rather than writing a truncated one", () => {
-    const huge = state({ drawings: [polygon(500)] });
+    // Five 500-point rings, not one: the v3 polyline wire (T-95) buys a factor
+    // of about five on coordinates, so a single ring now fits in a link. What
+    // nothing caps is how many shapes a map holds — piling rings up is the
+    // honest way to outgrow the URL in any wire version.
+    const huge = state({ drawings: Array.from({ length: 5 }, () => polygon(500)) });
     const plan = planHashUpdate(huge, BASE, "#v1.previous");
     expect(plan.bytes).toBeGreaterThan(MAX_SHARE_URL_BYTES);
     expect(plan.tooLarge).toBe(true);

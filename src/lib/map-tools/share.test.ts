@@ -388,14 +388,22 @@ describe("get_share_link", () => {
     expect(mine.error).not.toMatch(/press Remove/);
 
     const theirs = await shareTool({ drawings: [outline("user", "drawing:1")] }).call();
-    expect(theirs.error).toMatch(/ask the human to tap one on the map and press Remove/);
+    expect(theirs.error).toMatch(/ask the human to tap it on the map and press Remove/);
     expect(theirs.error).not.toContain("remove_from_map");
 
     const both = await shareTool({
       drawings: [outline("agent", "drawing:1"), outline("user", "drawing:2")],
     }).call();
-    expect(both.error).toContain("remove one of the 1 drawings you made with remove_from_map");
-    expect(both.error).toContain("their 1");
+    expect(both.error).toContain("remove the one drawing you made with remove_from_map");
+    expect(both.error).toContain("tap their one and press Remove");
+
+    // ...and the plural side reads as English too: "one of the 1 drawings" is
+    // the sentence an agent has to act on, and it reads as a bug in the map.
+    const many = await shareTool({
+      drawings: [outline("agent", "drawing:1"), outline("agent", "drawing:2")],
+    }).call();
+    expect(many.error).toContain("remove one of the 2 drawings you made");
+    expect(`${mine.error} ${theirs.error} ${both.error} ${many.error}`).not.toMatch(/ 1 drawings/);
   });
 
   it("blames the selection, not the shapes, when the selection is what overflowed", async () => {

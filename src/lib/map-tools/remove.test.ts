@@ -23,7 +23,7 @@ import type { GlassMapTool } from "@/lib/webmcp/types";
 import type { MapStateOutput } from "./state";
 import { SELECTION_ID_LIMIT } from "./state";
 import { NOTE_PREVIEW_CHARS } from "./state";
-import type { MalformedEntry, RefusedEntry, RemovedEntry } from "./remove";
+import type { RefusedEntry, RemovedEntry } from "./remove";
 import { FIXTURE_FEATURES, USER_DRAWN_AREA, USER_DRAWN_LINE, VIEW, VIEW_BOUNDS } from "./test-fixtures";
 
 const signal = new AbortController().signal;
@@ -35,10 +35,12 @@ interface ToolResult {
   removed_count?: number;
   refused?: RefusedEntry[];
   refused_count?: number;
+  refused_reason?: string;
   not_selected?: string[];
   not_selected_count?: number;
-  malformed_ids?: MalformedEntry[];
+  malformed_ids?: string[];
   malformed_count?: number;
+  malformed_error?: string;
   unknown_ids?: string[];
   unknown_count?: number;
   known_ids?: string[];
@@ -196,39 +198,95 @@ describe("remove_from_map provenance", () => {
 
     expect(out.error).toBeUndefined();
     expect(out.removed).toEqual([{ id: "drawing:2", kind: "drawing", source: "agent" }]);
-    expect(out.refused).toEqual([
-      {
-        id: "drawing:1",
-        kind: "drawing",
-        source: "user",
-        reason: expect.stringContaining("tap it on the map and press Remove"),
-      },
-    ]);
+    expect(out.refused).toEqual([{ id: "drawing:1", kind: "drawing", source: "user" }]);
     expect(out.refused_count).toBe(1);
     // The human's shape is exactly where they left it.
     expect(store.getDrawings().map((d) => d.id)).toEqual(["drawing:1"]);
   });
 
-  it("refuses the human's own note, and says who wrote it", async () => {
+  it("refuses the human's own note the same way, whatever kind of mark it is", async () => {
     const { store, byName } = mapReady({ annotations: [userNote("annotation:1", "Landlord called")] });
     const out = await call(byName.remove_from_map, { ids: ["annotation:1"] });
 
     expect(out.error).toBeUndefined();
     expect(out.removed).toEqual([]);
-    expect(out.refused?.[0]).toMatchObject({ id: "annotation:1", kind: "annotation", source: "user" });
-    expect(out.refused?.[0].reason).toMatch(/human wrote this note/);
+    expect(out.refused).toEqual([{ id: "annotation:1", kind: "annotation", source: "user" }]);
     expect(store.getAnnotations()).toHaveLength(1);
   });
 
-  it("names the one tap that does work, because the agent has to relay it", async () => {
-    // There is no override flag: an override is a confirmation dialog by
-    // another name. The refusal is only useful if it says what the human can do
-    // instead, in the words the card on the map uses.
-    const { byName } = mapReady({ drawings: [USER_DRAWN_AREA] });
-    const out = await call(byName.remove_from_map, { ids: ["drawing:1"] });
-    expect(out.refused?.[0].reason).toBe(
-      "The human drew this shape by hand, so taking it off the map is theirs to do: they can tap it on the map and press Remove.",
+  it("names the one tap that does work, once, however many ids were refused", async () => {
+    /*
+     * There is no override flag: an override is a confirmation dialog by
+     * another name. The refusal is only useful if it says what the human can do
+     * instead, in the words the card on the map uses — and it says it once for
+     * the call. Repeating a 120-character sentence per id is an answer the
+     * agent pays for by the token to be told the same thing twenty times.
+     */
+    const { byName } = mapReady({
+      drawings: [USER_DRAWN_AREA, USER_DRAWN_LINE],
+      annotations: [userNote("annotation:1", "mine")],
+    });
+    const out = await call(byName.remove_from_map, {
+      ids: ["drawing:1", "drawing:2", "annotation:1"],
+    });
+
+    expect(out.refused_count).toBe(3);
+    expect(out.refused_reason).toBe(
+      "The human made these by hand - a shape they drew or a note they wrote - so taking one off the map is theirs to do: they can tap it on the map and press Remove.",
     );
+    expect(JSON.stringify(out.refused)).not.toMatch(/tap it on the map/);
+  });
+
+  it("refuses a hand-drawn shape even when its id is also sitting in the selection", async () => {
+    /*
+     * The selection is not validated by everyone who writes it: while a share
+     * link's categories are pending, select_features keeps any non-empty id it
+     * cannot resolve (and nothing prunes it when they settle), and the restore
+     * in components/share-hash.ts applies a decoded selection as it stands. So
+     * "drawing:1" really can be in there — and reading the selection first
+     * would answer `removed: [{kind: "selection"}]` about a shape still on the
+     * map, silently defeating this refusal. A live mark is a mark first.
+     */
+    const { store, byName } = mapReady({
+      drawings: [USER_DRAWN_AREA],
+      selection: ["drawing:1", "osm:node:2"],
+    });
+    const out = await call(byName.remove_from_map, { ids: ["drawing:1"] });
+
+    expect(out.removed).toEqual([]);
+    expect(out.refused).toEqual([{ id: "drawing:1", kind: "drawing", source: "user" }]);
+    // Nothing was taken off anything: the shape is on the map, and the stray id
+    // is still in the highlight, where the state this answer carries shows it.
+    expect(store.getDrawings().map((d) => d.id)).toEqual(["drawing:1"]);
+    expect(store.getSelection()).toEqual(["drawing:1", "osm:node:2"]);
+    expect(out.state?.selection.ids).toContain("drawing:1");
+  });
+
+  it("removes its own mark and leaves the selection alone: one id, one action, one report", async () => {
+    // The same rule pointing the other way. The mark branch never touches the
+    // selection, so the answer can never say "removed" twice about one id, and
+    // the stray entry the returned state still shows is select_features' to
+    // rewrite. What must never happen is a store write nothing in the answer
+    // mentions.
+    const { store, byName } = mapReady();
+    const drawn = await call(byName.draw_shape, { type: "circle", center: "Daan Station" });
+    store.setSelection([drawn.drawing_id as string, "osm:node:2"], "agent");
+    const out = await call(byName.remove_from_map, { ids: [drawn.drawing_id as string] });
+
+    expect(out.removed).toEqual([{ id: "drawing:1", kind: "drawing", source: "agent" }]);
+    expect(store.getDrawings()).toEqual([]);
+    expect(store.getSelection()).toEqual(["drawing:1", "osm:node:2"]);
+  });
+
+  it("deselects a mark id whose mark is gone, because then it is only a stray", async () => {
+    // B3 survives the reorder: an id that names no live mark is exactly the
+    // kind of leftover the selection branch exists for, whatever it looks like.
+    const { store, byName } = mapReady({ selection: ["drawing:9", "osm:node:2"] });
+    const out = await call(byName.remove_from_map, { ids: ["drawing:9"] });
+
+    expect(out.removed).toEqual([{ id: "drawing:9", kind: "selection" }]);
+    expect(out.unknown_ids).toEqual([]);
+    expect(store.getSelection()).toEqual(["osm:node:2"]);
   });
 
   it("still deselects a feature the human clicked, because a highlight is not content", async () => {
@@ -255,14 +313,16 @@ describe("remove_from_map ids it cannot use", () => {
     });
 
     expect(out.error).toBeUndefined();
-    expect(out.malformed_ids?.map((m) => m.id)).toEqual(["drawings:1", "annotation 2", "Drawing:1"]);
+    expect(out.malformed_ids).toEqual(["drawings:1", "annotation 2", "Drawing:1"]);
     expect(out.malformed_count).toBe(3);
     expect(out.unknown_ids).toEqual([]);
     expect(out.not_selected).toBeUndefined();
-    // Every form it does accept, so one answer is enough to recover from.
+    // Every form it does accept, so one answer is enough to recover from — and
+    // stated once for the call, not repeated beside each id.
     for (const form of ['"drawing:<n>"', '"annotation:<n>"', "osm:node:123"]) {
-      expect(out.malformed_ids?.[0].error).toContain(form);
+      expect(out.malformed_error).toContain(form);
     }
+    expect(JSON.stringify(out.malformed_ids)).not.toMatch(/drawing:<n>/);
   });
 
   it("lists the mark ids that do exist when one misses, past the ten map state shows", async () => {
@@ -294,6 +354,27 @@ describe("remove_from_map ids it cannot use", () => {
     const out = await call(byName.remove_from_map, { ids: ["drawing:99"] });
     expect(out.known_ids).toEqual(["drawing:1", "drawing:2"]);
     expect(out.known_count).toBe(2);
+  });
+
+  it("shows both vocabularies when one call misses a shape id and a note id", async () => {
+    // The kinds share the cap rather than one crowding the other out: an agent
+    // that guessed twice needs both lists to recover in one more call. The ids
+    // say which kind each is, and known_count is how many marks of those kinds
+    // exist in all — the sum, matching neither list on its own.
+    const { byName } = mapReady({
+      drawings: [USER_DRAWN_AREA, USER_DRAWN_LINE],
+      annotations: [userNote("annotation:1", "mine"), userNote("annotation:2", "also mine")],
+    });
+    const out = await call(byName.remove_from_map, { ids: ["drawing:99", "annotation:99"] });
+
+    expect(out.unknown_ids).toEqual(["drawing:99", "annotation:99"]);
+    expect(out.known_ids).toEqual([
+      "drawing:1",
+      "drawing:2",
+      "annotation:1",
+      "annotation:2",
+    ]);
+    expect(out.known_count).toBe(4);
   });
 
   it("succeeds with an empty removed list rather than failing a batch that removed nothing", async () => {

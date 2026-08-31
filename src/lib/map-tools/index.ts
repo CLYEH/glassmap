@@ -1011,7 +1011,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const removeFromMapTool: GlassMapTool<RemoveFromMapInput> = {
     name: "remove_from_map",
     description:
-      `Take something off the map: a shape or a note an agent put there, or a feature out of the highlighted selection. Ids come in three forms and can be mixed in one call - "${DRAWING_PREFIX}<n>" and "${ANNOTATION_PREFIX}<n>", as map state lists them under drawings and annotations, and the id of a currently selected feature such as "osm:node:123". This never deletes map data. Features and places cannot be removed; naming a selected feature only takes it out of the highlight. Taking a shape or a note off the map is permanent: there is no undo, and the only way back is to draw or pin it again. Shapes and notes the human made themselves - source "user" in map state - are not removed: they come back under refused, and the human takes their own mark off by tapping it on the map and pressing Remove. Everything else in the same call still happens. No per-id problem fails the batch: what could not be removed is accounted for by name under refused, not_selected (a loaded feature that was not highlighted, so there was nothing to take out), unknown_ids and malformed_ids. Returns what was removed and the new map state, so no follow-up read is needed.`,
+      `Take something off the map: a shape or a note an agent put there, or a feature out of the highlighted selection. Ids come in three forms and can be mixed in one call - "${DRAWING_PREFIX}<n>" and "${ANNOTATION_PREFIX}<n>", as map state lists them under drawings and annotations, and the id of a currently selected feature such as "osm:node:123". This never deletes map data. Features and places cannot be removed; naming a selected feature only takes it out of the highlight. Taking a shape or a note off the map is permanent: there is no undo, and the only way back is to draw or pin it again. Shapes and notes the human made themselves - source "user" in map state - are not removed: they come back under refused, and the human takes their own mark off by tapping it on the map and pressing Remove. Everything else in the same call still happens. No per-id problem fails the batch: what could not be removed is accounted for by name under refused (with one refused_reason for all of them), not_selected (a loaded feature that was not highlighted, so there was nothing to take out), unknown_ids, and malformed_ids with one malformed_error saying which forms do work. Returns what was removed and the new map state, so no follow-up read is needed.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1336,12 +1336,15 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const theirs = drawings.length - mine;
         const shapes =
           "Shapes cost by far the most, and a hand-drawn outline far more than a circle: ";
+        // "one of the 1 drawings" reads as a bug in the map, and this sentence
+        // is the one an agent has to act on.
+        const oneOf = (n: number) => (n === 1 ? "the one drawing" : `one of the ${n} drawings`);
         const advice = drawings.length
           ? mine && theirs
-            ? `${shapes}remove one of the ${mine} drawings you made with remove_from_map, or ask the human to tap one of their ${theirs} and press Remove, then ask again`
+            ? `${shapes}remove ${oneOf(mine)} you made with remove_from_map, or ask the human to tap ${theirs === 1 ? "their one" : `one of their ${theirs}`} and press Remove, then ask again`
             : mine
-              ? `${shapes}remove one of your ${mine} drawings with remove_from_map and ask again`
-              : `${shapes}all ${theirs} drawings were drawn by hand, so ask the human to tap one on the map and press Remove, then ask again`
+              ? `${shapes}remove ${oneOf(mine)} you made with remove_from_map and ask again`
+              : `${shapes}${theirs === 1 ? "the one drawing was" : `all ${theirs} drawings were`} drawn by hand, so ask the human to tap ${theirs === 1 ? "it" : "one"} on the map and press Remove, then ask again`
           : selection.length > 20
             ? `The selection is what costs here: select fewer than ${selection.length} features and ask again`
             : "Remove some of what is on the map and ask again";

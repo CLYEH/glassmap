@@ -7,17 +7,21 @@
  * highlighted feature, because "take this off the map" is one thing a person
  * means. This module is the agent's half of that gesture, and it writes through
  * the same three store calls the card uses — `removeDrawing`,
- * `removeAnnotation`, `setSelection` minus the id — so an undo by hand and an
- * undo by agent leave the store in the same place.
+ * `removeAnnotation`, `setSelection` minus the id — so both halves leave the
+ * store in the same shape. What the two halves are *allowed* to take off
+ * differs, and deliberately: either may drop a feature out of the highlight,
+ * but a shape drawn or a note written by hand is refused to the agent, and the
+ * card's button is the only thing on the page that removes one of those.
  *
  * Two rules are load-bearing and argued where they are applied below:
- *  - the selection is read first, whatever the feature list says;
+ *  - a live mark is a mark before it is anything else, and the selection is
+ *    read before the feature list;
  *  - a shape or a note the human made is not the agent's to remove.
  *
  * Nothing here throws, and no per-id problem fails the batch: every id that
  * could not be acted on is accounted for by name, next to the ones that were.
  */
-import type { Drawing, MapToolStore } from "@/lib/store/map-store";
+import type { Annotation, Drawing, MapToolStore } from "@/lib/store/map-store";
 import { NOTE_PREVIEW_CHARS, SELECTION_ID_LIMIT } from "./state";
 import { MAX_LABEL_CHARS, truncate } from "./shapes";
 
@@ -55,13 +59,6 @@ export interface RefusedEntry {
   id: string;
   kind: MarkKind;
   source: "user";
-  reason: string;
-}
-
-/** An id that looks like a mark id but is not written as one. */
-export interface MalformedEntry {
-  id: string;
-  error: string;
 }
 
 /**
@@ -69,17 +66,27 @@ export interface MalformedEntry {
  * SELECTION_ID_LIMIT and each one that is present comes with its true count:
  * a truncated list of refusals that did not say how many there were would be
  * the same silent loss the caps exist to avoid.
+ *
+ * The two explanations are stated once per answer rather than once per id. They
+ * are the same sentence every time, and a hostile 100-id call would otherwise
+ * spend most of its bytes repeating them — an answer the agent pays for by the
+ * token, saying nothing it did not already say in the first entry.
  */
 export interface RemoveOutput {
   removed: RemovedEntry[];
   removed_count: number;
   refused?: RefusedEntry[];
   refused_count?: number;
+  /** Why every id in `refused` stayed, and what the human can do about it. */
+  refused_reason?: string;
   /** Loaded features that were not highlighted: nothing to take out. */
   not_selected?: string[];
   not_selected_count?: number;
-  malformed_ids?: MalformedEntry[];
+  /** Ids that look like a mark id but are not written as one. */
+  malformed_ids?: string[];
   malformed_count?: number;
+  /** What is wrong with every id in `malformed_ids`, and the forms that work. */
+  malformed_error?: string;
   unknown_ids: string[];
   unknown_count: number;
   /** The mark ids that do exist, when a "drawing:"/"annotation:" id missed. */
@@ -105,7 +112,9 @@ export function knownMarkIds(marks: readonly { id: string }[]): {
 /**
  * The same, for the kinds a single call actually missed. Two kinds share the
  * cap rather than one crowding the other out: a call that mistyped both a
- * drawing id and an annotation id needs to see both vocabularies.
+ * drawing id and an annotation id needs to see both vocabularies. When it does,
+ * `known_count` is how many marks of *those kinds* exist in all — the sum of
+ * both, matching neither list on its own — and each id says which kind it is.
  */
 function knownMarks(store: MapToolStore, kinds: readonly MarkKind[]) {
   const lists = kinds.map((kind) =>
@@ -118,17 +127,40 @@ function knownMarks(store: MapToolStore, kinds: readonly MarkKind[]) {
   };
 }
 
-const malformed = (id: string): MalformedEntry => ({
-  id,
-  error:
-    `${id} is not one of the id forms this tool accepts: a shape is "${DRAWING_PREFIX}<n>", ` +
-    `a note is "${ANNOTATION_PREFIX}<n>", and a selected feature is its own id, e.g. "osm:node:123". ` +
-    "Map state lists the shape and note ids under drawings and annotations.",
-});
+/** One sentence for every near miss: what they have in common is the fix. */
+const MALFORMED_ERROR =
+  `every id in malformed_ids looks like a mark id without being written as one: a shape is "${DRAWING_PREFIX}<n>", ` +
+  `a note is "${ANNOTATION_PREFIX}<n>", and a selected feature is its own id, e.g. "osm:node:123". ` +
+  "Map state lists the shape and note ids under drawings and annotations.";
 
-const refusal = (kind: MarkKind) =>
-  `${kind === "drawing" ? "The human drew this shape by hand" : "The human wrote this note"}, ` +
-  "so taking it off the map is theirs to do: they can tap it on the map and press Remove.";
+/** One sentence for both kinds: the human drew or wrote these, so they stay. */
+const REFUSED_REASON =
+  "The human made these by hand - a shape they drew or a note they wrote - so taking one off " +
+  "the map is theirs to do: they can tap it on the map and press Remove.";
+
+/**
+ * The mark an id names *right now*, or null. Read before anything else, because
+ * an id can be two things at once: a mark id can also be sitting in the
+ * selection, where nothing validates it (`select_features` keeps any non-empty
+ * id while a share link's categories are pending, `index.ts`, and the restore
+ * in `components/share-hash.ts` applies a decoded selection unfiltered). Taking
+ * the selection branch there would answer `removed` about a shape still on the
+ * map, and would quietly defeat the refusal below for a hand-drawn one.
+ */
+function liveMark(
+  store: MapToolStore,
+  id: string,
+): { kind: "drawing"; mark: Drawing } | { kind: "annotation"; mark: Annotation } | null {
+  if (id.startsWith(DRAWING_PREFIX)) {
+    const mark = store.getDrawings().find((d) => d.id === id);
+    return mark ? { kind: "drawing", mark } : null;
+  }
+  if (id.startsWith(ANNOTATION_PREFIX)) {
+    const mark = store.getAnnotations().find((a) => a.id === id);
+    return mark ? { kind: "annotation", mark } : null;
+  }
+  return null;
+}
 
 /**
  * Remove each id, in the order it was given. `ids` is trusted to be strings and
@@ -153,19 +185,50 @@ export function removeFromMap(store: MapToolStore, ids: readonly string[]): Remo
   const removed: RemovedEntry[] = [];
   const refused: RefusedEntry[] = [];
   const notSelected: string[] = [];
-  const malformedIds: MalformedEntry[] = [];
+  const malformedIds: string[] = [];
   const unknown: string[] = [];
   const missedKinds = new Set<MarkKind>();
   const deselect = new Set<string>();
 
   for (const id of wanted) {
-    // Selection first, whatever the feature list says. A page opened from a
+    // A live mark is a mark, whatever else the id may also be. It is only ever
+    // in the selection because a writer put it there without validating (see
+    // `liveMark`), and a stray entry in the highlight is not a reason to answer
+    // "removed" about a shape that is still on the map — or to remove one the
+    // human drew. The mark branch never touches the selection: one id, one
+    // action, one report, and the stray entry is still there in the state this
+    // answer carries, where `select_features` can rewrite it away.
+    const live = liveMark(store, id);
+    if (live) {
+      if (live.mark.source === "user") {
+        refused.push({ id, kind: live.kind, source: "user" });
+      } else if (live.kind === "drawing") {
+        store.removeDrawing(id);
+        removed.push({
+          id,
+          kind: "drawing",
+          source: live.mark.source,
+          ...(live.mark.label ? { label: truncate(live.mark.label, MAX_LABEL_CHARS) } : {}),
+        });
+      } else {
+        store.removeAnnotation(id);
+        removed.push({
+          id,
+          kind: "annotation",
+          source: live.mark.source,
+          note: truncate(live.mark.note, NOTE_PREVIEW_CHARS),
+        });
+      }
+      continue;
+    }
+
+    // Then the selection, whatever the feature list says. A page opened from a
     // share link can hold selected ids that never resolved — a category that
     // failed permanently leaves them there — and those are precisely the ids a
     // human needs taken out of the highlight. Asking `getFeatures()` first
     // would call them unknown and refuse to remove the one id this tool exists
-    // for. Nothing ever puts a mark id in the selection, so the mark branches
-    // below lose nothing by coming second.
+    // for. A mark id that no longer names a mark is in this branch too: the
+    // shape is gone, so the id in the highlight is exactly that kind of stray.
     if (selected.has(id)) {
       deselect.add(id);
       const source = selectionSources[id];
@@ -174,45 +237,19 @@ export function removeFromMap(store: MapToolStore, ids: readonly string[]): Remo
     }
 
     if (id.startsWith(DRAWING_PREFIX)) {
-      const drawing = store.getDrawings().find((d) => d.id === id);
-      if (!drawing) {
-        unknown.push(id);
-        missedKinds.add("drawing");
-      } else if (drawing.source === "user") {
-        refused.push({ id, kind: "drawing", source: "user", reason: refusal("drawing") });
-      } else {
-        store.removeDrawing(id);
-        removed.push({
-          id,
-          kind: "drawing",
-          source: drawing.source,
-          ...(drawing.label ? { label: truncate(drawing.label, MAX_LABEL_CHARS) } : {}),
-        });
-      }
+      unknown.push(id);
+      missedKinds.add("drawing");
       continue;
     }
 
     if (id.startsWith(ANNOTATION_PREFIX)) {
-      const annotation = store.getAnnotations().find((a) => a.id === id);
-      if (!annotation) {
-        unknown.push(id);
-        missedKinds.add("annotation");
-      } else if (annotation.source === "user") {
-        refused.push({ id, kind: "annotation", source: "user", reason: refusal("annotation") });
-      } else {
-        store.removeAnnotation(id);
-        removed.push({
-          id,
-          kind: "annotation",
-          source: annotation.source,
-          note: truncate(annotation.note, NOTE_PREVIEW_CHARS),
-        });
-      }
+      unknown.push(id);
+      missedKinds.add("annotation");
       continue;
     }
 
     if (NEAR_MISS.some((form) => form.test(id))) {
-      malformedIds.push(malformed(id));
+      malformedIds.push(id);
       continue;
     }
 
@@ -237,12 +274,22 @@ export function removeFromMap(store: MapToolStore, ids: readonly string[]): Remo
   return {
     removed: cap(removed),
     removed_count: removed.length,
-    ...(refused.length ? { refused: cap(refused), refused_count: refused.length } : {}),
+    ...(refused.length
+      ? {
+          refused: cap(refused),
+          refused_count: refused.length,
+          refused_reason: REFUSED_REASON,
+        }
+      : {}),
     ...(notSelected.length
       ? { not_selected: cap(notSelected), not_selected_count: notSelected.length }
       : {}),
     ...(malformedIds.length
-      ? { malformed_ids: cap(malformedIds), malformed_count: malformedIds.length }
+      ? {
+          malformed_ids: cap(malformedIds),
+          malformed_count: malformedIds.length,
+          malformed_error: MALFORMED_ERROR,
+        }
       : {}),
     unknown_ids: cap(unknown),
     unknown_count: unknown.length,

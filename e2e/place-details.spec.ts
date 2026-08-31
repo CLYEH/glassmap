@@ -199,6 +199,10 @@ async function openCardFor(page: Page, target: ClickableHotel): Promise<void> {
 }
 
 test.describe("get_place_details (T-97)", () => {
+  // The candidate walk can spend ~18s of the default 30s budget on an idle
+  // machine (7 rich hotels, each a set_map_view + bounded idle wait); a
+  // loaded CI runner needs the headroom (T-97 final review, SF2).
+  test.setTimeout(60_000);
   test("known-rich place: the tool's answer and the tapped card agree field for field, and its website is safe to open", async ({
     page,
     mockedExternalHosts,
@@ -256,6 +260,10 @@ test.describe("get_place_details (T-97)", () => {
     expect(href).toBe(new URL(details.website!).href);
   });
 
+  // The candidate walk can spend ~18s of the default 30s budget on an idle
+  // machine (7 rich hotels, each a set_map_view + bounded idle wait); a
+  // loaded CI runner needs the headroom (T-97 final review, SF2).
+  test.setTimeout(60_000);
   test("sparse place: fields OpenStreetMap does not have are absent from the answer and absent as rows on the card", async ({
     page,
     mockedExternalHosts,

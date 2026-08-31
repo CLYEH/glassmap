@@ -25,8 +25,8 @@ function declaredToolCount(registered: number): number {
  * picked them up. `?shim=1` forces the dev shim even in production builds.
  *
  * The visible badge is `WebMcpBadge`, in the bottom bar, reading the same store
- * field — the design puts it in the corridor beside the legend, which is a
- * different part of the tree from this provider.
+ * field — the design puts it in the corridor along the foot of the map, which
+ * is a different part of the tree from this provider.
  */
 export function WebMcpProvider({ children }: { children: React.ReactNode }) {
   const setWebMcp = useMapStore((s) => s.setWebMcp);

@@ -1,5 +1,5 @@
 /**
- * The fourteen effects: eleven tools, three human actions.
+ * The seventeen effects: fourteen tools, three human actions.
  *
  * Grammar (spec v3, unchanged since v1):
  *  - **read = gaze** — cased deep-teal geometry, transient, zero residue in ≤2 s;
@@ -438,6 +438,74 @@ const findPulse: Effect<FindNodes> = {
       glint.g.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
       setOpacity(glint.g, 0.9 * op);
     });
+  },
+  cleanup(n) {
+    n.root.remove();
+  },
+};
+
+/**
+ * get_place_details — "focused glint". The narrowest read this page can play:
+ * not a shape being interrogated and a page of hits, but one question about one
+ * place. So it is `find_features`' own hit glint — the same HOLLOW cased dot,
+ * because a read selects nothing and leaves nothing — with the sweep taken
+ * away: no shape pulse, no stagger, nothing to scan. One ring closes onto the
+ * place, the glint lights under it, both leave.
+ *
+ * Quieter on every axis on purpose. It is 900 ms against find's 1600 (the same
+ * beat as the pin drop, which is the other single-target effect), the ring
+ * contracts rather than pulsing outward, and it moves a single dot's worth of
+ * ink. A human watching a lookup should read "it is reading THAT one", and a
+ * lookup that arrived with a search's weather would say the agent had done
+ * more than ask a place what it is.
+ *
+ * The ring contracts rather than expanding for the same reason the reticle
+ * does: an expanding ring reads as something radiating OUT from the place —
+ * an area being searched, which is the claim `find_features` gets to make and
+ * this one does not. Closing in is attention arriving.
+ */
+interface PlaceNodes extends FxNodes {
+  root: SVGGElement;
+  ring: SVGCircleElement;
+  glint: SVGGElement;
+  at: LngLat;
+}
+
+const placeGlint: Effect<PlaceNodes> = {
+  dur: 900,
+  setup(ctx, geom) {
+    if (geom.kind !== "place" || !ctx.project(geom.at)) return null;
+    const root = mapGroup(ctx, "get_place_details");
+    const ring = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 0, fill: "none", stroke: TEAL, "stroke-width": 2.2, opacity: 0 },
+      root,
+    );
+    // Byte for byte the glint `find_features` marks a hit with: one place read
+    // by name and one place read out of a search are the same act, and the map
+    // must not give a person two vocabularies for it.
+    const glint = svgEl("g", { opacity: 0 }, root);
+    casedPair("circle", { cx: 0, cy: 0, r: s(8), fill: "none" }, glint, 5.5, 3, TEAL_DEEP);
+    return { root, ring, glint, at: geom.at };
+  },
+  render(p, n, ctx) {
+    const point = ctx.project(n.at);
+    if (!point) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    n.root.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+    const close = outCubic(seg(p, 0, 0.55));
+    n.ring.setAttribute("r", lerp(s(38), s(13), close).toFixed(1));
+    setOpacity(n.ring, 0.75 * bell(seg(p, 0, 0.66)));
+    setOpacity(n.glint, bell(seg(p, 0.16, 1)));
+  },
+  rm(p, n, ctx) {
+    const point = ctx.project(n.at);
+    if (!point) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    n.root.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+    n.ring.setAttribute("r", String(s(13)));
+    setOpacity(n.ring, 0);
+    setOpacity(n.glint, 0.9 * bell(p));
   },
   cleanup(n) {
     n.root.remove();
@@ -955,6 +1023,150 @@ function inkEffect(name: FxName, ink: string, withVertices: boolean, dur: number
 }
 
 /**
+ * plan_route — "route draw-on". The write that makes a line out of somebody
+ * else's answer, so it is the ink verb again — but a route is not a shape, and
+ * two things say so:
+ *
+ *  - **It has a direction.** The stroke draws from the start towards the
+ *    destination and a cased dot is already sitting at the start when it does,
+ *    so the line reads as a walk being taken rather than an outline being
+ *    closed. The destination dot lands as the pen arrives, with one ring: the
+ *    walk got there.
+ *  - **It is somebody's street data.** The stroke is cased (white under, teal
+ *    over) because it runs along roads the basemap has already drawn in ink,
+ *    where `draw_shape`'s bare stroke would disappear.
+ *
+ * The two dots are the places the caller named, which the service snapped to
+ * the nearest street before routing: mark and line disagree by a few metres on
+ * purpose, and both are what the answer said (see `plan.ts`). Like every other
+ * materialise, the animated stroke hands over to the shipped drawing layer and
+ * leaves nothing of its own behind.
+ */
+interface RouteNodes extends FxNodes {
+  root: SVGGElement;
+  /** Cased pair: white shell under teal ink, both dashed on together. */
+  strokes: [SVGPathElement, SVGPathElement];
+  pen: SVGCircleElement;
+  start: SVGGElement;
+  finish: SVGGElement;
+  arrival: SVGCircleElement;
+  positions: LngLat[];
+  from: LngLat;
+  to: LngLat;
+}
+
+/** The cased place dot the compass centre and the twin origins are also made of. */
+function routeDot(parent: SVGGElement): SVGGElement {
+  const g = svgEl("g", { opacity: 0 }, parent);
+  svgEl("circle", { cx: 0, cy: 0, r: 6, fill: CASE_WHITE, opacity: 0.9 }, g);
+  svgEl("circle", { cx: 0, cy: 0, r: 4, fill: TEAL_DEEP }, g);
+  return g;
+}
+
+const placeAt = (node: SVGElement, point: Pt) =>
+  node.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`);
+
+const routeInk: Effect<RouteNodes> = {
+  dur: 1600,
+  setup(ctx, geom) {
+    if (geom.kind !== "route" || geom.positions.length < 2) return null;
+    if (!ctx.project(geom.from) || !ctx.project(geom.to)) return null;
+    if (geom.positions.some((point) => !ctx.project(point))) return null;
+    const root = mapGroup(ctx, "plan_route");
+    const strokes = casedPair(
+      "path",
+      { d: "", fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round" },
+      root,
+      6,
+      3,
+      TEAL_DEEP,
+    );
+    const arrival = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 5, fill: "none", stroke: TEAL, "stroke-width": 2.4, opacity: 0 },
+      root,
+    );
+    const start = routeDot(root);
+    const finish = routeDot(root);
+    const pen = svgEl(
+      "circle",
+      { cx: 0, cy: 0, r: 5, fill: TEAL, stroke: CASE_WHITE, "stroke-width": 1.8, opacity: 0 },
+      root,
+    );
+    return {
+      root,
+      strokes,
+      pen,
+      start,
+      finish,
+      arrival,
+      positions: geom.positions,
+      from: geom.from,
+      to: geom.to,
+    };
+  },
+  render(p, n, ctx) {
+    const points = n.positions.map((point) => ctx.project(point));
+    const from = ctx.project(n.from);
+    const to = ctx.project(n.to);
+    if (!from || !to || !points.every((q): q is Pt => q !== null)) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    const walk = walkPath(points, false);
+    const total = walk.total || 1;
+    const drawn = inOutCubic(seg(p, 0.04, 0.74));
+    const d = pathD(points, false);
+    // The stroke leaves as the shipped drawing layer takes over: one walk, one
+    // line on the map, never two.
+    const fade = 1 - seg(p, 0.8, 0.97);
+    for (const stroke of n.strokes) {
+      stroke.setAttribute("d", d);
+      stroke.setAttribute("stroke-dasharray", total.toFixed(1));
+      stroke.setAttribute("stroke-dashoffset", (total * (1 - drawn)).toFixed(1));
+    }
+    setOpacity(n.strokes[0], 0.8 * fade);
+    setOpacity(n.strokes[1], 0.95 * fade);
+    const tip = pointAlong(walk, total * drawn);
+    n.pen.setAttribute("cx", tip.x.toFixed(1));
+    n.pen.setAttribute("cy", tip.y.toFixed(1));
+    setOpacity(n.pen, 0.95 * seg(p, 0.02, 0.08) * (1 - seg(p, 0.7, 0.8)));
+    const ends = 1 - seg(p, 0.86, 1);
+    placeAt(n.start, from);
+    setOpacity(n.start, seg(p, 0, 0.06) * ends);
+    placeAt(n.finish, to);
+    setOpacity(n.finish, seg(p, 0.68, 0.76) * ends);
+    const landing = seg(p, 0.7, 0.92);
+    n.arrival.setAttribute("cx", to.x.toFixed(1));
+    n.arrival.setAttribute("cy", to.y.toFixed(1));
+    n.arrival.setAttribute("r", lerp(5, s(32), outCubic(landing)).toFixed(1));
+    setOpacity(n.arrival, 0.7 * bell(landing));
+  },
+  rm(p, n, ctx) {
+    const points = n.positions.map((point) => ctx.project(point));
+    const from = ctx.project(n.from);
+    const to = ctx.project(n.to);
+    if (!from || !to || !points.every((q): q is Pt => q !== null)) return hide(n.root);
+    n.root.setAttribute("opacity", "1");
+    const op = bell(p);
+    const d = pathD(points, false);
+    for (const stroke of n.strokes) {
+      stroke.setAttribute("d", d);
+      stroke.removeAttribute("stroke-dasharray");
+    }
+    setOpacity(n.strokes[0], 0.7 * op);
+    setOpacity(n.strokes[1], 0.9 * op);
+    setOpacity(n.pen, 0);
+    setOpacity(n.arrival, 0);
+    placeAt(n.start, from);
+    placeAt(n.finish, to);
+    setOpacity(n.start, op);
+    setOpacity(n.finish, op);
+  },
+  cleanup(n) {
+    n.root.remove();
+  },
+};
+
+/**
  * annotate / human_note — "pin drop". The pin is the shipped DOM marker; the
  * driver writes its anchor, stem and card in, and one ripple marks the landing
  * on the map underneath. Every inline style it wrote is removed on cleanup, so
@@ -1022,13 +1234,19 @@ function pinEffect(name: FxName, ink: string): Effect<PinNodes> {
 }
 
 /**
- * human_delete — "dissolve": materialise played backwards. A rose flash names
- * the artifact that is going, then a ghost of it fades and settles out. The
- * artifact itself has already left the store — this is the only effect whose
- * geometry outlives the thing it describes, and it lasts 700 ms.
+ * human_delete / remove_from_map — "dissolve": materialise played backwards. A
+ * flash names each artifact that is going, then a ghost of it fades and settles
+ * out. The artifacts have already left the store — this is the only effect
+ * whose geometry outlives the things it describes, and it lasts 700 ms.
+ *
+ * One gesture can take several marks off at once (`remove_from_map` removes a
+ * batch), so it dissolves a list: one ghost per mark, contracting together
+ * about their shared centre, because they left together. The human's ✕ is the
+ * same effect over a list of one, in rose — the deletion verb, like the drawing
+ * and pinning verbs, is one shape in two inks.
  */
-interface VanishNodes extends FxNodes {
-  root: SVGGElement;
+interface Ghost {
+  node: SVGGElement;
   ghost: SVGPathElement;
   flash: SVGPathElement;
   dot: SVGCircleElement | null;
@@ -1036,62 +1254,98 @@ interface VanishNodes extends FxNodes {
   closed: boolean;
 }
 
-const vanish: Effect<VanishNodes> = {
-  dur: 700,
-  setup(ctx, geom) {
-    if (geom.kind !== "vanish" || geom.positions.length === 0) return null;
-    if (geom.positions.some((at) => !ctx.project(at))) return null;
-    const root = mapGroup(ctx, "human_delete");
-    const ghost = svgEl(
-      "path",
-      { d: "", fill: ROSE_DEEP, "fill-opacity": 0.1, stroke: ROSE_DEEP, "stroke-width": 2.5, "stroke-linejoin": "round" },
-      root,
-    );
-    const flash = svgEl("path", { d: "", fill: "none", stroke: ROSE, "stroke-width": 4, "stroke-linejoin": "round", opacity: 0 }, root);
-    const dot =
-      geom.positions.length === 1
-        ? svgEl("circle", { cx: 0, cy: 0, r: 7, fill: ROSE_DEEP, opacity: 0.9 }, root)
-        : null;
-    return { root, ghost, flash, dot, positions: geom.positions, closed: geom.closed };
-  },
-  render(p, n, ctx) {
-    const points = n.positions.map((at) => ctx.project(at));
-    if (!points.every((q): q is Pt => q !== null)) return hide(n.root);
-    const d = pathD(points, n.closed);
-    n.ghost.setAttribute("d", d);
-    n.flash.setAttribute("d", d);
-    if (n.dot) {
-      n.dot.setAttribute("cx", points[0].x.toFixed(1));
-      n.dot.setAttribute("cy", points[0].y.toFixed(1));
-    }
-    setOpacity(n.flash, 0.9 * bell(seg(p, 0, 0.26)));
-    const gone = inOutCubic(seg(p, 0.22, 0.9));
-    setOpacity(n.root, 1 - gone);
-    const cx = points.reduce((sum, q) => sum + q.x, 0) / points.length;
-    const cy = points.reduce((sum, q) => sum + q.y, 0) / points.length;
-    const scale = 1 - 0.1 * gone;
-    n.root.setAttribute(
-      "transform",
-      `translate(${(cx * (1 - scale)).toFixed(2)} ${(cy * (1 - scale)).toFixed(2)}) scale(${scale.toFixed(4)})`,
-    );
-  },
-  rm(p, n, ctx) {
-    const points = n.positions.map((at) => ctx.project(at));
-    if (!points.every((q): q is Pt => q !== null)) return hide(n.root);
-    const d = pathD(points, n.closed);
-    n.ghost.setAttribute("d", d);
-    n.flash.setAttribute("d", d);
-    if (n.dot) {
-      n.dot.setAttribute("cx", points[0].x.toFixed(1));
-      n.dot.setAttribute("cy", points[0].y.toFixed(1));
-    }
-    setOpacity(n.flash, 0);
-    setOpacity(n.root, 1 - clamp01(p * 1.2));
-  },
-  cleanup(n) {
-    n.root.remove();
-  },
-};
+interface DissolveNodes extends FxNodes {
+  root: SVGGElement;
+  ghosts: Ghost[];
+}
+
+/** Projects one ghost and writes its geometry. Null when the map cannot place it. */
+function placeGhost(g: Ghost, ctx: FxContext): Pt[] | null {
+  const points = g.positions.map((at) => ctx.project(at));
+  if (!points.every((q): q is Pt => q !== null)) {
+    hide(g.node);
+    return null;
+  }
+  g.node.setAttribute("opacity", "1");
+  const d = pathD(points, g.closed);
+  g.ghost.setAttribute("d", d);
+  g.flash.setAttribute("d", d);
+  if (g.dot) {
+    g.dot.setAttribute("cx", points[0].x.toFixed(1));
+    g.dot.setAttribute("cy", points[0].y.toFixed(1));
+  }
+  return points;
+}
+
+function dissolveEffect(name: FxName, ink: string, flashInk: string): Effect<DissolveNodes> {
+  return {
+    dur: 700,
+    setup(ctx, geom) {
+      if (geom.kind !== "dissolve") return null;
+      const shapes = geom.shapes.filter(
+        (shape) => shape.positions.length > 0 && shape.positions.every((at) => ctx.project(at)),
+      );
+      if (shapes.length === 0) return null;
+      const root = mapGroup(ctx, name);
+      const ghosts = shapes.map((shape): Ghost => {
+        const node = svgEl("g", {}, root);
+        const ghost = svgEl(
+          "path",
+          { d: "", fill: ink, "fill-opacity": 0.1, stroke: ink, "stroke-width": 2.5, "stroke-linejoin": "round" },
+          node,
+        );
+        const flash = svgEl("path", { d: "", fill: "none", stroke: flashInk, "stroke-width": 4, "stroke-linejoin": "round", opacity: 0 }, node);
+        // A single position is a note, or a place that left the selection:
+        // there is no outline to fade, so the dot is the mark.
+        const dot =
+          shape.positions.length === 1
+            ? svgEl("circle", { cx: 0, cy: 0, r: 7, fill: ink, opacity: 0.9 }, node)
+            : null;
+        return { node, ghost, flash, dot, positions: shape.positions, closed: shape.closed };
+      });
+      return { root, ghosts };
+    },
+    render(p, n, ctx) {
+      const flash = 0.9 * bell(seg(p, 0, 0.26));
+      let sx = 0;
+      let sy = 0;
+      let count = 0;
+      for (const g of n.ghosts) {
+        const points = placeGhost(g, ctx);
+        if (!points) continue;
+        setOpacity(g.flash, flash);
+        for (const q of points) {
+          sx += q.x;
+          sy += q.y;
+          count += 1;
+        }
+      }
+      if (count === 0) return hide(n.root);
+      const gone = inOutCubic(seg(p, 0.22, 0.9));
+      setOpacity(n.root, 1 - gone);
+      const scale = 1 - 0.1 * gone;
+      const cx = sx / count;
+      const cy = sy / count;
+      n.root.setAttribute(
+        "transform",
+        `translate(${(cx * (1 - scale)).toFixed(2)} ${(cy * (1 - scale)).toFixed(2)}) scale(${scale.toFixed(4)})`,
+      );
+    },
+    rm(p, n, ctx) {
+      let placed = false;
+      for (const g of n.ghosts) {
+        if (!placeGhost(g, ctx)) continue;
+        setOpacity(g.flash, 0);
+        placed = true;
+      }
+      if (!placed) return hide(n.root);
+      setOpacity(n.root, 1 - clamp01(p * 1.2));
+    },
+    cleanup(n) {
+      n.root.remove();
+    },
+  };
+}
 
 // ------------------------------------------------------------------ registry
 
@@ -1102,14 +1356,17 @@ const EFFECTS: Record<FxName, Effect> = {
   find_features: findPulse as Effect,
   select_features: selectDropIn as Effect,
   draw_shape: inkEffect("draw_shape", TEAL_DEEP, false, 1500) as Effect,
+  plan_route: routeInk as Effect,
   annotate: pinEffect("annotate", TEAL) as Effect,
+  remove_from_map: dissolveEffect("remove_from_map", TEAL_DEEP, TEAL) as Effect,
   describe_surroundings: compass as Effect,
   compare_areas: twinPing as Effect,
   measure: ruler as Effect,
+  get_place_details: placeGlint as Effect,
   get_share_link: packToChip as Effect,
   human_draw: inkEffect("human_draw", ROSE_DEEP, true, 1700) as Effect,
   human_note: pinEffect("human_note", ROSE_DEEP) as Effect,
-  human_delete: vanish as Effect,
+  human_delete: dissolveEffect("human_delete", ROSE_DEEP, ROSE) as Effect,
 };
 
 export function fxEffect(name: FxName): Effect | undefined {

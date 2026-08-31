@@ -13,9 +13,11 @@
  * Coordinates are approximate but their relationships are load-bearing, so
  * changing one will change several assertions on purpose.
  */
+import type { Position } from "geojson";
 import type { GlassMapFeature } from "@/lib/data/schema";
 import type { Bounds, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { HttpStatusError, TIER2_INDEX_URL, type FetchJson } from "@/lib/store/tier2";
+import type { RouteFetch } from "./route";
 
 type Props = GlassMapFeature["properties"];
 
@@ -211,6 +213,64 @@ export const EAST_DISTRICT = box(
 /** In the seam: inside neither polygon, ~81 m from West and ~121 m from East. */
 export const SEAM_POINT: LngLat = [121.5108, 25.005];
 
+// ------------------------------------------------------------ routing fixture
+
+/**
+ * Fractions on purpose: the tool reports whole metres and whole seconds, so
+ * these are the two numbers that prove it rounds rather than truncates
+ * (3830.4 → 3830 down, 2760.6 → 2761 up).
+ */
+export const ROUTE_FIXTURE_DISTANCE = 3830.4;
+export const ROUTE_FIXTURE_DURATION = 2760.6;
+
+/**
+ * A shape point at the precision OSRM really sends (7 decimals). Nothing but
+ * round5 on the way into the store can turn it into [121.5322, 25.04123].
+ */
+export const ROUTE_FIXTURE_BEND: Position = [121.5321987, 25.0412345];
+
+/** The service's answer for a route it found: OSRM's own envelope, verbatim. */
+export function routeOkBody(
+  coordinates: Position[],
+  distance = ROUTE_FIXTURE_DISTANCE,
+  duration = ROUTE_FIXTURE_DURATION,
+) {
+  return {
+    code: "Ok",
+    routes: [{ distance, duration, geometry: { type: "LineString", coordinates } }],
+  };
+}
+
+/** The two coordinates a request asked for, read back out of its URL. */
+export function routeRequestPoints(url: string): [Position, Position] {
+  const path = url.split("?")[0];
+  const pair = path.slice(path.lastIndexOf("/") + 1);
+  const [from, to] = pair.split(";").map((p) => p.split(",").map(Number) as Position);
+  return [from, to];
+}
+
+/**
+ * A routing service with no network. The default answers every request with a
+ * three-point line from where it was asked to where it was asked, so a test can
+ * prove the request carried the points the tool resolved; `answer` replaces it
+ * with a refusal, a malformed body, a huge line or a throw.
+ *
+ * `requests` is the log every rate-limit and "never called the service" test
+ * asserts against.
+ */
+export function createRouteFetch(
+  answer: (from: Position, to: Position) => unknown = (from, to) =>
+    routeOkBody([from, ROUTE_FIXTURE_BEND, to]),
+): { routeFetch: RouteFetch; requests: string[] } {
+  const requests: string[] = [];
+  const routeFetch: RouteFetch = async (url) => {
+    requests.push(url);
+    const [from, to] = routeRequestPoints(url);
+    return answer(from, to);
+  };
+  return { routeFetch, requests };
+}
+
 // ------------------------------------------------------- tier-2 (POI) fixtures
 
 /**
@@ -236,7 +296,12 @@ function poi(
 
 /**
  * Three cafes, chosen for what they break rather than for realism:
- *  - one within the default 800 m walk of Daan Station, and inside VIEW_BOUNDS;
+ *  - one within the default 800 m walk of Daan Station, and inside VIEW_BOUNDS.
+ *    It is also the *enriched* one: address, phone, website and wheelchair on
+ *    top of the three list tags, copied in shape from a real Louisa row in
+ *    public/data/tier2/cafe.geojson. A list answer about it still shows three
+ *    tags and no more (T-97), so a fixture without them could not tell "the
+ *    list stays lean" from "the store never had them";
  *  - one named 大安, exactly like DAAN_STATION — the measured citywide name
  *    collision. Once cafes are loaded, "大安" has to become a question rather
  *    than a guess;
@@ -249,6 +314,10 @@ export const TIER2_CAFE_COLLECTION = {
     poi("osm:node:100", "路易莎咖啡", "Louisa Coffee", "cafe", [121.5432, 25.0338], {
       brand: "Louisa Coffee",
       opening_hours: "Mo-Su 07:00-22:00",
+      address: "106012臺北市大安區羅斯福路二段83之1號1樓",
+      phone: "+886 2 2362 6229",
+      website: "https://www.louisacoffee.co/",
+      wheelchair: "limited",
     }),
     poi("osm:node:101", "大安", "Daan Coffee", "cafe", [121.5425, 25.0331]),
     poi("osm:node:102", "小林咖啡", "Xiaolin Coffee", "cafe", [121.512, 25.0505]),
@@ -318,6 +387,81 @@ export const TIER2_CONVENIENCE_COLLECTION = {
       25.028 + Math.floor(i / 25) * 0.0004,
     ]),
   ),
+};
+
+/**
+ * Two hotels, for the fields only a hotel has.
+ *
+ * Five of the 18 categories carry a tag the generator extracts for them alone —
+ * `stars` here, `fee`/`capacity` for parking, `dispensing`, `religion` +
+ * `denomination`, `emergency` (public/data/README.md, "Enrichment fields
+ * (T-97)"). The pair is one richly tagged place and one that is barely more
+ * than a name, because both are ordinary in OSM: citywide, `address` is on ~43%
+ * of features and `phone` on ~22%, so an answer has to be as honest about the
+ * second as it is complete about the first.
+ *
+ * Shapes and values follow real rows in public/data/tier2/hotel.geojson; the
+ * ids are the fixture's own.
+ */
+export const TIER2_HOTEL_COLLECTION = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:120", "台北W飯店", "W Taipei", "hotel", [121.56575, 25.04049], {
+      brand: "W Hotels",
+      opening_hours: "24/7",
+      address: "110臺北市信義區忠孝東路五段10號",
+      phone: "+886 2 7703 8888",
+      website: "http://www.wtaipei.com/",
+      wheelchair: "yes",
+      stars: "5",
+    }),
+    // Named, located, and nothing else — the sparse case is not an edge case.
+    poi("osm:node:121", "小客棧", "Little Inn", "hotel", [121.5442, 25.0349]),
+  ],
+};
+
+/** One car park: `fee` and `capacity` belong to this category and no other. */
+export const TIER2_PARKING_COLLECTION = {
+  type: "FeatureCollection",
+  features: [
+    poi("osm:node:130", "台灣聯通停車場", "Taiwan Parking", "parking", [121.5434, 25.0331], {
+      brand: "台灣聯通",
+      address: "10844臺北市萬華區成都路81號",
+      wheelchair: "yes",
+      fee: "yes",
+      capacity: "120",
+    }),
+  ],
+};
+
+/**
+ * A page whose two loadable categories are the ones with category-only tags.
+ * Kept apart from TIER2_INDEX rather than added to it: that index's four
+ * categories are what the disclosure tests count, and "how many categories
+ * exist" is an assertion in its own right.
+ */
+export const TIER2_ENRICHED_INDEX = {
+  generated: "2026-08-31T00:00:00Z",
+  attribution: "© OpenStreetMap contributors",
+  categories: [
+    {
+      category: "hotel",
+      count: TIER2_HOTEL_COLLECTION.features.length,
+      file: "/data/tier2/hotel.geojson",
+      bytes: 700,
+    },
+    {
+      category: "parking",
+      count: TIER2_PARKING_COLLECTION.features.length,
+      file: "/data/tier2/parking.geojson",
+      bytes: 400,
+    },
+  ],
+};
+
+export const TIER2_ENRICHED_FILES: Record<string, unknown> = {
+  "/data/tier2/hotel.geojson": TIER2_HOTEL_COLLECTION,
+  "/data/tier2/parking.geojson": TIER2_PARKING_COLLECTION,
 };
 
 /**

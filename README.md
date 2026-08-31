@@ -3,7 +3,7 @@
 **An agent-native web map.** GlassMap uses [WebMCP](https://webmachinelearning.github.io/webmcp/) to turn the map canvas from a black box into a semantic surface: an AI agent can read the current view, find features, move the camera, draw shapes and annotate the map **without taking a single screenshot** — and the human watches it happen on the same map.
 
 > Live: **https://glassmap.clyeh.xyz** · Built for [The WebMCP Challenge](https://webmcp.devpost.com/) (Aug 25 – Sep 3, 2026).
-> **Status:** all eleven tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `annotate`, `describe_surroundings`, `compare_areas`, `measure`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
+> **Status:** all fourteen tools are implemented and unit-tested — `get_map_state`, `set_map_view`, `list_features_in_view`, `find_features`, `select_features`, `draw_shape`, `plan_route`, `annotate`, `remove_from_map`, `describe_surroundings`, `compare_areas`, `measure`, `get_place_details`, `get_share_link` — backed by 24 categories of real OpenStreetMap data: the six bundled Taipei datasets (2,063 features, always in memory) plus 18 point-of-interest categories (~31,000 more features) fetched city-wide the first time an agent names one, plus 25 fabricated sample listings. The redesigned "Smoked Glass" interface and the agent-presence FX layer (every tool call renders a brief, self-clearing effect on the map) are both live, alongside the interactive map, hand-drawing, annotations, the inspector panel and a live "Agent activity" feed. Remaining: the nice-to-have `set_layers` tool, and the demo video. See [Roadmap](#roadmap).
 
 ## Why "Glass"
 
@@ -33,16 +33,19 @@ The same opacity that blocks agents also blocks screen readers, so the read-only
 
 ## Tools
 
-Three layers, eleven of twelve tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
+Three layers, fourteen of fifteen tools implemented. Every write tool returns the new map state so the agent never needs a follow-up read.
 
 ```
 Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page state, no server)
 ├─ get_map_state ✅                          ├─ set_map_view ✅       ├─ draw_shape ✅
+│                                            │                        ├─ plan_route ✅
 ├─ list_features_in_view ✅                  └─ set_layers            ├─ select_features ✅
 ├─ find_features ✅                                                   ├─ annotate ✅
-├─ describe_surroundings ✅                                           └─ get_share_link ✅
+├─ describe_surroundings ✅                                           ├─ remove_from_map ✅
+│                                                                     └─ get_share_link ✅
 ├─ measure ✅
-└─ compare_areas ✅
+├─ compare_areas ✅
+└─ get_place_details ✅
 ```
 
 ✅ = implemented and covered by unit tests. Everything else is planned — see [Roadmap](#roadmap).
@@ -51,14 +54,17 @@ Perceive (read-only, replaces screenshots)   Navigate (camera only)   Act (page 
 |---|---|---|
 | `get_map_state` | Reads the camera, visible bounds, feature count, selection, drawings and annotations in one call — the read that used to require a screenshot. | *(none)* |
 | `set_map_view` | Moves the camera: by exact `center`/`zoom`/`bearing`/`pitch`, by `feature_id`, or by `place` name resolved against the loaded data. An ambiguous `place` does not move the map — it returns candidates with distances instead. | `place`, `feature_id`, `center`, `zoom`, `bearing`, `pitch` |
-| `list_features_in_view` | Lists loaded features whose bounds overlap the current view, nearest-first, each with distance in metres and an 8-point compass direction from the view centre. | `categories`, `limit` |
+| `list_features_in_view` | Lists loaded features whose bounds overlap the current view, nearest-first, each with distance in metres and an 8-point compass direction from the view centre; `query` name-searches within the view with the same matching `find_features` uses. | `query`, `categories`, `limit` |
 | `find_features` | Searches every loaded feature, not just what's visible, by name substring, category, distance from a place/feature/coordinate, and whether it's inside a shape on the map — including one a human drew by hand. | `query`, `categories`, `near`, `radius_m`, `within`, `limit` |
 | `select_features` | Highlights features on the map and in the inspector's Selected list, by explicit ids or the same `query`/`near`/`radius_m`/`categories`/`within` filter `find_features` accepts — but selects every match, not just the first `limit`. | `ids` or filter, `within`, `replace` |
 | `draw_shape` | Draws a circle, polygon or line on the map so the human can see the area being discussed; returns its area (circle/polygon) or length (line) and a `drawing:<n>` id. | `type`, `center`+`radius_m` (circle) or `coordinates` (polygon/line), `label` |
+| `plan_route` | Plans a walking route between two places via the keyless FOSSGIS OSRM service (OpenStreetMap data) and draws it as a line the human can see; returns the drawing id, `distance_m` and `duration_s`, says `simplified: true` when the geometry was thinned to fit, and fails honestly — never a fake route — when the service cannot answer. The one tool that talks to an external service; attribution renders on the page. | `from`, `to`, `label` |
 | `annotate` | Pins a short note to a place on the map, so the human sees what was found where it was found. | `at`, `note`, `icon` |
+| `remove_from_map` | Takes things off the map by id: the agent's own drawings and notes are removed, named features leave the selection, and a shape or note the *human* made is refused per-id — the person who drew it can tap it and press Remove. Every id in the batch is accounted for in exactly one bucket; removal is permanent, with no undo. | `ids` (drawing/annotation/feature ids) |
 | `describe_surroundings` | Describes what's around a point the way a person would say it out loud: the district, then nearby features grouped by compass direction, nearest first, each with a distance and an id. | `from`, `radius_m` |
 | `compare_areas` | Compares two places in one call: per-category counts of what's within `radius_m` of each, plus the nearest match of each category on each side; if a place name doesn't resolve, the error names which side (`a` or `b`) failed. | `a`, `b`, `radius_m`, `categories` |
 | `measure` | Measures one drawing or loaded feature: area and perimeter for a circle or polygon, length for a line. A point has no extent and is refused, with a pointer to `find_features` for distances instead. | `target` |
+| `get_place_details` | Everything the page knows about one place — address, phone, website, opening hours, wheelchair (as OpenStreetMap reports it, not a verified accessibility claim) and category-specific facts — for the questions a list answer is too lean for. Fields exist only where OSM has them; absent means absent. | `id` |
 | `get_share_link` | Builds a link that reproduces this map for whoever opens it — camera, selection, every drawing and every note, encoded in the URL itself, nothing uploaded. Returns `{ url, bytes }`; a map too large to fit in a URL (over 8 KB) is refused with an error naming what to remove. | *(none)* |
 
 `within: "drawing:<n>"` on `find_features` and `select_features` is the read half of the collaborative loop: any circle or polygon on the map — agent-drawn or hand-drawn by a human — becomes something an agent can query by id, not just something rendered on screen. (A line has no inside, so `within` does not apply to it.)
@@ -82,7 +88,7 @@ A few real counts from the manifest (`public/data/tier2/index.json`): `restauran
 
 `select_features` still highlights every match a filter finds, its contract since the tool shipped — but once a point-of-interest category is involved, a filter matching more than 500 of them is refused rather than lighting up half the city: the answer gives the true count and asks for `near`+`radius_m`, `within` or `query` to narrow it. The six bundled categories are exempt from that cap.
 
-A `get_share_link` link carries the *names* of every point-of-interest category the sender had loaded, not their features — the recipient's page fetches the same files itself — so opening the link rebuilds the sender's map, selection included, instead of resolving to features the recipient's session never heard of. A link that names a category is written as `v2`; a link with none still encodes to the exact `v1` bytes it always did, so no existing link breaks.
+A `get_share_link` link carries the *names* of every point-of-interest category the sender had loaded, not their features — the recipient's page fetches the same files itself — so opening the link rebuilds the sender's map, selection included, instead of resolving to features the recipient's session never heard of. A link that names a category is written as `v2`; a link with none still encodes to the exact `v1` bytes it always did, so no existing link breaks. The one exception is a map whose drawings would not fit in a URL at all: their coordinates then travel delta-encoded and the link is written as `v3` — smaller maps keep their old bytes, and every older link still decodes.
 
 Fetching a category file can fail two honestly different ways: a **permanent** failure (this deployment ships no such file — a 404) drops the category and is not retried; a **transient** one (a slow connection, a rate-limited mirror — a 5xx, or a 408/425/429 that means "ask again") keeps the category on the books, including in any share link handed out meanwhile, so the next call simply tries again.
 
@@ -92,6 +98,7 @@ The map is shared state, not a private channel for the agent:
 
 - **Human draws, agent reads.** Click "Draw a polygon", add vertices, close it — the shape appears in `get_map_state().drawings` with `source: "user"` and is immediately queryable with `find_features({ within: "drawing:<n>" })`, the same call an agent uses on its own shapes.
 - **Agent draws or annotates, human sees and edits.** A `draw_shape` or `annotate` call renders on the map at once and lists in the inspector's Shapes / Notes section with an "agent" or "user" provenance tag and a ✕ button to remove it — no confirmation dialog blocks either side.
+- **The human decides what chrome is on screen.** The page opens as a plain map and wakes into the agent view on the first live tool call — but the person can also open that view by hand (the corner spark's card offers a preview) and close it again at any time. A closed view stays closed while the agent keeps working; the spark carries a pulse and an exact count of the calls made since, and `get_map_state().bounds` always describes the rectangle actually on screen.
 - **Two WebMCP APIs, one state.** Besides the imperative tools above, the inspector's pin-note field is a plain `<form toolname="add_note">` — the declarative half of WebMCP, filled in by a human or submitted by an agent with no JavaScript registration. `SubmitEvent.agentInvoked` tells the store which one happened, so the note is stored as `source: "agent"` or `source: "user"` honestly either way. Together the 11 registered tools and this one declarative form are the 12 the on-page WebMCP badge counts.
 
 The address bar is part of that shared state, too: it always holds a link back to the map exactly as it stands, kept current whether the human or the agent made the last change, and opening that link — or one handed off from `get_share_link` — restores the same camera, selection, drawings and notes rather than a description of them. That is what lets a judge (or anyone else) reproduce what this README can only show as a screenshot.
@@ -194,7 +201,7 @@ Branching, worktrees, commit and PR conventions are in [CONTRIBUTING.md](./CONTR
 
 ## Architecture
 
-Single Next.js app on Vercel. **No backend, no database, no API keys, no login.**
+Single Next.js app on Vercel. **No backend, no database, no API keys, no login.** One keyless external data service: `plan_route` asks the [FOSSGIS OSRM instance](https://routing.openstreetmap.de/) for walking routes at call time — throttled to their 1 request/second policy, credited on the page for the rest of the session once a route has been planned, and answering with an honest error (map unchanged) when unreachable. Everything else runs on bundled data entirely in the browser; the only other network the app touches is the keyless OpenFreeMap basemap tiles below, which stay display-only.
 
 - [MapLibre GL JS](https://maplibre.org/) with [OpenFreeMap](https://openfreemap.org/) vector tiles (no key required)
 - Bundled GeoJSON under `public/data/` (Taipei MRT stations, districts, parks, schools, supermarkets, sample listings)
@@ -213,7 +220,7 @@ Single Next.js app on Vercel. **No backend, no database, no API keys, no login.*
 
 ## Data and licensing
 
-Six GeoJSON files bundled under `public/data/` and loaded on startup, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API. A further 18 point-of-interest files under `public/data/tier2/` are prepared the same way but loaded lazily, one category at a time, on request — see [City-wide breadth](#city-wide-breadth) above. Full provenance, Overpass queries and export notes for all 24 categories are in [`public/data/README.md`](./public/data/README.md).
+Six GeoJSON files bundled under `public/data/` and loaded on startup, prepared ahead of time by the scripts in `scripts/` — the running app never calls Overpass or any other external data API; the single runtime exception is the `plan_route` routing request described under [Architecture](#architecture). A further 18 point-of-interest files under `public/data/tier2/` are prepared the same way but loaded lazily, one category at a time, on request — see [City-wide breadth](#city-wide-breadth) above. Full provenance, Overpass queries and export notes for all 24 categories are in [`public/data/README.md`](./public/data/README.md).
 
 | Dataset | Category | Features |
 |---|---|---:|

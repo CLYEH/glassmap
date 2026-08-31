@@ -81,6 +81,54 @@ export function stableState(state: ToolResult) {
   };
 }
 
+/**
+ * Waits, on the browser's own clock, for `body[data-awaken]` to reach
+ * "awake" within `timeoutMs`, and returns whatever it reads at that instant
+ * (the landed value, or whatever the attribute still says once the timeout
+ * elapses).
+ *
+ * Not a Node-side `expect.poll`: a poll round-trips to the browser on its own
+ * schedule, and every one of those round trips is real Node<->browser IPC
+ * time spent *inside* the budget being measured -- on a busy machine (many
+ * Playwright workers, many Chromium processes) that overhead was measured to
+ * exceed a second under `--repeat-each` across the full suite, enough to fail
+ * a 2500ms-budgeted check even though the transition itself landed inside its
+ * own 2s law (`AWAKEN_MAX_MS`, `src/lib/awaken/index.ts`). Timing the wait
+ * entirely inside the page removes that overhead from the measurement.
+ *
+ * Ported from `awakening.spec.ts`'s own private helper (T-93's fix pattern for
+ * this exact race) rather than imported from it, so this module stays free of
+ * a dependency on that spec file; `remove-from-map.spec.ts` and
+ * `plan-route.spec.ts` share this copy instead of re-duplicating a third
+ * (T-99 -- the same 2500ms Node-side poll of `data-awaken` had lost this race
+ * under parallel load in both files).
+ */
+export async function waitForAwake(
+  page: Page,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  return page.evaluate((timeoutMs) => {
+    return new Promise<string | undefined>((resolve) => {
+      if (document.body.dataset.awaken === "awake") {
+        resolve("awake");
+        return;
+      }
+      const timer = setTimeout(() => {
+        observer.disconnect();
+        resolve(document.body.dataset.awaken);
+      }, timeoutMs);
+      const observer = new MutationObserver(() => {
+        if (document.body.dataset.awaken === "awake") {
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve("awake");
+        }
+      });
+      observer.observe(document.body, { attributes: true, attributeFilter: ["data-awaken"] });
+    });
+  }, timeoutMs);
+}
+
 /** `bounds` is either not-yet-available (`null`) or a fully-formed box; never partial. */
 export function expectBoundsShape(bounds: BoundsResult | null | undefined): void {
   if (bounds == null) return;

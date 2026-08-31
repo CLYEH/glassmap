@@ -40,7 +40,7 @@ import {
 } from "@/lib/store/map-store";
 import type { GlassMapTool } from "@/lib/webmcp/types";
 import { DATASETS, isFeatureCategory } from "@/lib/data/schema";
-import { isMapCategory } from "@/lib/store/tier2";
+import { isMapCategory, TIER2_TEXT_FIELDS } from "@/lib/store/tier2";
 import { DEFAULT_CIRCLE_RADIUS_M, truncate } from "./shapes";
 import { DEFAULT_SURROUNDINGS_RADIUS_M } from "./surroundings";
 import { round5 } from "./state";
@@ -176,9 +176,11 @@ function categoryLabel(value: unknown): string | undefined {
 }
 
 /**
- * What find_features and select_features were asked for, as a noun phrase:
- * "Parks within drawing:1", "Supermarkets near Daan Station", "“sushi”".
- * `within` beats `near` because it names a shape the human can see on the map.
+ * What a search was asked for, as a noun phrase: "Parks within drawing:1",
+ * "Supermarkets near Daan Station", "“sushi”". `within` beats `near` because it
+ * names a shape the human can see on the map. Shared by the three tools that
+ * take the same filter — find_features, select_features and (for its two
+ * fields) list_features_in_view — so one filter is one phrase in the feed.
  */
 function filterSubject(input: Rec): { subject: string; refIds: string[] } {
   const categories = categoryLabel(input.categories);
@@ -229,9 +231,14 @@ const SUMMARISERS: Record<string, Summariser> = {
   },
 
   list_features_in_view: (input, result) => ({
-    summary: `${categoryLabel(input.categories) ?? "Features"} in view — found ${group(
-      fin(result.total) ?? 0,
-    )}`,
+    // The same noun phrase find_features' row is built from, so "Cafes matching
+    // “latte”" reads the same whether the agent searched the screen or the
+    // city. Only the two fields this tool has are offered: a `near` or a
+    // `within` in the input would be a filter it never applied, and a row
+    // claiming one would send a human looking for a circle nobody drew.
+    summary: `${
+      filterSubject({ categories: input.categories, query: input.query }).subject
+    } in view — found ${group(fin(result.total) ?? 0)}`,
   }),
 
   find_features: (input, result) => {
@@ -296,12 +303,67 @@ const SUMMARISERS: Record<string, Summariser> = {
     };
   },
 
+  plan_route: (_input, result) => {
+    const id = str(result.drawing_id);
+    // The label rather than the caller's two ends: a route is usually named by
+    // the tool itself, from the places it resolved, and that default is the
+    // only description of the walk anyone has. Read from the answer, like
+    // everything else here - the input may carry no name at all.
+    const label = str(result.label)?.trim();
+    return {
+      summary: [
+        `Planned a walk, ${metres(fin(result.distance_m) ?? 0)}`,
+        label ? ` — ${quote(label)}` : "",
+        id ? ` → ${id}` : "",
+      ].join(""),
+      ...(id ? { refIds: [id] } : {}),
+      // Both ends, as the answer states them: the two places a route is
+      // between are what the page has to show to show a route at all, and
+      // compare_areas' second centre is the same field for the same reason.
+      ...withFx({ origin: fxPoint(result.from), originB: fxPoint(result.to) }),
+    };
+  },
+
   annotate: (input, result) => {
     const note = str(input.note)?.trim() ?? "";
     const id = str(result.annotation_id);
     return {
       summary: `Pinned ${quote(note, ACTIVITY_NOTE_CHARS)}${id ? ` → ${id}` : ""}`,
       ...(id ? { refIds: [id] } : {}),
+    };
+  },
+
+  remove_from_map: (_input, result) => {
+    const removed = Array.isArray(result.removed) ? result.removed.map(rec) : [];
+    const ids = removed.map((r) => str(r?.id)).filter((id): id is string => id !== undefined);
+    const count = fin(result.removed_count) ?? ids.length;
+    const first = removed[0];
+    // One mark is named: the id and the words on it are what a reader checks
+    // against the map they are looking at. Several are counted, because a row
+    // listing five ids is a row nobody reads.
+    const only = str(first?.label) ?? str(first?.note);
+    const head =
+      count === 0
+        ? "Removed nothing"
+        : count === 1
+          ? `Removed ${ids[0] ?? "one mark"}${only ? ` — ${quote(only, ACTIVITY_NOTE_CHARS)}` : ""}`
+          : `Removed ${group(count)} marks`;
+    // What the human's own map kept, in their words: a refusal only ever
+    // happens to a shape or a note they made themselves, and the row that does
+    // not say so leaves them watching the agent apparently do nothing.
+    const kept = fin(result.refused_count) ?? 0;
+    // A malformed mark id and an id nothing answers to are one fact to a person
+    // watching: the agent named something this map does not have.
+    const missing = (fin(result.unknown_count) ?? 0) + (fin(result.malformed_count) ?? 0);
+    return {
+      summary: [
+        head,
+        kept ? ` · ${group(kept)} of yours kept` : "",
+        missing ? ` · ${group(missing)} unknown ${missing === 1 ? "id" : "ids"}` : "",
+      ].join(""),
+      // The ids that left the map, so the page can play the removal where each
+      // one was. Already capped by the answer itself.
+      ...(ids.length ? { refIds: ids } : {}),
     };
   },
 
@@ -367,6 +429,24 @@ const SUMMARISERS: Record<string, Summariser> = {
     return {
       summary: `Measured ${target}${size ? ` — ${size}` : ""}`,
       ...(target ? { refIds: [target] } : {}),
+    };
+  },
+
+  get_place_details: (input, result) => {
+    // The name the tool answered with, not the id the caller typed: a row
+    // reading "Looked up osm:node:112" tells the human nothing about the map
+    // they are looking at. The id is still in refIds, typeset as code.
+    const id = str(result.id) ?? str(input.id)?.trim() ?? "";
+    const name = str(result.name)?.trim() || id;
+    // How much OSM actually had, counted off the answer itself, so the row
+    // cannot claim a field the agent was not given. "no details recorded" is
+    // the honest zero: the place is real and on the map, nobody has tagged it.
+    const details = TIER2_TEXT_FIELDS.filter((field) => str(result[field])).length;
+    return {
+      summary: `Looked up ${text(name)} — ${
+        details ? `${group(details)} ${details === 1 ? "detail" : "details"}` : "no details recorded"
+      }`,
+      ...(id ? { refIds: [id] } : {}),
     };
   },
 

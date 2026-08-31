@@ -57,6 +57,7 @@ describe("tool contract", () => {
     expect(byName.describe_surroundings.annotations?.readOnlyHint).toBe(true);
     expect(byName.compare_areas.annotations?.readOnlyHint).toBe(true);
     expect(byName.measure.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get_place_details.annotations?.readOnlyHint).toBe(true);
     expect(byName.get_share_link.annotations?.readOnlyHint).toBe(true);
     expect(byName.set_map_view.annotations?.readOnlyHint).toBeFalsy();
     expect(byName.select_features.annotations?.readOnlyHint).toBeFalsy();
@@ -123,18 +124,29 @@ describe("tool contract", () => {
       rejectedBy: ["list_features_in_view", "find_features", "select_features", "compare_areas"],
     },
     { input: { limit: -1 }, rejectedBy: ["list_features_in_view", "find_features"] },
-    { input: { ids: 7 }, rejectedBy: ["select_features"] },
-    { input: { ids: [null] }, rejectedBy: ["select_features"] },
-    { input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) }, rejectedBy: ["select_features"] },
+    // One name filter, one refusal: every tool that takes `query` turns down the
+    // same value, so an agent cannot learn that a number is acceptable anywhere.
+    {
+      input: { query: 42 },
+      rejectedBy: ["list_features_in_view", "find_features", "select_features"],
+    },
+    { input: { ids: 7 }, rejectedBy: ["select_features", "remove_from_map"] },
+    { input: { ids: [null] }, rejectedBy: ["select_features", "remove_from_map"] },
+    {
+      input: { ids: Array.from({ length: 101 }, (_, i) => `x:${i}`) },
+      rejectedBy: ["select_features", "remove_from_map"],
+    },
     {
       input: {},
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     // Not an object at all — some clients pass the raw argument through.
@@ -143,10 +155,12 @@ describe("tool contract", () => {
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     {
@@ -154,10 +168,12 @@ describe("tool contract", () => {
       rejectedBy: [
         "set_map_view",
         "select_features",
+        "remove_from_map",
         "draw_shape",
         "annotate",
         "compare_areas",
         "measure",
+        "get_place_details",
       ],
     },
     { input: { type: "blob", coordinates: [] }, rejectedBy: ["draw_shape"] },
@@ -297,16 +313,20 @@ describe("get_map_state", () => {
     expect(Object.keys(written).sort()).toEqual(Object.keys(read).sort());
   });
 
-  it("warns that the first call of a session can report the pre-chrome corridor", () => {
+  it("says bounds follows the chrome actually on screen, in both directions", () => {
     // The page opens without its agent chrome and grows the inspector lane the
-    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`), so
-    // the first call's answer is computed against a viewport that is about to
-    // shrink. The tool cannot fix that - the chrome appears *because* of this
-    // call - and an agent that is not told will read the difference between
-    // call one and call two as the human having moved the map. The description
-    // is the only place it can learn otherwise.
+    // moment an agent acts (`components/MapCanvas.tsx`, `inspectorLane()`) -
+    // and since T-93 the human can also open or close that chrome by hand at
+    // any time. So bounds can widen as well as narrow between two calls, and
+    // an agent that is not told will read either jump as the human having
+    // moved the map. The description is the only place it can learn otherwise;
+    // the old promise ("every call after the first reports the narrowed one")
+    // became false the day the toggle shipped.
     expect(toolsFor().byName.get_map_state.description).toMatch(
-      /first call of a session can report a slightly wider corridor/,
+      /open or close that chrome by hand/,
+    );
+    expect(toolsFor().byName.get_map_state.description).toMatch(
+      /bounds always describes the rectangle actually on screen/,
     );
   });
 });
@@ -487,6 +507,90 @@ describe("list_features_in_view", () => {
     expect(out.features?.[0]).toMatchObject({ id: "listing:01", direction: "SW", sample: true });
     expect(out.features?.[0].distance_m).toBeGreaterThan(0);
     expect(JSON.stringify(out)).not.toMatch(/coordinates|geometry/);
+  });
+
+  it("searches by name inside the view, which neither tool could do alone", async () => {
+    // The gap this parameter closes: "the Pxmart I can see" was two tools and
+    // no way to combine them — find_features knows the name but not the
+    // screen, and this tool knew the screen but not the name. Both PX Marts
+    // share a name; only one is in view, and the answer must be that one.
+    const { byName } = mapReady();
+    const inView = await call(byName.list_features_in_view, { query: "Pxmart" });
+    expect(idsOf(inView.features)).toEqual(["osm:node:30"]);
+    expect(inView.total).toBe(1);
+    // The same words asked of the whole city still find both, so the narrowing
+    // is the view and nothing else.
+    const everywhere = await call(byName.find_features, { query: "Pxmart" });
+    expect(idsOf(everywhere.features).sort()).toEqual(["osm:node:30", "osm:node:32"]);
+  });
+
+  it("matches the English name, folded exactly as find_features folds it", async () => {
+    // OSM writes "Da-an Forest Park" and people type "Daan forest"; the park's
+    // local name has no Latin letters at all, so this can only pass through the
+    // English name and the shared punctuation folding. Two tools, one rule: a
+    // spelling that finds a place city-wide finds it on screen too.
+    const { byName } = mapReady();
+    const listed = await call(byName.list_features_in_view, { query: "daan forest" });
+    expect(idsOf(listed.features)).toEqual(["osm:way:10"]);
+    expect(idsOf((await call(byName.find_features, { query: "daan forest" })).features)).toEqual([
+      "osm:way:10",
+    ]);
+  });
+
+  it("combines query with categories instead of replacing either", async () => {
+    // Both filters, both applied: 大安 in view is two stations, a park and a
+    // district, and asking for stations must drop the other two rather than
+    // widening back to every station on screen. A tool that let one filter win
+    // would answer a question the agent did not ask, and the ids look
+    // plausible either way.
+    const { byName } = mapReady();
+    const both = await call(byName.list_features_in_view, {
+      query: "大安",
+      categories: ["mrt_station"],
+    });
+    expect(idsOf(both.features)).toEqual(["osm:node:3", "osm:node:2"]);
+
+    const nameOnly = await call(byName.list_features_in_view, { query: "大安" });
+    expect(idsOf(nameOnly.features)).toEqual([
+      "osm:node:3",
+      "osm:way:10",
+      "osm:node:2",
+      "district:daan",
+    ]);
+    const categoryOnly = await call(byName.list_features_in_view, { categories: ["mrt_station"] });
+    expect(idsOf(categoryOnly.features)).toEqual(["osm:node:3", "osm:node:2"]);
+    // ...and each of them is a strictly wider set than the two together.
+    expect(both.total).toBeLessThan(nameOnly.total!);
+  });
+
+  it("answers an honest zero, still saying where it looked", async () => {
+    // "Nothing on this screen matches" is a fact about a place, and the origin
+    // is what says which place — the same shape find_features returns for an
+    // empty search, so an agent reading one can read the other. Exhaustive on
+    // purpose: an empty answer must not quietly drop or gain a field.
+    const { byName } = mapReady();
+    const out = await call(byName.list_features_in_view, { query: "Shibuya" });
+    expect(out).toEqual({
+      total: 0,
+      returned: 0,
+      features: [],
+      origin: { lng: VIEW.center[0], lat: VIEW.center[1] },
+    });
+  });
+
+  it("refuses a query that is not a string, in find_features' own words", async () => {
+    // One sentence for one mistake: an agent that learns the refusal from one
+    // search tool must recognise it from the other, so both come from the same
+    // validator rather than from two copies free to drift.
+    const { byName } = mapReady();
+    const listed = await call(byName.list_features_in_view, { query: 42 });
+    expect(listed.error).toBe("query must be a string");
+    expect((await call(byName.find_features, { query: 42 })).error).toBe(listed.error);
+    // Whitespace is not a filter: it would match every name, and an agent that
+    // sent a stray space must not be told the screen is empty.
+    expect(idsOf((await call(byName.list_features_in_view, { query: "   " })).features)).toEqual(
+      IN_VIEW_IDS_BY_DISTANCE,
+    );
   });
 });
 

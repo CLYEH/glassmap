@@ -37,6 +37,22 @@ export function callCountLabel(count: number): string {
   return `${count} ${count === 1 ? "call" : "calls"}`;
 }
 
+/**
+ * May the feed's "live" ring animate?
+ *
+ * Only over calls this page recorded itself. The rule used to be phrased the
+ * other way round — hold the ring still when the page was *restored from a
+ * link* — and that was true of the only agent-chrome page that could exist
+ * without a call. Since the chrome can also be opened by hand (T-93), a virgin
+ * map can wear the feed with nothing behind it, and an animated "live" light
+ * over it would be the smallest possible lie told to the person who asked to
+ * look. Written as "live requires a call", it covers both, and it will cover
+ * whatever third way of reaching this chrome comes next.
+ */
+export function feedIsLive(calls: number): boolean {
+  return calls > 0;
+}
+
 /** One rendered line of the feed. `folded` is 1 for an ordinary call. */
 export interface ActivityRow {
   /** The newest entry the row stands for. */

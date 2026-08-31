@@ -402,10 +402,11 @@ export function playAwakening({
     }
     write(ink, cast.tickerCount, { opacity: ph.type >= 1 ? "1" : "0" });
 
-    // The sheet rises, and the bottom band rides its top edge: legend,
-    // attribution, badge and dock start at the foot of the screen (the band is
-    // `fixed` while the story runs) and end exactly where the awake rule puts
-    // them — `bottom: 12px` inside a container that is already 46vh short.
+    // The sheet rises, and the bottom band rides its top edge: loaded
+    // categories, attribution, badge and dock start at the foot of the screen
+    // (the band is `fixed` while the story runs) and end exactly where the awake
+    // rule puts them — `bottom: 12px` inside a container that is already 46vh
+    // short.
     write(ink, cast.laneEl, {
       // Opaque from the first frame, unlike the desktop pane: this one rises
       // from under the screen, so it has nothing to fade in over — and the

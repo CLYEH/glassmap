@@ -27,7 +27,7 @@ import {
   type MapView,
 } from "@/lib/store/map-store";
 import type { Geometry } from "geojson";
-import { round5 } from "@/lib/map-tools/state";
+import { round5, SELECTION_ID_LIMIT } from "@/lib/map-tools/state";
 import { positionsOf } from "../drawing-style";
 
 /**
@@ -42,10 +42,13 @@ export type FxName =
   | "find_features"
   | "select_features"
   | "draw_shape"
+  | "plan_route"
   | "annotate"
+  | "remove_from_map"
   | "describe_surroundings"
   | "compare_areas"
   | "measure"
+  | "get_place_details"
   | "get_share_link"
   | "human_draw"
   | "human_note"
@@ -55,6 +58,15 @@ export type FxName =
 export type FxShape =
   | { type: "circle"; at: LngLat; radius_m: number }
   | { type: "path"; positions: LngLat[]; closed: boolean };
+
+/**
+ * A mark's outline as a screen-projectable ring or line — one position for a
+ * note or a feature anchor, several for a shape.
+ */
+export interface FxOutline {
+  positions: LngLat[];
+  closed: boolean;
+}
 
 /**
  * What an effect is allowed to draw. `none` is the degraded form every
@@ -69,11 +81,20 @@ export type FxGeom =
   | { kind: "find"; shape: FxShape | null; hits: LngLat[] }
   | { kind: "select"; points: LngLat[] }
   | { kind: "path"; positions: LngLat[]; closed: boolean }
+  /**
+   * A walking route: the street-following line the service returned, plus the
+   * two places it runs between. Never closed — a route has a start and an end,
+   * and that is the half of its meaning a bare path cannot carry.
+   */
+  | { kind: "route"; positions: LngLat[]; from: LngLat; to: LngLat }
   | { kind: "measure"; positions: LngLat[]; closed: boolean }
   | { kind: "pin"; at: LngLat; id: string }
+  /** One place, being read: `get_place_details` looked this feature up. */
+  | { kind: "place"; at: LngLat }
   | { kind: "compass"; at: LngLat; radius_m: number }
   | { kind: "twin"; a: LngLat; b: LngLat; radius_m: number }
-  | { kind: "vanish"; positions: LngLat[]; closed: boolean };
+  /** One ghost per mark that left the map: the human's ✕, or `remove_from_map`. */
+  | { kind: "dissolve"; shapes: FxOutline[] };
 
 export interface FxPlan {
   name: FxName;
@@ -114,6 +135,16 @@ export interface FxSource {
   selection: readonly string[];
   /** Where a selected id sits, or null when nothing has loaded it yet. */
   anchorOf(id: string): LngLat | null;
+  /**
+   * The outline a mark had when it left the map, or null.
+   *
+   * The one thing here that is not in the store, and cannot be: a removal's
+   * feed row is written *after* the mark is gone, so by the time this layer
+   * reads the store the shape it has to dissolve is not in it. `ghosts.ts`
+   * keeps that outline for exactly one store write, which is the same trick
+   * the human ✕ plays by carrying the geometry in its own event.
+   */
+  ghostOf(id: string): FxOutline | null;
 }
 
 /**
@@ -132,6 +163,13 @@ export const SELECT_BLOOM_CAP = 30;
  */
 export const FIND_GLINT_CAP = ACTIVITY_FX_HIT_LIMIT;
 
+/**
+ * How many ghosts one removal dissolves. Taken from the cap the tool already
+ * truncates its `removed` list (and so its `refIds`) at, so the two can never
+ * disagree about how much of a batch the map is showing.
+ */
+export const DISSOLVE_CAP = SELECTION_ID_LIMIT;
+
 /** Preemption key for a place. Rounded, so the same place is the same key across tools. */
 export const originKey = ([lng, lat]: LngLat): string =>
   `origin:${round5(lng)},${round5(lat)}`;
@@ -144,8 +182,8 @@ export function centroidOf(geometry: Geometry): LngLat | null {
   return [sum[0] / positions.length, sum[1] / positions.length];
 }
 
-/** A drawing's outline as a screen-projectable ring/line. */
-function pathOf(drawing: Drawing): { positions: LngLat[]; closed: boolean } | null {
+/** A drawing's outline. Exported for `ghosts.ts`, which takes one before it is lost. */
+export function outlineOf(drawing: Drawing): FxOutline | null {
   const positions = positionsOf(drawing.geometry).map(([lng, lat]): LngLat => [lng, lat]);
   if (positions.length < 2) return null;
   return { positions, closed: drawing.kind !== "line" };
@@ -263,7 +301,7 @@ export function planForEntry(entry: FxEntry, source: FxSource): FxPlan | null {
 
     case "draw_shape": {
       const drawing = drawingIn(source, refIds);
-      const path = drawing ? pathOf(drawing) : null;
+      const path = drawing ? outlineOf(drawing) : null;
       return plan(
         "draw_shape",
         drawing ? [drawing.id] : [],
@@ -271,13 +309,73 @@ export function planForEntry(entry: FxEntry, source: FxSource): FxPlan | null {
       );
     }
 
+    case "plan_route": {
+      // The line the service actually returned, and nothing else.
+      //
+      // This is the one write whose geometry the page could plausibly fake: the
+      // row echoes both ends (`fx.origin` / `fx.originB` — the same pair
+      // compare_areas carries), so a straight or bowed line between them is
+      // always available to draw. It would be a lie of exactly the kind the
+      // rest of this file refuses. A walking route IS the streets it follows;
+      // compare_areas' tether bows on purpose because "a smooth bow is as far
+      // from a street-following route as a mark on a map can get" (effects.ts).
+      // So when the drawing is not in the store the map stays calm and the feed
+      // row glows alone — the same degradation every other geometry-less call
+      // gets.
+      const drawing = drawingIn(source, refIds);
+      const path = drawing ? outlineOf(drawing) : null;
+      if (!drawing || !path) {
+        return plan("plan_route", drawing ? [drawing.id] : [], { kind: "none" });
+      }
+      // The two ends as the tool resolved the caller's names, which is the one
+      // thing an agent that typed "Daan Station" cannot check for itself. They
+      // are not the same points as the line's: the service snaps each end to
+      // the nearest street it knows, so the marks sit on the places asked for
+      // while the line runs where a person would walk. Without the echo the
+      // line's own ends are the honest answer rather than a guess — a simplified
+      // route keeps its first and last point (`map-tools/route.ts`).
+      const ends = path.positions;
+      const from = echoOrigin(fx, "origin") ?? ends[0];
+      const to = echoOrigin(fx, "originB") ?? ends[ends.length - 1];
+      // Keyed on the artifact, like every other write: two routes out of the
+      // same station are two different lines and must coexist, and a
+      // `remove_from_map` that takes this route off cuts its ink short.
+      return plan("plan_route", [drawing.id], { kind: "route", positions: ends, from, to });
+    }
+
     case "measure": {
       const drawing = drawingIn(source, refIds);
-      const path = drawing ? pathOf(drawing) : null;
+      const path = drawing ? outlineOf(drawing) : null;
       return plan(
         "measure",
         drawing ? [drawing.id] : [],
         path ? { kind: "measure", ...path } : { kind: "none" },
+      );
+    }
+
+    case "get_place_details": {
+      // The narrowest read on the map: one question about one place. Its row
+      // states no `fx` at all (`map-tools/activity.ts`), so the anchor comes
+      // from the feature itself, exactly the way a deselected place answers
+      // `remove_from_map`.
+      //
+      // Anchoring rather than echoing is the right way round here, and it is
+      // the one place in this table where that is true. The tool's answer DOES
+      // carry a `coordinate` — an echo could be added — but the store's anchor
+      // is the point the map has already drawn this feature at, so the glint
+      // lands on the mark the human is looking at instead of on a second
+      // opinion about where it is. Every other tool in this file is echoed
+      // because it resolved a *name* the page holds no mark for.
+      //
+      // An id nothing has loaded contributes no point rather than a guessed
+      // one: a glint on the view centre would claim the agent looked somewhere
+      // it never did.
+      const id = refIds?.[0];
+      const at = id ? source.anchorOf(id) : null;
+      return plan(
+        "get_place_details",
+        id ? [id] : [],
+        at ? { kind: "place", at } : { kind: "none" },
       );
     }
 
@@ -291,9 +389,37 @@ export function planForEntry(entry: FxEntry, source: FxSource): FxPlan | null {
       );
     }
 
+    case "remove_from_map": {
+      // The inverse of drawing and pinning, and the one write whose subject is
+      // gone before the row about it exists: a removed shape or note is out of
+      // the store by now, so its outline comes from the ghost it left, while a
+      // feature that only left the *highlight* is still loaded and answers from
+      // its own anchor. An id neither can place contributes nothing rather than
+      // a guessed point — the same rule the rest of this table obeys.
+      const ids = refIds ?? [];
+      const shapes: FxOutline[] = [];
+      for (const id of ids.slice(0, DISSOLVE_CAP)) {
+        const ghost = source.ghostOf(id);
+        if (ghost) {
+          shapes.push(ghost);
+          continue;
+        }
+        const at = source.anchorOf(id);
+        if (at) shapes.push({ positions: [at], closed: false });
+      }
+      // Keyed on every id the call took off, placeable or not: a removal is
+      // about those targets, so it must cut short an effect still animating one
+      // of them — the ink of a `draw_shape` on the very shape that just left.
+      return plan(
+        "remove_from_map",
+        [...ids],
+        shapes.length ? { kind: "dissolve", shapes } : { kind: "none" },
+      );
+    }
+
     case "find_features": {
       const drawing = drawingIn(source, refIds);
-      const path = drawing ? pathOf(drawing) : null;
+      const path = drawing ? outlineOf(drawing) : null;
       const origin = echoOrigin(fx, "origin");
       const radius = radiusOf(fx);
       const shape: FxShape | null = path
@@ -351,7 +477,7 @@ export type HumanEvent =
 export function planForHuman(event: HumanEvent): FxPlan | null {
   switch (event.type) {
     case "draw": {
-      const path = pathOf(event.drawing);
+      const path = outlineOf(event.drawing);
       if (!path) return null;
       return { name: "human_draw", keys: [event.drawing.id], geom: { kind: "path", ...path }, seq: null };
     }
@@ -368,7 +494,7 @@ export function planForHuman(event: HumanEvent): FxPlan | null {
       return {
         name: "human_delete",
         keys: [event.id],
-        geom: { kind: "vanish", positions, closed: positions.length > 2 },
+        geom: { kind: "dissolve", shapes: [{ positions, closed: positions.length > 2 }] },
         seq: null,
       };
     }

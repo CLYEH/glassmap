@@ -21,6 +21,7 @@ import { withActivity } from "./activity";
 import {
   boundsIntersect,
   describeFeature,
+  describePlaceDetails,
   featureBounds,
   featureCenter,
   type FeatureOutput,
@@ -66,6 +67,7 @@ import {
   resolveNear,
   validateCategories,
   validateLimit,
+  validateQuery,
   validateRadius,
 } from "./query";
 import {
@@ -75,6 +77,15 @@ import {
   userSelectedIds,
   utf8Bytes,
 } from "./share";
+import { ANNOTATION_PREFIX, DRAWING_PREFIX, knownMarkIds, removeFromMap } from "./remove";
+import {
+  defaultRouteLabel,
+  httpRouteFetch,
+  planWalk,
+  ROUTE_ATTRIBUTION,
+  routeRefusal,
+  type RouteFetch,
+} from "./route";
 
 /** Zoom used when the caller names a place instead of a camera position. */
 export const PLACE_ZOOM = 15;
@@ -108,6 +119,12 @@ export interface DrawShapeInput {
   label?: unknown;
 }
 
+export interface PlanRouteInput {
+  from?: unknown;
+  to?: unknown;
+  label?: unknown;
+}
+
 export interface AnnotateInput {
   at?: unknown;
   note?: unknown;
@@ -131,7 +148,12 @@ export interface MeasureInput {
   target?: unknown;
 }
 
+export interface GetPlaceDetailsInput {
+  id?: unknown;
+}
+
 export interface ListFeaturesInViewInput {
+  query?: unknown;
   categories?: unknown;
   limit?: unknown;
 }
@@ -144,6 +166,10 @@ export interface SelectFeaturesInput {
   radius_m?: unknown;
   categories?: unknown;
   replace?: unknown;
+}
+
+export interface RemoveFromMapInput {
+  ids?: unknown;
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -205,6 +231,15 @@ const categoriesProperty = {
   items: { type: "string", enum: [...FEATURE_CATEGORIES, ...TIER2_CATEGORIES] },
   description: CATEGORIES_DESCRIPTION,
 };
+
+/**
+ * How a name is matched, in the words find_features has always used. Shared
+ * because the matching really is the same code (`queryFeatures`): a schema that
+ * described it twice could describe it differently, and an agent would have to
+ * guess which of the two tools folds case, or a hyphen, or an English name.
+ * What each tool adds after this sentence is only *where* it looks.
+ */
+const QUERY_MATCHING = "Case-insensitive substring of the local or English name.";
 
 const limitProperty = {
   type: "integer",
@@ -304,9 +339,9 @@ function findDrawing(
 ): { drawing: Drawing } | QueryError {
   const drawings = store.getDrawings();
   // Most recent, like map state: past the cap, the oldest ids are the least
-  // likely to be the one the caller meant.
-  const known_ids = drawings.map((d) => d.id).slice(-SELECTION_ID_LIMIT);
-  const known_count = drawings.length;
+  // likely to be the one the caller meant. Shared with remove_from_map, which
+  // answers the same question about the same ids.
+  const { known_ids, known_count } = knownMarkIds(drawings);
   if (typeof value !== "string" || !value.trim()) {
     return { error: `${field} must be a drawing id like "drawing:1"`, known_ids, known_count };
   }
@@ -352,11 +387,8 @@ async function resolveQueryInput(
   const rad = validateRadius(input.radius_m);
   if ("error" in rad) return { error: rad.error };
 
-  let query: string | undefined;
-  if (input.query !== undefined) {
-    if (typeof input.query !== "string") return { error: "query must be a string" };
-    query = input.query.trim() || undefined;
-  }
+  const q = validateQuery(input.query);
+  if ("error" in q) return { error: q.error };
 
   let within: Polygon | MultiPolygon | undefined;
   if (input.within !== undefined) {
@@ -389,7 +421,7 @@ async function resolveQueryInput(
     origin,
     radius_m,
     categories: plan.categories,
-    query,
+    query: q.query,
     within,
     limit: lim.limit,
     disclosure: plan.disclosure,
@@ -433,6 +465,13 @@ export interface MapToolsOptions {
    * defaults to the current page when there is one.
    */
   getBaseUrl?: () => string;
+  /**
+   * How plan_route reaches the routing service, defaulting to the live FOSSGIS
+   * one. Injected for the same reason the store's `tier2FetchJson` is: the unit
+   * suite must be able to serve a route - and a refusal, and a timeout -
+   * without a network.
+   */
+  routeFetch?: RouteFetch;
 }
 
 /**
@@ -447,10 +486,11 @@ function currentBaseUrl(): string {
 
 export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}): GlassMapTool[] {
   const getBaseUrl = opts.getBaseUrl ?? currentBaseUrl;
+  const routeFetch = opts.routeFetch ?? httpRouteFetch;
   const getMapState: GlassMapTool = {
     name: "get_map_state",
     description:
-      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). features_loaded counts everything searchable, including any point-of-interest category fetched this session, which tier2.loaded names once there is one. Use this instead of a screenshot to know what the map shows. The page keeps its agent chrome hidden until an agent acts, so the first call of a session can report a slightly wider corridor than the human then sees - the inspector lane arrives with that call and narrows the same rectangle list_features_in_view tests against - and every call after it reports the narrowed one.",
+      "Read the current map view: camera (center, zoom, bearing, pitch), the visible bounds, how many features are loaded, the selection, and everything drawn or noted on the map by either side. Every count is exact; the lists are capped (selection.ids at 20, drawings.items and annotations.items at the ten most recent each, annotation notes at 80 characters). features_loaded counts everything searchable, including any point-of-interest category fetched this session, which tier2.loaded names once there is one. Use this instead of a screenshot to know what the map shows. The page keeps its agent chrome hidden until an agent acts, and the human can also open or close that chrome by hand at any time - so bounds always describes the rectangle actually on screen right now: narrowed while the inspector lane is up, full-width while the chrome is closed, and the same rectangle list_features_in_view tests against either way.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     // State echoes labels and notes a human may have typed on the page.
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -578,10 +618,17 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
   const listFeaturesInView: GlassMapTool<ListFeaturesInViewInput> = {
     name: "list_features_in_view",
     description:
-      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Called without categories it also returns category_counts - how many of each category are in view - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
+      "List the loaded features whose bounding box overlaps the current view, nearest to the centre of the view first, each with its distance in metres and an 8-point compass direction from that centre, which comes back as origin. The test is a bounding-box overlap, so a large area counts as in view when any part of it is. This is how you describe what is on screen without taking a screenshot. Pass query to search the screen by name - the same match find_features makes, scoped to what is in view, and combining with categories rather than replacing it, so \"which of the cafes on screen is a Louisa?\" is one call. Called without categories it also returns category_counts - how many of each category the answer covers, which is the same set features and total describe, so with a query only the features that matched it are counted - and, when there are point-of-interest categories it has not fetched, unsearched_categories with their city-wide totals.",
     inputSchema: {
       type: "object",
-      properties: { categories: categoriesProperty, limit: limitProperty },
+      properties: {
+        query: {
+          type: "string",
+          description: `${QUERY_MATCHING} Only the features already in view are searched; omit to list every feature in view. Combines with categories instead of replacing it.`,
+        },
+        categories: categoriesProperty,
+        limit: limitProperty,
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -591,6 +638,8 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if ("error" in cats) return { error: cats.error };
       const lim = validateLimit(inp.limit);
       if ("error" in lim) return { error: lim.error };
+      const q = validateQuery(inp.query);
+      if ("error" in q) return { error: q.error };
 
       const bounds = store.getBounds();
       if (!bounds) return { error: "map not ready" };
@@ -605,7 +654,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         const b = featureBounds(f);
         return b ? boundsIntersect(b, bounds) : false;
       });
-      const matched = queryFeatures(visible, { origin, categories: plan.categories });
+      // The same engine find_features uses, on the visible slice: the two tools
+      // must not disagree about whether "matching 森林" includes the station.
+      const matched = queryFeatures(visible, {
+        origin,
+        categories: plan.categories,
+        query: q.query,
+      });
       return {
         ...listOutput(matched, origin, lim.limit),
         // Every distance_m and direction below is measured from here, so the
@@ -615,6 +670,14 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // A per-category tally of what is on screen, so "what am I looking at?"
         // is one call rather than one call per category. Only worth its tokens
         // once there are POI categories to choose between.
+        //
+        // Counted over `matched`, which is the set `total` and `features` above
+        // describe — never over the unfiltered view. A query narrows the tally
+        // with everything else: an answer reading `total: 1` beside
+        // `category_counts: {cafe: 9}` would be one answer making two claims,
+        // and the agent has no third field to tell it which one was about its
+        // question. The unfiltered tally is still one call away — ask without
+        // the query — while a mistaken "9 cafes here" cannot be walked back.
         ...(plan.tier2Available > 0 ? { category_counts: countByCategory(matched) } : {}),
         ...plan.disclosure,
       };
@@ -630,8 +693,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       properties: {
         query: {
           type: "string",
-          description:
-            "Case-insensitive substring of the local or English name. Omit to match every name.",
+          description: `${QUERY_MATCHING} Omit to match every name.`,
         },
         categories: categoriesProperty,
         near: nearProperty,
@@ -949,6 +1011,109 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  const planRoute: GlassMapTool<PlanRouteInput> = {
+    name: "plan_route",
+    description:
+      "Plan a walk between two places and draw it on the map as a line the human can see. Walking only: the route is on foot, and there is no driving, cycling or transit profile here. It comes from the OpenStreetMap-based routing service run by FOSSGIS (routing.openstreetmap.de), which is the one thing on this map fetched at the moment you ask: when it cannot answer, nothing is drawn, the map is unchanged and the answer says so plainly rather than guessing a line. Both ends take the same three forms as anywhere else - a coordinate, a feature id from an earlier call, or a place name. Returns the drawing id, the service's own distance in metres and duration in seconds, both ends as it resolved them, and the new map state. What it leaves behind is an ordinary drawing: measure gives its length and remove_from_map takes it off again. A line has no inside, so find_features({within}) and select_features({within}) cannot be asked what is inside a route - measure it for its length, or draw a circle somewhere along it to ask what is near it. A route with more points than the map can redraw is simplified, and simplified says so; distance_m is always the service's figure for the real walk, not the drawn line's.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: pointProperty(
+          'Where the walk starts: a coordinate, a feature id such as "osm:node:123", or a place name such as "Daan Station". If a name matches several places nothing is drawn and the answer lists the candidates.',
+        ),
+        to: pointProperty("Where the walk ends, in any of the same three forms as from."),
+        label: {
+          type: "string",
+          maxLength: MAX_LABEL_CHARS,
+          description: `Short name shown on the map and in map state (at most ${MAX_LABEL_CHARS} characters). Omit it and the walk is named after the two places, e.g. "walk: 大安 → 台北車站".`,
+        },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+    // The line, its distance and its duration come from a third-party service,
+    // and the state it returns carries labels the human typed.
+    annotations: { untrustedContentHint: true },
+    execute: async (input, opts) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      // The only tool whose window is seconds wide and ends in a write, which
+      // is what makes the caller's signal worth reading here: a client that
+      // gave up must not find a shape on its map that no answer ever mentioned.
+      // Checked twice - before the request, so a cancelled call costs the
+      // service nothing, and again before the drawing, which is the moment the
+      // map would otherwise change behind the client's back. The request in
+      // flight is not itself cancelled: `RouteFetch` takes a url and nothing
+      // else, and widening that contract is a change to every injected fetch
+      // rather than a fix to this one.
+      const cancelled = () => opts?.signal?.aborted === true;
+      const givenUp = () => ({
+        error: routeRefusal("the caller cancelled this call before the route could be drawn"),
+        state: state(),
+      });
+
+      // Everything free happens before the request: one of the service's
+      // seconds must not be spent on a call that was never going to be drawn.
+      const label = validateOptionalText(inp.label, "label", MAX_LABEL_CHARS);
+      if ("error" in label) return { error: label.error, state: state() };
+      if (inp.from === undefined || inp.to === undefined) {
+        return {
+          error: "plan_route needs both from and to: where the walk starts and where it ends",
+          state: state(),
+        };
+      }
+      // Which end failed matters: the agent has to know which of the two names
+      // to ask the human about, exactly as compare_areas says for a and b.
+      const from = resolvePoint(store, inp.from, "from");
+      if ("error" in from) return { ...from, field: "from", state: state() };
+      const to = resolvePoint(store, inp.to, "to");
+      if ("error" in to) return { ...to, field: "to", state: state() };
+      if (from.point[0] === to.point[0] && from.point[1] === to.point[1]) {
+        // A line with no extent is invisible to the human and still counts as a
+        // drawing, so it would report a route nobody can see. Same refusal
+        // draw_shape makes for a shape that encloses nothing.
+        return {
+          error: "from and to are the same point; there is no walk to draw",
+          state: state(),
+        };
+      }
+
+      if (cancelled()) return givenUp();
+      const walk = await planWalk(from.point, to.point, routeFetch);
+      if ("error" in walk) return { error: walk.error, state: state() };
+      // The seconds the service took are the seconds a client had to give up
+      // in, so this is where a phantom drawing would come from.
+      if (cancelled()) return givenUp();
+
+      const text = label.text ?? defaultRouteLabel(from.name, to.name);
+      const drawing = store.addDrawing({
+        source: "agent",
+        kind: "line",
+        label: text,
+        geometry: { type: "LineString", coordinates: walk.coordinates },
+      });
+
+      return {
+        drawing_id: drawing.id,
+        // The label is echoed because it is often not the caller's: a default
+        // built from two names is something only this call knows.
+        label: text,
+        distance_m: walk.distance_m,
+        duration_s: walk.duration_s,
+        points: walk.coordinates.length,
+        // Only when it happened: a line that arrived whole must not carry a
+        // caveat about detail it never lost.
+        ...(walk.simplified ? { simplified: true } : {}),
+        // Where the walk really starts and ends, as the names resolved - the
+        // one thing an agent that typed a name cannot check for itself.
+        from: { lng: from.point[0], lat: from.point[1], ...(from.name ? { name: from.name } : {}) },
+        to: { lng: to.point[0], lat: to.point[1], ...(to.name ? { name: to.name } : {}) },
+        attribution: ROUTE_ATTRIBUTION,
+        state: describeState(store),
+      };
+    },
+  };
+
   const annotate: GlassMapTool<AnnotateInput> = {
     name: "annotate",
     description:
@@ -1000,6 +1165,51 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         ...(icon.text ? { icon: icon.text } : {}),
       });
       return { annotation_id: annotation.id, state: describeState(store) };
+    },
+  };
+
+  const removeFromMapTool: GlassMapTool<RemoveFromMapInput> = {
+    name: "remove_from_map",
+    description:
+      `Take something off the map: a shape or a note an agent put there, or a feature out of the highlighted selection. Ids come in three forms and can be mixed in one call - "${DRAWING_PREFIX}<n>" and "${ANNOTATION_PREFIX}<n>", as map state lists them under drawings and annotations, and the id of a currently selected feature such as "osm:node:123". This never deletes map data. Features and places cannot be removed; naming a selected feature only takes it out of the highlight. Taking a shape or a note off the map is permanent: there is no undo, and the only way back is to draw or pin it again. Shapes and notes the human made themselves - source "user" in map state - are not removed: they come back under refused, and the human takes their own mark off by tapping it on the map and pressing Remove. Everything else in the same call still happens. No per-id problem fails the batch: what could not be removed is accounted for by name under refused (with one refused_reason for all of them), not_selected (a loaded feature that was not highlighted, so there was nothing to take out), unknown_ids, and malformed_ids with one malformed_error saying which forms do work. Returns what was removed and the new map state, so no follow-up read is needed.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_IDS,
+          items: { type: "string" },
+          description: `What to take off the map, in any mix of the three forms: "${DRAWING_PREFIX}<n>" for a shape, "${ANNOTATION_PREFIX}<n>" for a note, or the id of a currently selected feature, which leaves the selection and stays on the map (at most ${MAX_IDS}; repeats count once). There is no "remove everything": an empty array is refused, and clearing the highlight is select_features({ids: []}).`,
+        },
+      },
+      required: ["ids"],
+      additionalProperties: false,
+    },
+    // Echoes the labels and notes it removed, plus map state: human text either way.
+    annotations: { untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      const state = () => describeState(store);
+      if (!Array.isArray(inp.ids) || inp.ids.some((id) => typeof id !== "string")) {
+        return {
+          error: `ids must be an array of id strings, e.g. ["${DRAWING_PREFIX}1"]`,
+          state: state(),
+        };
+      }
+      if (inp.ids.length === 0) {
+        // Silently succeeding on an empty list would let "remove the ones we
+        // talked about" report success having removed nothing.
+        return {
+          error:
+            "ids must name at least one thing to remove; to clear the highlight use select_features({ids: []})",
+          state: state(),
+        };
+      }
+      if (inp.ids.length > MAX_IDS) {
+        return { error: `ids must have at most ${MAX_IDS} entries`, state: state() };
+      }
+      return { ...removeFromMap(store, inp.ids as string[]), state: describeState(store) };
     },
   };
 
@@ -1213,6 +1423,56 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     },
   };
 
+  const getPlaceDetails: GlassMapTool<GetPlaceDetailsInput> = {
+    name: "get_place_details",
+    description:
+      "Everything this map holds about one place, for the questions a list answer is too lean to carry: opening hours, phone, address, website, wheelchair, and whatever its kind of place is tagged with - a hotel's star rating, a car park's fee and capacity, a pharmacy's dispensing, a place of worship's religion and denomination, a hospital's emergency department. Takes one feature id per call, as returned by find_features, list_features_in_view, describe_surroundings or select_features: those answer with a name, a category and a distance for many places, and this answers with one place in full, including its coordinate and every category it is tagged in. Every field comes from OpenStreetMap and exists only where a contributor entered it, so a field that is absent means nobody has recorded it - not that the place has none; say it that way round, and expect most places to carry only some of them. \"wheelchair\" is the OSM tag as tagged (yes, no or limited): report it as what OpenStreetMap says, never as a verified accessibility claim, and tell the human to ring ahead if it matters. Shapes and notes on the map are not places - use measure for a drawing's size and get_map_state for what is drawn or noted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            'The feature id to look up, e.g. "osm:node:123" - one per call, exactly as an earlier answer spelled it. A point-of-interest id only resolves once its category has been loaded, which is what naming that category in find_features or select_features does.',
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    // Every field in the answer is OSM text, including the name.
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: (input) => {
+      const inp = input ?? {};
+      if (typeof inp.id !== "string" || !inp.id.trim()) {
+        return {
+          error:
+            'id is required: one feature id, e.g. "osm:node:123", as returned by find_features',
+        };
+      }
+      const id = inp.id.trim();
+      // A mark id must not fall through to the feature lookup and come back as
+      // "unknown": the thing is right there on the map, and the caller would go
+      // looking for a spelling mistake instead of for the right tool.
+      const mark = id.startsWith(DRAWING_PREFIX)
+        ? "a shape on the map"
+        : id.startsWith(ANNOTATION_PREFIX)
+          ? "a note on the map"
+          : null;
+      if (mark) {
+        return {
+          error: `${id} is ${mark}, not a place: this tool describes loaded features. Use measure for a drawing's length or area, or get_map_state for the shapes and notes themselves.`,
+        };
+      }
+      const feature = store.getFeatures().find((f) => f.properties?.id === id);
+      if (!feature) {
+        return {
+          error: `unknown feature id: no loaded feature has id ${id}. Use find_features to look the place up by name or category and take the id from its answer; a point-of-interest id resolves only once a call has named its category and loaded it.`,
+        };
+      }
+      return describePlaceDetails(feature);
+    },
+  };
+
   const getShareLink: GlassMapTool = {
     name: "get_share_link",
     description:
@@ -1276,8 +1536,25 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // 268 of 8192 bytes (measured in share.test.ts, "the whole
         // vocabulary") - about nine selected features - so an answer blaming
         // them would send the agent to unload data that cannot be the reason.
+        //
+        // The shapes are named by source for the same reason: only the agent's
+        // own drawings can be taken off with remove_from_map, and advice that
+        // said "remove one of the 3 drawings" over three hand-drawn outlines
+        // would send the agent into a refusal loop instead of to the one person
+        // who can act.
+        const mine = drawings.filter((d) => d.source === "agent").length;
+        const theirs = drawings.length - mine;
+        const shapes =
+          "Shapes cost by far the most, and a hand-drawn outline far more than a circle: ";
+        // "one of the 1 drawings" reads as a bug in the map, and this sentence
+        // is the one an agent has to act on.
+        const oneOf = (n: number) => (n === 1 ? "the one drawing" : `one of the ${n} drawings`);
         const advice = drawings.length
-          ? `Shapes cost by far the most, and a hand-drawn outline far more than a circle: remove one of the ${drawings.length} drawings and ask again`
+          ? mine && theirs
+            ? `${shapes}remove ${oneOf(mine)} you made with remove_from_map, or ask the human to tap ${theirs === 1 ? "their one" : `one of their ${theirs}`} and press Remove, then ask again`
+            : mine
+              ? `${shapes}remove ${oneOf(mine)} you made with remove_from_map and ask again`
+              : `${shapes}${theirs === 1 ? "the one drawing was" : `all ${theirs} drawings were`} drawn by hand, so ask the human to tap ${theirs === 1 ? "it" : "one"} on the map and press Remove, then ask again`
           : selection.length > 20
             ? `The selection is what costs here: select fewer than ${selection.length} features and ask again`
             : "Remove some of what is on the map and ask again";
@@ -1317,10 +1594,13 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
     findFeatures as GlassMapTool,
     selectFeatures as GlassMapTool,
     drawShape as GlassMapTool,
+    planRoute as GlassMapTool,
     annotate as GlassMapTool,
+    removeFromMapTool as GlassMapTool,
     describeSurroundings as GlassMapTool,
     compareAreas as GlassMapTool,
     measure as GlassMapTool,
+    getPlaceDetails as GlassMapTool,
     getShareLink,
   ].map((tool) => withActivity(tool, store));
 }

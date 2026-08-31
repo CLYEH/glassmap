@@ -6,10 +6,11 @@ import { AgentWhisper } from "@/components/AgentWhisper";
 import { Attribution } from "@/components/Attribution";
 import { BrandBar } from "@/components/BrandBar";
 import { Inspector } from "@/components/Inspector";
-import { Legend } from "@/components/Legend";
+import { LoadedCategories } from "@/components/LoadedCategories";
 import { MarkerStatus } from "@/components/MarkerStatus";
 import { OnTheMapCard } from "@/components/OnTheMapCard";
 import { PlacesDock } from "@/components/PlacesTray";
+import { SearchBox } from "@/components/SearchBox";
 import { ShareRestoreNotice } from "@/components/ShareRestoreNotice";
 import { ShareStatus } from "@/components/ShareStatus";
 import { StateOverlay } from "@/components/StateOverlay";
@@ -21,6 +22,7 @@ import { FxLayer } from "@/components/fx/FxLayer";
 import { RestoredChip } from "@/components/RestoredChip";
 import { useDevStoreHandle } from "@/components/dev-store-handle";
 import { useAwakenMode } from "@/components/useAwakenMode";
+import { useChromeVisible } from "@/components/useChromeVisible";
 import { useFeatureData } from "@/components/useFeatureData";
 
 // MapLibre needs window/WebGL at import time, so it never runs on the server.
@@ -29,13 +31,14 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
 /**
  * The map is the page, and the page has two states.
  *
- * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the three
- * things they can do (Draw, Note, Share), the Places tray to browse the city
- * with, the legend's scale, the attribution, and one whisper in the corner
- * saying the map is also readable by agents. No feed, no tool roster, no
- * "WebMCP live" badge, no inspector lane — a person who came to look at Taipei
- * is not shown a dashboard about a protocol they did not ask about (BRIEF
- * item 3).
+ * **Human (`html[data-chrome="idle"]`).** What a visitor gets: the brand, the
+ * search box under it, the three things they can do (Draw, Note, Share), the
+ * Places dock — the map's scale on
+ * its pill, the key and the browsable city inside it — the attribution, and one
+ * whisper in the corner saying the map is also readable by agents. No feed, no
+ * tool roster, no "WebMCP live" badge, no inspector lane — a person who came to
+ * look at Taipei is not shown a dashboard about a protocol they did not ask
+ * about (BRIEF item 3).
  *
  * **Agent (`html[data-chrome="awake"]`).** The moment an agent acts — the first
  * `activity` row, or a restored link that carries agent work — the agent chrome
@@ -51,6 +54,14 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), { ssr: false }
  * toast says out loud what happened (`components/awaken/`). The panels mount
  * for `waking` because the story needs something to move; the human surfaces
  * stay until `awake` because the story is made of them leaving.
+ *
+ * **The hand (`html[data-panel]`).** Both states can also be asked for: the
+ * spark's card opens the agent chrome on a page no agent has touched, and the
+ * inspector's header closes it over one that is being worked on (T-93,
+ * `components/panel-store.ts`). It is a second fact composed with the mode
+ * rather than a fourth mode, so the machine keeps its one-way life: a manual
+ * open does not spend the Awakening, a manual close is not undone by the
+ * agent's next call, and the panel lets go the instant `waking` begins.
  *
  * `useAwakenController` mounts the one controller this document may have, and
  * it is mounted *here*, in the page, rather than inside `AwakenStage`: React
@@ -83,10 +94,20 @@ export default function Home() {
   useDevStoreHandle();
   useAwakenController();
   const mode = useAwakenMode();
-  /** Is the agent chrome on screen at all — arriving counts. */
-  const agent = mode !== "idle";
-  /** Are the human-only surfaces still there — they leave *during* the story. */
-  const human = mode !== "awake";
+  /**
+   * Is the agent chrome on screen at all — arriving counts, and a hand counts
+   * for more than the machine (`useChromeVisible`, T-93). Everything the lane
+   * displaces reads this same answer, `MapCanvas` included: the corridor
+   * `bounds` describes is the one the panels below actually leave.
+   */
+  const agent = useChromeVisible();
+  /**
+   * Are the human-only surfaces still there — they leave *during* the story,
+   * and they come back when the chrome is closed by hand over an agent's work.
+   * That second clause is what keeps the spark on screen as the one-tap way
+   * back in; without it a manual close would be a one-way door.
+   */
+  const human = mode !== "awake" || !agent;
 
   return (
     <main data-testid="map-page" className="app">
@@ -113,6 +134,11 @@ export default function Home() {
         <div className="scrim-bottom" aria-hidden />
 
         <BrandBar />
+        {/* Under the brand in both chromes: "where is X", answered from the
+            loaded data with no agent in the room (T-98). Mounted before the
+            feed and the ticker because it is the fixed point of that column —
+            they arrive below it, and it never moves for them. */}
+        <SearchBox />
         <RestoredChip />
         {agent ? <ActivityFeed /> : null}
         {agent ? <ActivityTicker /> : null}
@@ -121,7 +147,13 @@ export default function Home() {
         <PlacesDock />
 
         <div className="bottom-bar">
-          <Legend />
+          {/* Loaded-but-unpainted categories, in the corner the legend used to
+              hold. It has to be readable without opening anything: it exists
+              because a tool can add thousands of searchable places and change
+              nothing on screen, and a disclosure a person must go looking for
+              does not close that gap. The key it is the counterpart of now
+              lives one surface over, in the Places tray. */}
+          <LoadedCategories />
           <div className="corner">
             {/* Both are about the link rather than about the map, so they share
                 the corner above the attribution: one says the map has outgrown

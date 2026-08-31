@@ -10,7 +10,6 @@ import {
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
-import { bootMode } from "@/lib/awaken";
 import { FEATURE_CATEGORIES, type GlassMapFeature } from "@/lib/data/schema";
 import type { MapFeature } from "@/lib/store/tier2";
 import {
@@ -43,6 +42,7 @@ import {
 import { useBrowseStore } from "./browse-store";
 import { useDrawStore, type DrawMode } from "./draw-store";
 import { setFxMap } from "./fx/map-handle";
+import { readChromeVisible, subscribeChromeVisible } from "./panel-store";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
@@ -121,20 +121,28 @@ function applyFeatures(map: MapLibreMap, features: readonly GlassMapFeature[]) {
  * shortened instead of overlaid.
  *
  * Zero in human chrome as well, and for the plainest possible reason: there is
- * no inspector there (`page.tsx` mounts it only once an agent is here), so the
- * whole canvas is the corridor. Read from the store rather than from the DOM
- * because it is the store's answer the chrome is rendered from — the same
- * `bootMode` the page and the awakening use — and a padding measured off a
- * class name would be one render behind whichever of the two moved first.
+ * no inspector there, so the whole canvas is the corridor.
+ *
+ * **It reads exactly the fact that mounts `<Inspector/>`** — `chromeVisible`,
+ * the composition of the awakening's mode and the human's own toggle
+ * (`panel-store.ts`), which `page.tsx` renders from. It used to read
+ * `bootMode(mapStore)`, i.e. "has an agent ever acted", and the two agreed only
+ * for as long as an agent's call was the only thing that could raise the lane.
+ * Since T-93 a person can open the chrome on a virgin page and close it over an
+ * agent's work, and either flip would have left `get_map_state().bounds`
+ * describing a corridor that is not on screen — silently, and self-consistently
+ * enough that `midLng === center.lng` would still have held. One fact, one
+ * answer, is the only version of this that cannot lie.
  *
  * This is the single source of truth for the corridor: `applyPadding` puts the
  * camera centre in it and `pushViewFromMap` publishes its edges as `bounds`,
  * so the two can never describe different rectangles. It does not follow the
  * Hide button, because hiding only empties the panel's body — the glass sheet
- * still covers the lane, so the map under it is still not visible.
+ * still covers the lane, so the map under it is still not visible. Closing the
+ * agent view does move it, because that takes the sheet away entirely.
  */
 function inspectorLane(): number {
-  if (bootMode(useMapStore.getState()) === "idle") return 0;
+  if (!readChromeVisible()) return 0;
   if (window.matchMedia("(max-width: 920px)").matches) return 0;
   const value = getComputedStyle(document.documentElement).getPropertyValue("--lane");
   return Number.parseFloat(value) || 0;
@@ -248,15 +256,19 @@ export default function MapCanvas() {
       };
       pushBounds();
       const unsubscribe = store.subscribe((state, previous) => {
-        // The chrome flipping is a corridor change like any other: the
-        // inspector lane appears with the agent, and the rectangle a tool is
-        // told about has to shrink with it.
-        if (state.view !== previous.view || bootMode(state) !== bootMode(previous)) pushBounds();
+        if (state.view !== previous.view) pushBounds();
       });
+      // The chrome coming or going is a corridor change like any other: the
+      // inspector lane arrives with the agent — or with a person asking to see
+      // what one sees — and the rectangle a tool is told about has to shrink
+      // with it. Watched through the derived fact, so a manual toggle (which
+      // writes nothing at all to the map store) moves `bounds` too.
+      const unsubscribeChrome = subscribeChromeVisible(pushBounds);
       window.addEventListener("resize", pushBounds);
       return () => {
         window.removeEventListener("resize", pushBounds);
         unsubscribe();
+        unsubscribeChrome();
       };
     };
 
@@ -505,14 +517,18 @@ export default function MapCanvas() {
     };
 
     /**
-     * The browse layer: one category, painted because a human asked to look
-     * around in it. Selected places are left out — they are already beads, and
-     * a place carrying both marks would be counted twice.
+     * The browse layer: up to three categories, painted because a human asked
+     * to look around in them. Selected places are left out — they are already
+     * beads, and a place carrying both marks would be counted twice.
      */
     const applyBrowse = () => {
       const { tier2Features, selection } = store.getState();
-      const category = browse.getState().category;
-      setSourceData(map, BROWSE_SOURCE, browsePointsToGeoJson(tier2Features, category, selection));
+      const categories = browse.getState().categories;
+      setSourceData(
+        map,
+        BROWSE_SOURCE,
+        browsePointsToGeoJson(tier2Features, categories, selection),
+      );
     };
 
     /**
@@ -527,11 +543,15 @@ export default function MapCanvas() {
      * in view" has to mean the same rectangle `bounds` reports and the camera
      * is centred in, or the budget would be spent on clusters sitting under
      * the inspector's glass, where nobody can read a numeral.
+     *
+     * One budget over the whole browsed set, however many categories are in
+     * it: twelve numerals is a fact about the screen, not about a category, so
+     * the largest clusters win the ink whichever kind of place they hold.
      */
     let inkThreshold = Number.POSITIVE_INFINITY;
     const applyInkBudget = () => {
       if (!ready) return;
-      const browsing = browse.getState().category !== null;
+      const browsing = browse.getState().categories.length > 0;
       let next = Number.POSITIVE_INFINITY;
       if (browsing) {
         const counts = new Map<number, number>();
@@ -663,7 +683,7 @@ export default function MapCanvas() {
        * A person's tap on a shape, and the other half of the same door: a
        * drawing is a mark somebody made, so it answers "what is this, and
        * whose?" and offers to take itself off the map. `Remove` is
-       * `removeDrawing` — the writer `undo` and the tools use.
+       * `removeDrawing` — the same writer `remove_from_map` uses.
        *
        * A place under the shape answers first. The fill is 18 % opaque, so a
        * bead inside a drawn circle is plainly visible through it, and a tap
@@ -737,15 +757,6 @@ export default function MapCanvas() {
 
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.view !== previous.view && !fromMap) applyView(state.view);
-      // The first tool call dresses the page in agent chrome, and the
-      // inspector lane it brings takes 336px of the map with it. The camera
-      // centre has to move into what is left, and `bounds` has to say so —
-      // otherwise the agent's very next `get_map_state` describes a corridor
-      // that stopped existing on its own first call.
-      if (bootMode(state) !== bootMode(previous)) {
-        applyPadding();
-        pushBoundsFromMap();
-      }
       // Whatever took a place off the map — an agent's `select_features`, a
       // restored link replacing the selection, the card's own Remove — the
       // card about it goes with it. Left open it would offer "Remove" for a
@@ -776,7 +787,7 @@ export default function MapCanvas() {
         applySelectionMarks(state.tier2Features, state.features, state.selection);
         // A place that just became a bead has to stop being a grain, and one
         // that was deselected has to become a grain again.
-        if (browse.getState().category) applyBrowse();
+        if (browse.getState().categories.length > 0) applyBrowse();
       }
       if (state.drawings !== previous.drawings) applyDrawings(map, state.drawings);
     });
@@ -787,11 +798,39 @@ export default function MapCanvas() {
     });
 
     const unsubscribeBrowse = browse.subscribe((state, previous) => {
-      if (!ready || state.category === previous.category) return;
+      // Identity, not contents: the store writes a new array for every add,
+      // eviction and removal, and never mutates the one it holds.
+      if (!ready || state.categories === previous.categories) return;
       applyBrowse();
       // Leaving browse takes the budget with it; entering re-measures on the
       // `idle` the new data causes.
-      if (!state.category) applyInkBudget();
+      if (state.categories.length === 0) applyInkBudget();
+    });
+
+    /**
+     * The corridor moved, because the lane came or went.
+     *
+     * Three causes, one subscription: the first tool call dressing the page in
+     * agent chrome, a person opening that chrome to look at it, and a person
+     * closing it to get their map back. The camera centre has to move into what
+     * is left and `bounds` has to say so — otherwise the agent's very next
+     * `get_map_state` describes a corridor that stopped existing.
+     *
+     * It watches the derived answer rather than the map store, because two of
+     * those three causes never touch the map store at all: the store
+     * transitions the old `bootMode`-diff branch watched are exactly the ones a
+     * manual flip does not make. Watching the answer also keeps the no-ops
+     * silent — the panel letting go at `waking` changes two inputs and no
+     * corridor, so it must not republish anything.
+     *
+     * Published synchronously rather than left to the `moveend`/`idle` the
+     * re-padding causes, because a tool call can read `bounds` back in the same
+     * tick as the flip that changed it. (The ink budget re-measures itself over
+     * the new corridor on that `idle`, which is soon enough for a numeral.)
+     */
+    const unsubscribeChrome = subscribeChromeVisible(() => {
+      applyPadding();
+      pushBoundsFromMap();
     });
 
     // `idle` rather than `moveend`: the budget is a fact about the clusters
@@ -809,6 +848,7 @@ export default function MapCanvas() {
       unsubscribe();
       unsubscribeDraw();
       unsubscribeBrowse();
+      unsubscribeChrome();
       for (const marker of markers.values()) marker.remove();
       markers.clear();
       try {

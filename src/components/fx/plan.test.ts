@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
+import type { ActivityFx, Annotation, Drawing, LngLat, MapView } from "@/lib/store/map-store";
 import { DEFAULT_VIEW } from "@/lib/store/map-store";
 import { describeCall } from "@/lib/map-tools/activity";
+import { IMPERATIVE_TOOLS } from "../tool-roster";
 import {
+  DISSOLVE_CAP,
   keysClash,
   originKey,
   planForEntry,
   planForHuman,
   selectAnchors,
   type FxEntry,
+  type FxOutline,
   type FxSource,
 } from "./plan";
 
@@ -32,6 +35,32 @@ const CIRCLE: Drawing = {
   },
 };
 
+/**
+ * What `plan_route` leaves behind: an ordinary line drawing whose points are
+ * the streets the service routed along. Its ends are deliberately NOT the two
+ * places below — a router snaps each end to the nearest street it knows.
+ */
+const ROUTE: Drawing = {
+  id: "drawing:route",
+  source: "agent",
+  kind: "line",
+  label: "walk: 大安站 → 大安森林公園",
+  geometry: {
+    type: "LineString",
+    coordinates: [
+      [121.54355, 25.03335],
+      [121.54021, 25.03312],
+      [121.53615, 25.03051],
+    ],
+  },
+};
+
+/** The two places the caller named, as the tool resolved them. */
+const WALK_ENDS: ActivityFx = {
+  origin: [121.5436, 25.0334],
+  originB: [121.53609, 25.03045],
+};
+
 const NOTE: Annotation = {
   id: "annotation:1",
   source: "agent",
@@ -51,6 +80,8 @@ function source(patch: Partial<FxSource> = {}): FxSource {
     annotations: [NOTE],
     selection: [],
     anchorOf: (id) => anchors.get(id) ?? null,
+    // Nothing has left this map: a test that wants a ghost says so.
+    ghostOf: () => null,
     ...patch,
   };
 }
@@ -61,28 +92,26 @@ const entry = (patch: Partial<FxEntry> & { tool: string }): FxEntry => ({
   ...patch,
 });
 
+/**
+ * Tools that are deliberately silent on the map. Empty, and it staying empty is
+ * the point: the README promises that every tool call renders a brief effect,
+ * so leaving one out has to be a decision written down here rather than a case
+ * somebody forgot to add to `planForEntry`.
+ */
+const WITHOUT_EFFECT: readonly string[] = [];
+
 describe("the tool → effect registry", () => {
   it("gives every imperative tool an effect, and names it after the tool", () => {
-    // The feed row, the spec, the mockup and `data-fx-name` all say the tool's
-    // name; a second vocabulary here would make a frame unreadable against
-    // shots-v3.
-    const tools = [
-      "get_map_state",
-      "set_map_view",
-      "list_features_in_view",
-      "find_features",
-      "select_features",
-      "draw_shape",
-      "annotate",
-      "describe_surroundings",
-      "compare_areas",
-      "measure",
-      "get_share_link",
-    ];
-    for (const tool of tools) {
-      const plan = planForEntry(entry({ tool, refIds: ["drawing:1"] }), source());
-      expect(plan?.name, tool).toBe(tool);
-    }
+    // Derived from the roster the landing screen prints — which
+    // `tool-roster.test.ts` holds equal to the tools actually registered — so a
+    // fourteenth tool cannot ship drawing nothing. The feed row, the spec, the
+    // mockup and `data-fx-name` all say the tool's name; a second vocabulary
+    // here would make a frame unreadable against shots-v3.
+    const expected = IMPERATIVE_TOOLS.filter((tool) => !WITHOUT_EFFECT.includes(tool));
+    const planned = expected.map(
+      (tool) => planForEntry(entry({ tool, refIds: ["drawing:1"] }), source())?.name ?? null,
+    );
+    expect(planned).toEqual([...expected]);
   });
 
   it("plays the pin drop for an agent-submitted add_note form", () => {
@@ -313,8 +342,230 @@ describe("the human trio", () => {
     expect(plan).toMatchObject({
       name: "human_delete",
       keys: ["annotation:1"],
-      geom: { kind: "vanish", positions: [[121.54, 25.03]], closed: false },
+      geom: { kind: "dissolve", shapes: [{ positions: [[121.54, 25.03]], closed: false }] },
     });
+  });
+});
+
+/**
+ * The removal effect, which is the one write whose subject is already gone when
+ * its row arrives. Everything here is about where the geometry comes from: get
+ * that wrong and the tool the page just gained is the only one that animates
+ * nothing.
+ */
+describe("remove_from_map", () => {
+  const ghost: FxOutline = { positions: [[121.55, 25.0334], [121.5436, 25.04]], closed: true };
+
+  it("dissolves a removed shape from the ghost it left, not from the store", () => {
+    // By the time the feed row exists, `drawings` no longer holds the shape —
+    // the same situation the human ✕ is in, answered the same way.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1"] }),
+      source({ drawings: [], ghostOf: (id) => (id === "drawing:1" ? ghost : null) }),
+    );
+    expect(plan).toMatchObject({ name: "remove_from_map", keys: ["drawing:1"] });
+    expect(plan?.geom).toEqual({ kind: "dissolve", shapes: [ghost] });
+  });
+
+  it("fades a deselected place at its own anchor, which is still loaded", () => {
+    // Deselecting takes a feature out of the highlight, not off the map: it has
+    // no ghost, and its position is exactly where it still sits.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(plan?.geom).toEqual({
+      kind: "dissolve",
+      shapes: [{ positions: [[121.6, 25.05]], closed: false }],
+    });
+  });
+
+  it("dissolves a mixed batch together, and skips only what it cannot place", () => {
+    // One call can take a shape, a note and a highlight off at once. An id
+    // neither the ghost memory nor the feature index knows contributes nothing
+    // — never a guessed point, the rule the whole table obeys.
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1", "osm:node:1", "gone:9"] }),
+      source({ drawings: [], ghostOf: (id) => (id === "drawing:1" ? ghost : null) }),
+    );
+    expect(plan?.geom).toEqual({
+      kind: "dissolve",
+      shapes: [ghost, { positions: [[121.6, 25.05]], closed: false }],
+    });
+  });
+
+  it("degrades to a feed-row glow when it can place nothing at all", () => {
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:9"] }),
+      source({ drawings: [] }),
+    );
+    expect(plan).toMatchObject({ name: "remove_from_map", geom: { kind: "none" } });
+  });
+
+  it("keys on every id it took off, so the ink still drawing that shape stops", () => {
+    // A `draw_shape` effect animating a shape the next call removes would keep
+    // inking a thing that is no longer on the map.
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:1", "gone:9"] }),
+      source({ drawings: [], ghostOf: () => ghost }),
+    );
+    const drawing = planForEntry(
+      entry({ tool: "draw_shape", refIds: ["drawing:1"] }),
+      source(),
+    );
+    expect(removal?.keys).toEqual(["drawing:1", "gone:9"]);
+    expect(keysClash(removal!.keys, drawing!.keys)).toBe(true);
+  });
+
+  it("stops at the cap the tool's own answer is truncated to", () => {
+    const ids = Array.from({ length: DISSOLVE_CAP + 5 }, (_, i) => `drawing:${i}`);
+    const plan = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ids }),
+      source({ drawings: [], ghostOf: () => ghost }),
+    );
+    expect(plan?.geom).toMatchObject({ kind: "dissolve" });
+    expect(plan?.geom.kind === "dissolve" && plan.geom.shapes.length).toBe(DISSOLVE_CAP);
+  });
+});
+
+/**
+ * The route effect, which is the only one whose geometry the page could fake
+ * convincingly: the row states both ends, so a straight line between them is
+ * always available. Every case here is about refusing to draw one.
+ */
+describe("plan_route", () => {
+  const walked = (patch: Partial<FxEntry> = {}) =>
+    entry({ tool: "plan_route", refIds: ["drawing:route"], fx: WALK_ENDS, ...patch });
+
+  it("draws the line the service returned, not a line between the two ends", () => {
+    // The streets ARE the answer. A walking route rendered as the chord between
+    // its endpoints would claim a path that does not exist — and the shape it
+    // would take is the one `compare_areas` bows on purpose *because* a bow is
+    // as far from a street-following route as a mark on a map can get.
+    const plan = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    expect(plan).toMatchObject({ name: "plan_route", keys: ["drawing:route"] });
+    expect(plan?.geom).toEqual({
+      kind: "route",
+      positions: [
+        [121.54355, 25.03335],
+        [121.54021, 25.03312],
+        [121.53615, 25.03051],
+      ],
+      // The places the caller named, which is not where the line starts and
+      // ends: the service snapped each one to the nearest street first.
+      from: [121.5436, 25.0334],
+      to: [121.53609, 25.03045],
+    });
+  });
+
+  it("falls back to the line's own ends when the row states none", () => {
+    // Not a guess: a route is simplified with its first and last point kept
+    // (`map-tools/route.ts`), so the drawn line begins and ends where the walk
+    // does. It is a poorer answer than the echo — it marks the street, not the
+    // place — and it is still a true one.
+    const plan = planForEntry(walked({ fx: undefined }), source({ drawings: [ROUTE] }));
+    expect(plan?.geom).toMatchObject({
+      from: [121.54355, 25.03335],
+      to: [121.53615, 25.03051],
+    });
+  });
+
+  it("degrades to a feed-row glow when the line is not in the store", () => {
+    // The one case that matters: both ends are right there in the row, and the
+    // answer is still nothing. Drawing them joined would put a walking route on
+    // the map that no router ever planned.
+    const plan = planForEntry(walked(), source({ drawings: [] }));
+    expect(plan).toMatchObject({ name: "plan_route", geom: { kind: "none" } });
+  });
+
+  it("keys on the line it made, so two walks from one place coexist", () => {
+    // A write's target is the artifact it made, exactly as for `draw_shape` —
+    // not the places it names. Keying on the origins would make a second walk
+    // out of the same station cut the first one's ink short, and both lines are
+    // on the map.
+    const first = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    const second = planForEntry(
+      walked({
+        refIds: ["drawing:route2"],
+        fx: { origin: WALK_ENDS.origin, originB: [121.6, 25.05] },
+      }),
+      source({ drawings: [ROUTE, { ...ROUTE, id: "drawing:route2" }] }),
+    );
+    expect(second?.keys).toEqual(["drawing:route2"]);
+    expect(keysClash(first!.keys, second!.keys)).toBe(false);
+  });
+
+  it("lets a removal of that route cut its ink short", () => {
+    // The inverse of the rule above: the ink is drawing a line that has just
+    // left the map, and must stop.
+    const drawn = planForEntry(walked(), source({ drawings: [ROUTE] }));
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["drawing:route"] }),
+      source({ drawings: [], ghostOf: () => ({ positions: [[121.5, 25]], closed: false }) }),
+    );
+    expect(keysClash(drawn!.keys, removal!.keys)).toBe(true);
+  });
+});
+
+/**
+ * The lookup effect, which is the only read whose geometry comes from the
+ * store rather than from an echo: `get_place_details` is handed an id, so its
+ * row states `refIds` and no `fx` at all (`map-tools/activity.ts`). Everything
+ * here is about that one substitution being made honestly.
+ */
+describe("get_place_details", () => {
+  it("glints the place at the anchor the map already drew it on", () => {
+    // The row names an id and nothing else. The point comes from the loaded
+    // feature — the same anchor the selection halo uses — so the glint lands on
+    // the mark under the human's eyes rather than on a second opinion about
+    // where that place is.
+    const plan = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(plan).toMatchObject({ name: "get_place_details", keys: ["osm:node:1"] });
+    expect(plan?.geom).toEqual({ kind: "place", at: [121.6, 25.05] });
+  });
+
+  it("degrades to a feed-row glow for an id this page has not loaded", () => {
+    // An agent may look up an id it got from a share link before that link's
+    // category has arrived. Glinting the view centre would say the agent read a
+    // place that is not there; the row still lights, and the map stays calm.
+    const plan = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:9999"] }),
+      source(),
+    );
+    expect(plan).toMatchObject({ name: "get_place_details", geom: { kind: "none" } });
+  });
+
+  it("never leaves itself keyless, so a re-asked lookup preempts the first", () => {
+    const bare = planForEntry(entry({ tool: "get_place_details" }), source());
+    expect(bare?.keys).toEqual(["tool:get_place_details"]);
+    expect(bare?.geom.kind).toBe("none");
+  });
+
+  it("keys on the place, so removing it cuts the glint short", () => {
+    // The read is about that feature. A `remove_from_map` that takes it out of
+    // the highlight while the glint is still lit must stop it — the same rule
+    // that stops `draw_shape`'s ink over a shape that just left.
+    const lookup = planForEntry(
+      entry({ tool: "get_place_details", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    const removal = planForEntry(
+      entry({ tool: "remove_from_map", refIds: ["osm:node:1"] }),
+      source(),
+    );
+    expect(keysClash(lookup!.keys, removal!.keys)).toBe(true);
+  });
+
+  it("does not clash with a lookup of a different place", () => {
+    // Two questions about two places are two independent reads and coexist,
+    // exactly as two draws on two shapes do. Keying by effect name would have
+    // made the second one erase the first.
+    const one = planForEntry(entry({ tool: "get_place_details", refIds: ["osm:node:1"] }), source());
+    const two = planForEntry(entry({ tool: "get_place_details", refIds: ["osm:node:2"] }), source());
+    expect(keysClash(one!.keys, two!.keys)).toBe(false);
   });
 });
 
@@ -379,6 +630,36 @@ describe("against the real tool-layer echo", () => {
     });
   });
 
+  it("runs plan_route's ink along the drawing, between the ends it resolved", () => {
+    // The row the real summariser writes carries the drawing in `refIds` and
+    // the two ends in `fx` — this is the assertion that the effect reads both,
+    // and the reason the tool layer echoes a second origin for a tool that
+    // draws its own geometry.
+    const entry = entryFor(
+      "plan_route",
+      { from: "Daan Station", to: "Daan Forest Park" },
+      {
+        drawing_id: "drawing:route",
+        label: "walk: 大安站 → 大安森林公園",
+        distance_m: 1240,
+        duration_s: 921,
+        points: 3,
+        from: { lng: 121.5436, lat: 25.0334, name: "大安站" },
+        to: { lng: 121.53609, lat: 25.03045, name: "大安森林公園" },
+      },
+    );
+    expect(planForEntry(entry, source({ drawings: [ROUTE] }))?.geom).toMatchObject({
+      kind: "route",
+      from: [121.5436, 25.0334],
+      to: [121.53609, 25.03045],
+      positions: [
+        [121.54355, 25.03335],
+        [121.54021, 25.03312],
+        [121.53615, 25.03051],
+      ],
+    });
+  });
+
   it("glints find_features' own returned page, nearest to the origin first", () => {
     const entry = entryFor(
       "find_features",
@@ -421,6 +702,31 @@ describe("against the real tool-layer echo", () => {
       shape: null,
       hits: [[121.6, 25.05]],
     });
+  });
+
+  it("lights get_place_details from the id the real row carries, not from an echo", () => {
+    // The tool answers with a `coordinate`, and the summariser deliberately does
+    // not echo it: the row states the id, and the map resolves it. This is the
+    // assertion that the two halves agree about that — a summariser that
+    // stopped writing `refIds` would leave the fourteenth tool as the one call
+    // that animates nothing, and no other test in the repo would notice.
+    const entry = entryFor(
+      "get_place_details",
+      { id: "osm:node:1" },
+      {
+        id: "osm:node:1",
+        name: "伯朗咖啡館",
+        name_en: "Mr. Brown",
+        category: "cafe",
+        coordinate: { lng: 121.55, lat: 25.04 },
+        wheelchair: "yes",
+      },
+    );
+    expect(entry.refIds).toEqual(["osm:node:1"]);
+    expect(entry.fx).toBeUndefined();
+    // The store's anchor for that id — NOT the coordinate in the answer, which
+    // is the point of anchoring rather than echoing.
+    expect(planForEntry(entry, source())?.geom).toEqual({ kind: "place", at: [121.6, 25.05] });
   });
 
   it("leaves the map calm for the tools whose answers state no point", () => {

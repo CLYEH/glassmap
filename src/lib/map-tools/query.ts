@@ -57,6 +57,22 @@ export function validateCategories(
   return { categories: value as MapCategory[] };
 }
 
+/**
+ * The name filter, or nothing at all. Shared by every tool that takes `query`
+ * for the reason `queryFeatures` itself is shared: "the cafes matching latte"
+ * must be the same words on screen and city-wide, and a caller that sends a
+ * number has to be refused in the same sentence wherever it sent it.
+ *
+ * Whitespace alone is not a filter: it is trimmed away and the search stays
+ * unfiltered, which is what `queryFeatures` makes of it anyway. Settling it
+ * here means the tools and the engine cannot disagree about a stray space.
+ */
+export function validateQuery(value: unknown): { query?: string } | { error: string } {
+  if (value === undefined) return {};
+  if (typeof value !== "string") return { error: "query must be a string" };
+  return { query: value.trim() || undefined };
+}
+
 export function validateRadius(value: unknown): { radius_m?: number } | { error: string } {
   if (value === undefined) return {};
   if (!isNum(value) || value <= 0) return { error: "radius_m must be a positive number of metres" };

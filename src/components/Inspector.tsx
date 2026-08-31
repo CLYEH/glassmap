@@ -8,9 +8,11 @@ import { selectActivity } from "./activity-model";
 import { categorySingular } from "./category-labels";
 import { emitHumanFx } from "./fx/human-events";
 import { CATEGORY_COLOR } from "./map-style";
+import { usePanelStore } from "./panel-store";
 import { selectionClaim, type SelectionClaim } from "./restored-model";
 import { resolveSelection, type SelectedRow } from "./selection-model";
 import { ASK_CARDS, TryAsking } from "./TryAsking";
+import { useAwakenMode } from "./useAwakenMode";
 import { SHEET_TIER, useMediaQuery } from "./useMediaQuery";
 
 /** Who put it there. Teal = agent, rose = human, as on the map itself. */
@@ -165,6 +167,9 @@ export function Inspector() {
   const selectionAttributionExplicit = useMapStore((s) => s.selectionAttributionExplicit);
   const sheet = useMediaQuery(SHEET_TIER);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const mode = useAwakenMode();
+  const closeChrome = usePanelStore((s) => s.close);
+  const activitySeq = useMapStore((s) => s.activitySeq);
 
   const rows = useMemo(
     () => resolveSelection(features, selection, tier2Features),
@@ -226,6 +231,25 @@ export function Inspector() {
         >
           {open ? "Hide" : "Show"}
         </button>
+        {/* The way out, and a different thing from Hide beside it: Hide empties
+            this panel's body and the glass sheet keeps the lane (so the map
+            under it stays covered and `bounds` must not move); this takes the
+            whole agent chrome off the page and gives the map back — the lane,
+            the feed, the corridor and all. The labels have to carry that
+            difference on their own, so one says what it collapses and the other
+            says what it closes. Inert for the length of the story, like the
+            spark's own toggle. */}
+        <button
+          type="button"
+          className="insp-close"
+          data-testid="chrome-close"
+          disabled={mode === "waking"}
+          aria-disabled={mode === "waking"}
+          title="Close the agent view and get the whole map back"
+          onClick={() => closeChrome(activitySeq)}
+        >
+          Close agent view
+        </button>
       </div>
 
       <div id="sidebar-body" className="insp-body" ref={bodyRef} hidden={!open}>
@@ -248,8 +272,19 @@ export function Inspector() {
                   data-category={row.category ?? undefined}
                 >
                   <SelectedDot category={row.category} />
-                  <span className="sel-name" title={row.name}>
-                    {row.name}
+                  <span className="sel-main">
+                    <span className="sel-name" title={row.name}>
+                      {row.name}
+                    </span>
+                    {/* The English name the data carries, under the local one —
+                        the same pair the tap card shows, so the two surfaces
+                        name the same place the same way. Omitted when the data
+                        has none, or when it is the line above (selection-model). */}
+                    {row.nameEn ? (
+                      <span className="sel-name-en" data-testid="sidebar-name-en" title={row.nameEn}>
+                        {row.nameEn}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="sel-cat">
                     {row.category ? categorySingular(row.category) : "not loaded"}

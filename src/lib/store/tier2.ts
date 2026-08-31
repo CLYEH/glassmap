@@ -68,13 +68,61 @@ export function isMapCategory(x: unknown): x is MapCategory {
 }
 
 /**
+ * Every OSM tag a tier-2 feature carries beyond its id, name and category —
+ * plain strings, kept exactly as the generator wrote them
+ * (public/data/README.md, "Enrichment fields (T-97)"). One list, because the
+ * ingestion below, the type above it and `get_place_details` all have to mean
+ * the same set: a field carried by the parser but missing from the type would
+ * be data the page holds and can never say.
+ *
+ * The order is the order `get_place_details` prints them in: what the place
+ * serves, then what it is called by, then when it is open, then how to reach
+ * it, then what its own kind of place is asked about.
+ *
+ * The first seven are extracted for every category. The last seven are
+ * extracted for one category each — `stars` for hotels, `fee` and `capacity`
+ * for parking, `dispensing` for pharmacies, `religion` and `denomination` for
+ * places of worship, `emergency` for hospitals — so a feature carrying one is a
+ * fact about that place, never an artefact of the schema.
+ *
+ * Values are validated exactly as far as "a non-empty string": what the tags
+ * *mean* is decided once, in `scripts/fetch-tier2.mjs`, and re-judging them
+ * here would be a second guard that can drift from the first. `wheelchair` is
+ * the one where that matters most — the generator keeps only `yes`, `no` and
+ * `limited`, and `src/lib/data/tier2.test.ts` holds the shipped files to it —
+ * because a value this layer invented a rule for would turn an OSM tag into an
+ * accessibility claim nobody verified.
+ */
+export const TIER2_TEXT_FIELDS = [
+  "cuisine",
+  "brand",
+  "opening_hours",
+  "address",
+  "phone",
+  "website",
+  "wheelchair",
+  "stars",
+  "fee",
+  "capacity",
+  "dispensing",
+  "religion",
+  "denomination",
+  "emergency",
+] as const;
+
+export type Tier2TextField = (typeof TIER2_TEXT_FIELDS)[number];
+
+/**
  * A feature as the tool layer sees it. Same shape as `GlassMapFeature` with a
- * wider category, plus the three tags a POI answer is actually made of. The
+ * wider category, plus the OSM tags a POI answer is actually made of. The
  * widening is deliberate: `GlassMapFeature` stays the type of the six bundled
  * datasets, so UI code that maps a category to a colour or a legend label keeps
  * its exhaustive check and finds out at compile time when it has to handle POIs.
  */
-export interface MapFeatureProperties extends Omit<GlassMapFeatureProperties, "category"> {
+export interface MapFeatureProperties
+  extends Omit<GlassMapFeatureProperties, "category">,
+    /** Tier-2 only, and only where OSM has them; see `TIER2_TEXT_FIELDS`. */
+    Partial<Record<Tier2TextField, string>> {
   category: MapCategory;
   /**
    * Every category this feature belongs to, sorted, present only when there is
@@ -86,12 +134,6 @@ export interface MapFeatureProperties extends Omit<GlassMapFeatureProperties, "c
    * `category` is always `categories[0]`; see `mergeTier2`.
    */
   categories?: MapCategory[];
-  /** Tier-2 only: OSM `cuisine`, e.g. "vegetarian;taiwanese". */
-  cuisine?: string;
-  /** Tier-2 only: OSM `brand`. */
-  brand?: string;
-  /** Tier-2 only: OSM `opening_hours`, verbatim. */
-  opening_hours?: string;
 }
 
 export type MapFeature = Feature<Geometry, MapFeatureProperties>;
@@ -294,6 +336,11 @@ export function parseManifest(json: unknown, url: string): Tier2ManifestResult {
  * the cafe query answers nothing, which is the one lie this layer must not
  * tell. A POI with no name is kept: a nameless car park is still where you can
  * park, it simply cannot be looked up by name.
+ *
+ * The OSM tags come through by list (`TIER2_TEXT_FIELDS`) rather than one line
+ * per field: a tag the generator writes and this function forgets is data the
+ * human's map holds and the agent can never be told about, and nothing about
+ * that failure is visible — the answer simply looks complete.
  */
 export function parseCategoryFeatures(
   json: unknown,
@@ -320,6 +367,11 @@ export function parseCategoryFeatures(
     // second spelling as well would hide the day the generator stops honouring
     // it — English names would just quietly disappear from every answer.
     const nameEn = str(props.nameEn);
+    const tags: Partial<Record<Tier2TextField, string>> = {};
+    for (const field of TIER2_TEXT_FIELDS) {
+      const value = str(props[field]);
+      if (value) tags[field] = value;
+    }
     features.push({
       type: "Feature",
       geometry: raw.geometry as Geometry,
@@ -329,9 +381,7 @@ export function parseCategoryFeatures(
         ...(nameEn ? { nameEn } : {}),
         category,
         source: "osm",
-        ...(str(props.cuisine) ? { cuisine: props.cuisine as string } : {}),
-        ...(str(props.brand) ? { brand: props.brand as string } : {}),
-        ...(str(props.opening_hours) ? { opening_hours: props.opening_hours as string } : {}),
+        ...tags,
       },
     });
   }
@@ -605,9 +655,10 @@ export function featureCategories(feature: MapFeature): readonly MapCategory[] {
  *
  * Everything about the result is decided by the categories alone, never by
  * which file arrived first: the union is sorted, `category` is its head, and
- * every *other* field — name, nameEn, cuisine, brand, opening_hours, geometry —
- * comes from the file of that same head category. Picking a single winning file
- * rather than merging field by field is what keeps the answer self-consistent:
+ * every *other* field — name, nameEn, geometry and every tag in
+ * `TIER2_TEXT_FIELDS` — comes from the file of that same head category. Picking
+ * a single winning file rather than merging field by field is what keeps the
+ * answer self-consistent:
  * the name an agent reads out and the category it reads out describe the same
  * row of the same file.
  *

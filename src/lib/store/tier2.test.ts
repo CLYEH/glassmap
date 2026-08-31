@@ -37,6 +37,8 @@ import {
   createGatedTier2Fetch,
   createTier2Fetch,
   TIER2_CAFE_COLLECTION,
+  TIER2_ENRICHED_FILES,
+  TIER2_ENRICHED_INDEX,
   TIER2_FILES,
   TIER2_FILES_WITH_BAKERY,
   TIER2_FILES_WITH_DRIFTED_BAKERY,
@@ -277,6 +279,11 @@ describe("tier-2 loader", () => {
     // `nameEn` exactly as the bundled datasets do (public/data/README.md,
     // "Tier-2 categories"). One shape reaches the tools, or every tool that
     // prints a name needs two code paths.
+    //
+    // Every enrichment tag the file carries comes through with it. A tag the
+    // generator writes and this parser drops is data on the human's map that no
+    // answer can ever mention, and nothing about that loss is visible: the
+    // place is still there, still named, simply mute about its own address.
     const { registry, features } = backingFor(createTier2Fetch().fetchJson);
     await registry.loadCategory("cafe");
     expect(features()[0].properties).toEqual({
@@ -287,6 +294,62 @@ describe("tier-2 loader", () => {
       source: "osm",
       brand: "Louisa Coffee",
       opening_hours: "Mo-Su 07:00-22:00",
+      address: "106012臺北市大安區羅斯福路二段83之1號1樓",
+      phone: "+886 2 2362 6229",
+      website: "https://www.louisacoffee.co/",
+      wheelchair: "limited",
+    });
+  });
+
+  it("carries a category's own tags, and keeps every value a plain string", async () => {
+    // Five categories have a tag nobody else has (`stars` here, `fee` and
+    // `capacity` next door). They are carried by the same list as the common
+    // ones, so a category the generator learns a new tag for needs one entry in
+    // TIER2_TEXT_FIELDS and nothing else.
+    const { registry, features } = backingFor(
+      createTier2Fetch(TIER2_ENRICHED_FILES, TIER2_ENRICHED_INDEX).fetchJson,
+    );
+    await registry.loadCategory("hotel");
+    await registry.loadCategory("parking");
+    const byId = Object.fromEntries(features().map((f) => [f.properties.id, f.properties]));
+
+    expect(byId["osm:node:120"]).toMatchObject({ stars: "5", wheelchair: "yes" });
+    expect(byId["osm:node:130"]).toMatchObject({ fee: "yes", capacity: "120" });
+    // A number-looking value stays the string OSM stores: "120" is a tag, not a
+    // count this layer may do arithmetic on.
+    expect(typeof byId["osm:node:130"].capacity).toBe("string");
+  });
+
+  it("drops a tag that is present but empty, rather than answering with a blank", async () => {
+    // Same posture the name and the three original tags have always had: an
+    // empty string in a file is a missing value, and an answer carrying
+    // `phone: ""` would tell an agent this place has a phone number.
+    const blanks = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {
+            id: "osm:node:900",
+            name: "Blank Fields",
+            category: "cafe",
+            address: "   ",
+            phone: "",
+            wheelchair: "yes",
+          },
+          geometry: { type: "Point", coordinates: [121.5, 25.03] },
+        },
+      ],
+    };
+    const parsed = parseCategoryFeatures(blanks, "cafe", "/data/tier2/cafe.geojson");
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.features[0].properties).toEqual({
+      id: "osm:node:900",
+      name: "Blank Fields",
+      category: "cafe",
+      source: "osm",
+      wheelchair: "yes",
     });
   });
 });

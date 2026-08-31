@@ -22,7 +22,7 @@ import {
   type Tier2Category,
 } from "@/lib/store/tier2";
 import { normaliseName } from "./gazetteer";
-import { matchesName } from "./query";
+import { matchesQuery } from "./query";
 
 /**
  * How many features select_features will highlight in one call once a tier-2
@@ -126,7 +126,7 @@ export interface UnloadedMatch {
   category: MapCategory;
   /**
    * How many features matching the query live in that category and are *not*
-   * already in memory. A floor, never a ceiling: naming the category returns
+   * already in memory. A floor, never a ceiling — as long as the index is not older than the files it indexes (one generator run writes both; a partial --only re-export is the way to break that, and validate() is the guard): naming the category returns
    * at least this many (see `unloadedMatches` for the one case where it
    * returns more).
    */
@@ -164,15 +164,19 @@ export interface UnloadedMatchDisclosure {
  *    tells the agent what to ask for next and lets it decide. Fetching 2.5 MB
  *    because someone typed a word would make what is on the map a function of
  *    what was searched for, which is the determinism `store/tier2.ts` protects.
- *  - **Names only, matched by `matchesName`** — the same predicate
- *    `queryFeatures` uses. The index also holds `brand`, `cuisine` and
- *    `address`, and the human-facing search box is free to match them; a *tool*
- *    disclosure must not, because `count` is read as "how many I get if I name
- *    this category", and find_features once loaded matches names and nothing
- *    else. On the shipped index "coffee" is 354 rows by name and 834 once
- *    address and cuisine count — mostly `cuisine=coffee_shop`, which 569 rows
- *    carry citywide. Disclosing the 834 would promise 480 features the
- *    follow-up call then cannot find.
+ *  - **All five fields, matched by `matchesQuery`** — the same predicate
+ *    `queryFeatures` uses, over the same name/nameEn/brand/cuisine/address.
+ *    Until T-102 this counted names only, and the reason was sound at the time:
+ *    `count` is read as "how many I get if I name this category", and the
+ *    loaded search matched names and nothing else, so counting the index's
+ *    other three columns would have promised features the follow-up call could
+ *    not return. On the shipped index "coffee" is 354 rows by name and 834 over
+ *    all five — mostly `cuisine=coffee_shop`. That asymmetry has dissolved
+ *    rather than been overridden: the loaded search now reads the same five
+ *    fields (`matchesQuery`, one function, both call sites), so the 834 is what
+ *    naming those categories actually returns. Widening one side alone would
+ *    have been the lie; widening the predicate is what keeps the count a
+ *    promise.
  *  - **Already-loaded rows do not count.** A row is skipped when *any* of its
  *    categories is in memory, because those matches are already in the answer
  *    above and this field is about what is missing from it. For the handful of
@@ -209,7 +213,7 @@ export async function unloadedMatches(
   const counts = new Map<MapCategory, number>();
   for (const entry of index) {
     if (entry.categories.some((c) => loaded.has(c))) continue;
-    if (!matchesName(entry.name, entry.nameEn, needle)) continue;
+    if (!matchesQuery(entry, needle)) continue;
     // Counted under every category it is filed in, the same rule
     // `countByCategory` uses: naming either one returns this feature.
     for (const category of entry.categories) counts.set(category, (counts.get(category) ?? 0) + 1);

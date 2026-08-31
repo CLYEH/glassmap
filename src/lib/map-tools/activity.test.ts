@@ -338,6 +338,31 @@ describe("summary copy", () => {
     });
   });
 
+  it("set_map_view says it framed, not that it flew, when it was asked to fit", async () => {
+    // The one camera move that can pull back. "Flew to" would read as "went
+    // closer" to the person watching the map widen, which is the opposite of
+    // what happened - and this row is the only account they get of a call they
+    // did not make. The id is the one the caller named, exactly as the
+    // feature_id row echoes the id it was given.
+    const { store, byName } = setup();
+    await call(byName.set_map_view, { fit: "drawing:1" });
+    const row = last(store);
+
+    expect(row.summary).toMatch(/^Framed drawing:1 · z/);
+    expect(row.refIds).toEqual(["drawing:1"]);
+    expect(row.ok).toBe(true);
+    // The point the camera landed on, for the page to draw - read off the
+    // answer like every other row's fx, never derived here.
+    expect(row.fx?.origin).toEqual([121.535, 25.035]);
+  });
+
+  it("frames a feature under the same row, so an area and a drawing read alike", async () => {
+    const { store, byName } = setup();
+    await call(byName.set_map_view, { fit: "district:daan" });
+    expect(last(store)).toMatchObject({ summary: expect.stringMatching(/^Framed district:daan · z/) });
+    expect(last(store).refIds).toEqual(["district:daan"]);
+  });
+
   it("get_share_link reports the link's size and never the link itself", async () => {
     // The URL carries the whole map state; pasting it into a feed row would
     // fill the panel and tell a human nothing they can act on.

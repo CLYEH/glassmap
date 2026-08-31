@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { QUERY_FIELDS } from "@/lib/map-tools/query";
 import type { Bounds, LngLat } from "@/lib/store/map-store";
-import type { SearchIndexStatus } from "@/lib/store/search-index";
+import type { SearchIndexEntry, SearchIndexStatus } from "@/lib/store/search-index";
 import { TIER2_CATEGORIES, type MapCategory, type MapFeature } from "@/lib/store/tier2";
-import type { IndexHit } from "./search-index-model";
+import { searchIndexEntries, type IndexHit } from "./search-index-model";
 import {
   SEARCH_LIMIT,
   composeSearchRows,
@@ -65,32 +66,46 @@ const search = (
  * file.
  */
 describe("searchLoadedFeatures", () => {
-  it("matches all four fields a person might type, in any case", () => {
-    // The whole reason this matcher is not the tools'. A person types the word
-    // in their head; three of these four words are not the place's name.
+  it("matches all five fields a person might type, in any case", () => {
+    // A person types the word in their head, and four of these five words are
+    // not the place's name. Since T-102 they are `QUERY_FIELDS` exactly, so
+    // every one of them is also a word a tool call would have matched.
     const features = [
       place("named", { name: "台北車站", nameEn: "Taipei Main Station", category: "mrt_station" }),
       place("branded", { name: "全家", brand: "FamilyMart", category: "convenience" }),
       place("cooked", { name: "無名小吃", cuisine: "vegetarian;taiwanese", category: "restaurant" }),
+      place("addressed", { name: "小店", address: "臺北市士林區基河路 130 號", category: "cafe" }),
     ];
     expect(search("台北車", { features }).hits.map((h) => h.id)).toEqual(["named"]);
     expect(search("taipei main", { features }).hits.map((h) => h.id)).toEqual(["named"]);
     expect(search("familymart", { features }).hits.map((h) => h.id)).toEqual(["branded"]);
     expect(search("VEGETARIAN", { features }).hits.map((h) => h.id)).toEqual(["cooked"]);
+    expect(search("基河路", { features }).hits.map((h) => h.id)).toEqual(["addressed"]);
   });
 
-  it("finds a place by a word the tools' query would miss", () => {
-    // The divergence, stated as a test rather than only as a comment: a café
-    // whose name says nothing about coffee is still what "coffee" means.
+  it("finds a loaded place by its address, the way a person says where", () => {
+    // The T-102 defect, as a test. This matcher read four fields while the
+    // citywide list beside it read five, so typing a street name found a café
+    // the map had NOT fetched and stayed silent about the one it was holding —
+    // the box contradicting itself, on the same keystroke.
+    const cafe = place("osm:node:1", { name: "路易莎", address: "臺北市中正區忠孝西路一段 47 號" });
+    expect(search("忠孝西路", { tier2Features: [cafe] }).hits.map((h) => h.id)).toEqual([
+      "osm:node:1",
+    ]);
+    // The other four still answer on the same feature, unchanged.
+    expect(search("路易莎", { tier2Features: [cafe] }).total).toBe(1);
+  });
+
+  it("finds a place by the word for what it serves, not only by its name", () => {
+    // A café whose name says nothing about coffee is still what "coffee" means
+    // — and since T-102 `find_features({query: "coffee"})` returns it too.
     const cafe = place("osm:node:1", { name: "路易莎", cuisine: "coffee_shop" });
     expect(search("coffee", { tier2Features: [cafe] }).total).toBe(1);
-    // ...and the name matcher still works on the same feature, unchanged.
-    expect(search("路易莎", { tier2Features: [cafe] }).total).toBe(1);
   });
 
   it("folds spelling the way the tools do, so one map has one answer", () => {
     // `normaliseName` is shared with the gazetteer on purpose: OSM writes
-    // "Da-an Forest Park" and people type "Daan". Only the field set diverges.
+    // "Da-an Forest Park" and people type "Daan".
     const park = place("park", { name: "Da-an Forest Park", category: "park" });
     expect(search("daan forest", { features: [park] }).total).toBe(1);
   });
@@ -231,6 +246,96 @@ describe("searchLoadedFeatures", () => {
       properties: { id: "broken", name: "Match", category: "cafe", source: "osm" },
     } as unknown as MapFeature;
     expect(search("match", { tier2Features: [broken] }).total).toBe(0);
+  });
+});
+
+/**
+ * The two halves of one dropdown.
+ *
+ * They search different things — what the map is holding, and what the city has
+ * — and a person reading the list cannot see the seam between them. So they may
+ * differ in what they *offer* (a loaded row is selectable, a citywide one has to
+ * be fetched first) and must never differ in what they *match*: one word, one
+ * set of columns, whichever side of the line the place happens to be on. Since
+ * T-102 that set is `QUERY_FIELDS` on both, and on the tools as well.
+ */
+describe("the box's two lists read the same columns", () => {
+  /** A word no fixture carries anywhere except in the field under test. */
+  const NEEDLE = "zebra";
+
+  /** The needle in exactly one column; every other column says nothing. */
+  const only = (field: (typeof QUERY_FIELDS)[number], value: string) => {
+    switch (field) {
+      case "name":
+        return { name: value };
+      case "nameEn":
+        return { name: "無名", nameEn: value };
+      case "brand":
+        return { name: "無名", brand: value };
+      case "cuisine":
+        return { name: "無名", cuisine: value };
+      case "address":
+        return { name: "無名", address: value };
+    }
+  };
+
+  const inIndex = (query: string, entries: SearchIndexEntry[]) =>
+    searchIndexEntries({
+      index: entries,
+      query,
+      bounds: VIEW,
+      origin: ORIGIN,
+      loadedCategories: [],
+    });
+
+  // Every shared column, one test each, so a field dropped from either matcher
+  // fails here by name rather than as a mysterious count.
+  for (const field of QUERY_FIELDS) {
+    it(`finds a place matched only by its ${field}, in the loaded list and the citywide one`, () => {
+      const fields = only(field, `${NEEDLE} corner`);
+      const loaded = search(NEEDLE, {
+        tier2Features: [place("osm:node:7", { ...fields, category: "cafe" })],
+      });
+      const citywide = inIndex(NEEDLE, [
+        { id: "osm:node:7", categories: ["cafe"], lng: ORIGIN[0], lat: ORIGIN[1], ...fields },
+      ]);
+      expect(loaded.hits.map((h) => h.id)).toEqual(["osm:node:7"]);
+      expect(citywide.hits.map((h) => h.id)).toEqual(["osm:node:7"]);
+    });
+  }
+
+  it("answers a street name the same way for a place it holds and one it does not", () => {
+    // The two-list disagreement T-102 fixed, in one assertion: the same id, the
+    // same address, the same word — and before the fix only the citywide half
+    // came back, which read to a person as "the map cannot see what it is
+    // already showing me".
+    const address = "臺北市士林區基河路 130 號";
+    const entry: SearchIndexEntry = {
+      id: "osm:node:9",
+      name: "無名",
+      address,
+      categories: ["cafe"],
+      lng: ORIGIN[0],
+      lat: ORIGIN[1],
+    };
+    const loaded = search("基河路", {
+      tier2Features: [place(entry.id, { name: entry.name, address, category: "cafe" })],
+    });
+    const citywide = inIndex("基河路", [entry]);
+    expect(loaded.hits.map((h) => h.id)).toEqual([entry.id]);
+    expect(citywide.hits.map((h) => h.id)).toEqual(loaded.hits.map((h) => h.id));
+    // Which list a place lands in is still a difference, and a deliberate one:
+    // once its category is in memory the citywide half stops offering it, so
+    // the dropdown never shows the same place twice.
+    expect(
+      searchIndexEntries({
+        index: [entry],
+        query: "基河路",
+        bounds: VIEW,
+        origin: ORIGIN,
+        loadedCategories: ["cafe"],
+      }).total,
+    ).toBe(0);
   });
 });
 

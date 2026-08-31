@@ -117,4 +117,53 @@ test.describe("find_features / select_features", () => {
     // own effect independently of this call (see e2e/helpers.ts stableState).
     expect(stableState(after)).toEqual(stableState(before));
   });
+
+  /**
+   * T-102: `query` reads the same five columns (name, English name, brand,
+   * cuisine, address) `matchesQuery` reads everywhere else -- pinned here
+   * against real, loaded tier-2 features through the real registered tool,
+   * the way `src/lib/map-tools/query-fields.test.ts` pins it against a
+   * fixture store. Both examples are chosen, and verified against the
+   * shipped `public/data/tier2/cafe.geojson`, so that the query string is
+   * reachable through the named field and no other on that one feature: a
+   * test that still passed after that field were deleted would be worthless.
+   */
+  test.describe("find_features query matches brand and address, not only name (T-102)", () => {
+    test("a brand-only query finds a loaded feature whose name never says the brand", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await waitForTools(page);
+      await waitForFeatures(page);
+
+      // osm:node:11813554566, name "TR Lounge 臺鐵南港禮賓室" / "TR Lounge
+      // (Nangang)" -- neither name carries "Taiwan Railway"; only `brand`
+      // does. Naming cafe loads it for the whole city, same as any other
+      // point-of-interest search.
+      const TARGET = { id: "osm:node:11813554566", brand: "Taiwan Railway" };
+      const byName = await callTool(page, "find_features", { categories: ["cafe"], query: TARGET.brand });
+      // Sanity: this query really cannot be reached through name/nameEn on
+      // this feature -- a regression here would be the fixture going stale,
+      // not the tool.
+      expect(byName.features!.some((f) => f.id === TARGET.id)).toBe(true);
+    });
+
+    test("an address-only query finds a loaded feature whose name never says the street", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await waitForTools(page);
+      await waitForFeatures(page);
+
+      // osm:node:10001028018, "Cama Cafe 四號公園店" -- the name says nothing
+      // about 中安街; only `address` does, and this exact string is unique to
+      // this one row in the shipped cafe file.
+      const TARGET = { id: "osm:node:10001028018", address: "新北市中和區中安街24號" };
+      const byAddress = await callTool(page, "find_features", {
+        categories: ["cafe"],
+        query: TARGET.address,
+      });
+      expect(byAddress.features!.some((f) => f.id === TARGET.id)).toBe(true);
+    });
+  });
 });

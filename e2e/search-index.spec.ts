@@ -16,24 +16,26 @@
  * lives under `/data/tier2/`, same-origin to the `next dev` server, exactly
  * the guarantee `tier2.spec.ts` already relies on.
  *
- * One number below is measured against the shipped extract rather than
- * derived at runtime, on purpose -- like `FEATURE_COUNT` in `helpers.ts`, it
- * pins this spec to the real data so a regeneration that quietly changes what
- * "starbucks" finds fails a test instead of nothing. `STARBUCKS_CITYWIDE_CAFES`
- * (151) is every index row whose name or English name contains "starbucks" --
- * all of them tagged `cafe`, none of them tagged anything else. It matches
- * both `find_features`' `unloaded_matches` (name/nameEn only) and the human
- * box's own `searchIndexEntries` (which also matches brand/cuisine/address)
- * because for this particular query the two totals happen to coincide: there
- * is no Starbucks row whose *only* matching field is brand, cuisine or
- * address. (The Chinese name reaches one row more -- 152 rows carry 星巴克 or
- * "starbucks" between them -- which is why the data README words that count as
- * a union rather than as one query's answer.)
+ * Numbers below are measured against the shipped extract rather than derived
+ * at runtime, on purpose -- like `FEATURE_COUNT` in `helpers.ts`, they pin
+ * this spec to the real data so a regeneration that quietly changes what a
+ * query finds fails a test instead of nothing. Since T-102, `find_features`'
+ * `unloaded_matches` and the human box's own `searchIndexEntries` read the
+ * same five columns through the same predicate (`matchesQuery`,
+ * `map-tools/query.ts`) -- one count, not two that happen to coincide.
+ * `STARBUCKS_CITYWIDE_CAFES` (151) is every index row whose name, English
+ * name, brand, cuisine or address contains "starbucks" -- in this data all of
+ * them are matched by name/nameEn alone and all are tagged `cafe`, so
+ * widening the predicate to five fields did not add a row; that is a fact
+ * about what OSM happens to call these places, not a coincidence the
+ * predicate arranges. (The Chinese name reaches one row more -- 152 rows
+ * carry 星巴克 or "starbucks" between them -- which is why the data README
+ * words that count as a union rather than as one query's answer.)
  *
- * Item 6's second case needs no such number: it asks for a cuisine tag value
- * ("coffee_shop") that hundreds of index rows carry and no row is *named*, and
- * asserts the tool discloses nothing at all -- the box's own divergence note
- * (`search-model.ts`) made concrete, with no count to keep in sync.
+ * Item 6's second case pins the other half of T-102: a cuisine tag value
+ * ("coffee_shop") that no row is *named*, which the pre-T-102 tool discovered
+ * nothing about and now discloses in full, by category, with the >= floor
+ * that reconciliation is allowed to be.
  */
 import type { Page } from "@playwright/test";
 import { SEARCH_INDEX_LIMIT } from "@/components/search-index-model";
@@ -435,26 +437,70 @@ test.describe("6. find_features unloaded_matches -- what a name search could hav
     expect(after.unloaded_matches).toBeUndefined();
   });
 
-  test("a query that only hits a cuisine tag value discloses nothing -- unloaded_matches is names only", async ({
+  test("a cuisine-tag-value query discloses every category it reaches, and the disclosed count is a FLOOR once that category loads", async ({
     page,
   }) => {
-    // "coffee_shop" is a cuisine *tag value*, not anybody's name: hundreds of
-    // index rows carry it in their cuisine column (the human search box would
-    // find every one of them -- search-index-model.ts's own divergence note),
-    // but none carry it in name or nameEn. unloaded_matches counts the exact
-    // predicate a follow-up find_features call will use (name/nameEn only,
-    // `matchesName` in map-tools/query.ts), because its count is read as a
-    // promise about that later call -- so it must stay silent here rather
-    // than promise hundreds of features the follow-up call then cannot find.
-    // This is the asymmetry `unloadedMatches`' own header documents; this
-    // test is what pins it against the real data instead of a fixture.
+    // "coffee_shop" is a cuisine *tag value*, not anybody's name -- until
+    // T-102 this was the one case unloaded_matches stayed silent about,
+    // because it counted name/nameEn only (`matchesName`). T-102 widened the
+    // predicate to all five fields (`matchesQuery`) on both sides at once, so
+    // this same query now discloses real numbers: measured against the
+    // shipped index (public/data/tier2/search-index.json, 31,057 rows), every
+    // row whose name/nameEn/brand/cuisine/address contains "coffee_shop" as a
+    // substring, tallied by category -- cafe (631), restaurant (39),
+    // fast_food (4), bakery (1), convenience (1). All five fit under
+    // UNLOADED_MATCH_LIMIT (6), so nothing is omitted.
     await page.goto("/");
     await waitForTools(page);
     await waitForFeatures(page);
 
-    const result = await callTool(page, "find_features", { query: "coffee_shop" });
-    expect(result.error).toBeUndefined();
-    expect(result.unloaded_matches).toBeUndefined();
+    const before = await callTool(page, "find_features", { query: "coffee_shop" });
+    expect(before.error).toBeUndefined();
+    expect(before.total).toBe(0); // nothing bundled has a cuisine tag at all.
+    expect(before.unloaded_matches).toEqual([
+      { category: "cafe", count: 631 },
+      { category: "restaurant", count: 39 },
+      { category: "fast_food", count: 4 },
+      { category: "bakery", count: 1 },
+      { category: "convenience", count: 1 },
+    ]);
+    expect(before.unloaded_matches_omitted).toBeUndefined();
+
+    // Naming cafe loads it for the whole city -- the agent's own follow-up
+    // call, same as the starbucks case above.
+    const loadCafe = await callTool(page, "find_features", { categories: ["cafe"], limit: 1 });
+    expect(loadCafe.error).toBeUndefined();
+
+    const after = await callTool(page, "find_features", { query: "coffee_shop" });
+    expect(after.error).toBeUndefined();
+    // The reconciliation invariant is >=, never ===: `unloadedMatches`' own
+    // header names two mechanisms that can only push the disclosed number
+    // DOWN from what a later call actually returns, never up --
+    //  (1) a row is dropped from the count as soon as ANY of its categories is
+    //      in memory, so a feature tagged both cafe and restaurant stops
+    //      counting toward either the moment cafe loads, even though it is
+    //      still findable;
+    //  (2) the index and a category file are generated separately
+    //      (public/data/README.md), so a file can hold a name or tag the
+    //      index row for the same id never saw.
+    // Both are safe in the direction they err -- an agent is never sent after
+    // features that the follow-up call cannot produce -- which is exactly
+    // what makes a strict === the wrong invariant to pin here: on THIS
+    // extract cafe happens to have no coffee_shop row double-tagged with
+    // another loaded category, so total lands exactly on the floor (631) --
+    // a coincidence of today's data, not a promise this test may assume holds
+    // after the next regeneration.
+    expect(after.total!).toBeGreaterThanOrEqual(631);
+    // Already searched, already answered above: no longer "unloaded" --
+    // dropped from the list entirely rather than reported at 0, so an agent
+    // scanning unloaded_matches cannot mistake "gone" for "still zero
+    // elsewhere".
+    expect(after.unloaded_matches).toEqual([
+      { category: "restaurant", count: 39 },
+      { category: "fast_food", count: 4 },
+      { category: "bakery", count: 1 },
+      { category: "convenience", count: 1 },
+    ]);
   });
 });
 

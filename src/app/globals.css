@@ -1183,9 +1183,25 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   background: var(--text-mid);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
+/* Name and, when the data has one, English name: a column so the pair reads as
+   one place rather than two rows. `min-width: 0` is what lets the ellipsis
+   below actually happen inside a flex row. */
+.sel-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
 .sel-name {
   font-size: 12px;
   color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sel-name-en {
+  font-size: 10px;
+  color: var(--text-low);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1692,12 +1708,47 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   font-size: 11px;
   color: var(--text-mid);
 }
+.otm-name-en {
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-low);
+  line-height: 1.3;
+}
 .otm-cat i {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
   flex-shrink: 0;
+}
+/* The tags a place carries: a label column narrow enough to read as a margin
+   note, and a value column that wraps rather than clipping — the model has
+   already folded anything long (DETAIL_CHARS), and the full value is on the
+   row's `title`. Grows with the fields T-97 adds; nothing here counts rows. */
+.otm-details {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--hairline-2);
+  display: grid;
+  gap: 3px;
+}
+.otm-detail {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.otm-detail dt {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-low);
+}
+.otm-detail dd {
+  margin: 0;
+  color: var(--text-mid);
+  overflow-wrap: anywhere;
 }
 .otm-prov {
   margin-top: 8px;

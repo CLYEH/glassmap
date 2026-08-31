@@ -4,6 +4,7 @@ import type { Annotation, Drawing, SelectionSource } from "@/lib/store/map-store
 import type { MapFeature } from "@/lib/store/tier2";
 import { categorySingular } from "./category-labels";
 import { DRAWING_COLOR } from "./drawing-style";
+import type { DetailRow } from "./feature-details";
 import { CATEGORY_COLOR } from "./map-style";
 import { resolveSelection } from "./selection-model";
 
@@ -128,12 +129,24 @@ export interface CardView {
   id: string;
   /** The headline: a place's name, a note's text, a shape's label. */
   name: string;
+  /**
+   * The place's English name, under the headline, when the data carries one
+   * that says something the headline does not (`selection-model`). Never on a
+   * note or a shape: those are one person's words in one language.
+   */
+  nameEn?: string;
   /** What kind of thing it is, under the name. */
   what: string;
   /** The dot beside `what`. */
   swatch: string;
   /** Fabricated demo data, which the card has to say out loud. */
   sample: boolean;
+  /**
+   * The OSM tags this place carries — what the tools have always returned and
+   * the card, until now, did not show (`feature-details`). Empty for a note,
+   * a shape, and any place whose tags the extract does not have.
+   */
+  details: DetailRow[];
   provenance: CardProvenance;
   copy: CardCopy;
 }
@@ -172,6 +185,7 @@ export function cardView(target: CardTarget, subjects: CardSubjects): CardView |
       what: "Note",
       swatch: DRAWING_COLOR[annotation.source],
       sample: false,
+      details: [],
       provenance: annotation.source,
       copy: CARD_COPY.annotation[annotation.source],
     };
@@ -187,6 +201,7 @@ export function cardView(target: CardTarget, subjects: CardSubjects): CardView |
       what: drawingWhat(drawing),
       swatch: DRAWING_COLOR[drawing.source],
       sample: false,
+      details: [],
       provenance: drawing.source,
       copy: CARD_COPY.drawing[drawing.source],
     };
@@ -203,9 +218,11 @@ export function cardView(target: CardTarget, subjects: CardSubjects): CardView |
     kind: "feature",
     id: row.id,
     name: row.name,
+    ...(row.nameEn ? { nameEn: row.nameEn } : {}),
     what: category === null ? "Not loaded" : categorySingular(category),
     swatch: category !== null && isFeatureCategory(category) ? CATEGORY_COLOR[category] : POI_SWATCH,
     sample: row.sample,
+    details: row.details,
     provenance,
     copy: CARD_COPY.feature[provenance],
   };

@@ -122,11 +122,41 @@ export function OnTheMapCard() {
       <div className="otm-name" data-testid="otm-name">
         {view.name}
       </div>
+      {/* The second name, when the data carries one. Secondary by size and
+          colour, never a replacement: the local name is what is written on the
+          door, and the English one is what an agent read out loud. */}
+      {view.nameEn ? (
+        <div className="otm-name-en" data-testid="otm-name-en" title={view.nameEn}>
+          {view.nameEn}
+        </div>
+      ) : null}
       <div className="otm-cat" data-testid="otm-category">
         <i aria-hidden style={{ background: view.swatch }} />
         {view.what}
         {view.sample ? " (sample)" : ""}
       </div>
+      {/* What the tools have always been able to say about this place. A
+          description list of label/value pairs, one per tag the source
+          carries — the section disappears entirely when it carries none, so
+          nothing here ever prints a label with nothing after it. Every value
+          is OSM text rendered as a React text node, like everything else on
+          this card. */}
+      {view.details.length > 0 ? (
+        <dl className="otm-details" data-testid="otm-details">
+          {view.details.map((detail) => (
+            <div
+              key={detail.field}
+              className="otm-detail"
+              data-testid={`otm-detail-${detail.field}`}
+              data-field={detail.field}
+              title={detail.full}
+            >
+              <dt>{detail.label}</dt>
+              <dd>{detail.text}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
       <div className="otm-prov" data-testid="otm-provenance">
         <span aria-hidden className={`bead-mini${view.provenance === "user" ? "" : " teal"}`} />
         {view.copy.line}

@@ -65,6 +65,25 @@ export interface MapToolStore {
   /** Bundled datasets plus every loaded tier-2 category, in load order. */
   getFeatures(): readonly MapFeature[];
   /**
+   * Whether the six bundled datasets have finished arriving — false only in the
+   * window between the page mounting and `setFeatures` being called, which is
+   * one `Promise.all` over ~614 KB of GeoJSON wide (`components/useFeatureData.ts`).
+   *
+   * It exists because `getFeatures()` cannot tell that window apart from a page
+   * whose data is genuinely thin. A tool call made inside it can still load a
+   * whole point-of-interest category — naming a category is what fetches it —
+   * and would then resolve a place name against nothing but that category. On
+   * the shipped data "Daan Station" resolves that way to 臺北大安郵局, a post
+   * office 524 m from the station and the only substring match in the file, so
+   * the lookup reports one confident answer and the agent repeats it. Name
+   * lookup asks this first and refuses while it is false (T-103).
+   *
+   * "Loaded" means the loader finished, not that it found anything: every
+   * dataset 404ing is a page with no base data, which is answered honestly and
+   * permanently rather than telling every caller to ask again forever.
+   */
+  isBaseDataLoaded(): boolean;
+  /**
    * The tier-2 index as currently known, or null when nothing has read it yet.
    * Synchronous on purpose: `describeState` must never make a network request.
    */
@@ -372,6 +391,12 @@ interface MapStore {
   features: GlassMapFeature[];
   setFeatures: (features: GlassMapFeature[]) => void;
   /**
+   * See `MapToolStore.isBaseDataLoaded`. Written by `setFeatures` and by
+   * nothing else, so the one call that ends the loading window is the one call
+   * that closes it — a second write of the same datasets cannot reopen it.
+   */
+  baseDataLoaded: boolean;
+  /**
    * Point-of-interest features from the categories a tool has loaded. Kept
    * apart from `features` so the rendering the UI already does is untouched
    * until it opts in.
@@ -508,7 +533,11 @@ export const useMapStore = create<MapStore>((set, get) => ({
   bounds: null,
   setBounds: (bounds) => set({ bounds }),
   features: [],
-  setFeatures: (features) => set({ features }),
+  // One write, not two: every subscriber sees each store write, and a page that
+  // was briefly "has features, still loading" would answer a name lookup out of
+  // the very gap this flag exists to close.
+  setFeatures: (features) => set({ features, baseDataLoaded: true }),
+  baseDataLoaded: false,
   tier2Features: [],
   tier2Loaded: [],
   tier2Pending: [],
@@ -621,6 +650,7 @@ export const zustandToolStore: MapToolStore = {
     const { features, tier2Features } = useMapStore.getState();
     return zustandFeatureView(features, tier2Features);
   },
+  isBaseDataLoaded: () => useMapStore.getState().baseDataLoaded,
   getTier2Manifest: () => useMapStore.getState().tier2Manifest,
   loadTier2Manifest: () => zustandTier2.loadManifest(),
   getLoadedCategories: () => useMapStore.getState().tier2Loaded,
@@ -646,6 +676,16 @@ export interface MemoryToolStoreInit {
   view?: MapView;
   bounds?: Bounds | null;
   features?: GlassMapFeature[];
+  /**
+   * See `MapToolStore.isBaseDataLoaded`. Defaults to whether `features` was
+   * given at all, because that is what the two states look like from here: a
+   * store built with the page's bundled data is a page whose loader has
+   * returned, and a store built without any is the window before it did — which
+   * is the state a name lookup must refuse rather than answer out of whatever a
+   * tool has fetched since. Set it explicitly to describe the third case, a
+   * settled page whose six datasets are genuinely empty.
+   */
+  baseDataLoaded?: boolean;
   selection?: string[];
   drawings?: Drawing[];
   annotations?: Annotation[];
@@ -678,6 +718,7 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
   let view = { ...(init.view ?? DEFAULT_VIEW) };
   const bounds = init.bounds ?? null;
   const features = init.features ?? [];
+  const baseDataLoaded = init.baseDataLoaded ?? init.features !== undefined;
   let tier2Features: MapFeature[] = [];
   let tier2Loaded: Tier2Category[] = [];
   let tier2Pending: Tier2Category[] = [];
@@ -732,6 +773,7 @@ export function createMemoryToolStore(init: MemoryToolStoreInit = {}): MemoryToo
     },
     getBounds: () => bounds,
     getFeatures: () => featureView(features, tier2Features),
+    isBaseDataLoaded: () => baseDataLoaded,
     getTier2Manifest: () => tier2Manifest,
     loadTier2Manifest: () => tier2.loadManifest(),
     getLoadedCategories: () => tier2Loaded,

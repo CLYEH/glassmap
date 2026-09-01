@@ -6,51 +6,19 @@ Size rule: keep this file under ~150 lines. When a day is fully `done`/`cut`, co
 
 Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features_in_view`, `find_features`, `describe_surroundings`, `set_map_view`, `draw_shape`, `select_features`, `annotate`. Everything else is cut first when time runs out.
 
-## D1 — 2026-08-28 · gate: a real WebMCP client calls a tool on the deployed URL
+## D1–D4 — 2026-08-28 … 2026-08-31 · all `done` or `cut`; detail in [`docs/TASKS-archive.md`](./TASKS-archive.md)
 
-| ID | Task | Owner | Status | Notes |
-|---|---|---|---|---|
-| T-01 | Harness, scaffold, shim, `get_map_state` + `set_map_view` on in-memory state, CI, CONTRIBUTING | orchestrator | done | |
-| T-02 | Push scaffold to GitHub, connect Vercel (prod = `main`, preview = `develop`) | orchestrator + user | done | prod: https://glassmap.clyeh.xyz |
-| T-03 | MapLibre + OpenFreeMap map component; store ⇄ map sync; `set_map_view` flies the real map | map-ui-dev | done | this PR |
-| T-04 | Verify `queryRenderedFeatures` reads POI layers from the liberty style | map-ui-dev | done | verdict: basemap POIs OUT of tool scope — `queryRenderedFeatures` returns only label-collision survivors (~36 of ~9,400 at z15); tools read our GeoJSON only |
-| T-05 | D1 gate: ChatGPT desktop built-in browser lists and calls `get_map_state` | user + orchestrator | done | passed 2026-08-28 evening: ChatGPT desktop lists all 11 tools on production; Chrome-flag fallback not needed |
-
-## D2 — 2026-08-29 · gate: demo steps 1–4 run
-
-| ID | Task | Owner | Status | Notes |
-|---|---|---|---|---|
-| T-10 | GeoJSON: MRT stations, districts, parks, schools, supermarkets, sample listings | data-engineer | done | PR #4; 2,063 features, 586 KB; gazetteer moved to tool layer |
-| T-11 | `list_features_in_view`, `find_features` (query / categories / near / radius_m), gazetteer, `set_map_view` place/feature_id | tool-dev | done | PR #5; `within` deferred to D3 |
-| T-12 | `select_features` + highlight on map + sidebar list | tool-dev (tool) / map-ui-dev (UI) | done | |
-| T-13 | E2E for T-11/T-12 through `document.modelContext` | qa | done | landed across the merged suite; network-isolated in PR #30, share-hash convergence in PR #33 |
-
-## D3 — 2026-08-30 · gate: demo steps 6–8 run
-
-| ID | Task | Owner | Status | Notes |
-|---|---|---|---|---|
-| T-20 | `draw_shape` (circle/polygon/line) + hand-drawing UI; drawings visible to `get_map_state` / `find_features({within})` | tool-dev / map-ui-dev | done | |
-| T-21 | `annotate` (imperative) + declarative `<form toolname>` version | tool-dev / map-ui-dev | done | |
-| T-22 | `describe_surroundings` (direction-grouped, from geometry; district with ≤300 m seam fallback) | tool-dev | done | |
-| T-23 | E2E for D3 (drawing round-trip, declarative form, no-WebGL bounds wiring) | qa | done | folded into the merged suite; test.fail debt resolved in PR #16 |
-| T-24 | Sharpen `districts.geojson` (tolerance 0.00003) + boundary sanity tests | data-engineer | done | premise partially refuted: the reported point was a Wanhua neighbourhood, not Banqiao Stn; real Banqiao was never inside any polygon. Seam gaps are OSM source properties (adjacent relations share no nodes) — handled by the 300 m fallback, not by tolerance |
-
-## D4 — 2026-08-31 · nice-to-have, in order
-
-| ID | Task | Owner | Status | Notes |
-|---|---|---|---|---|
-| T-30 | `compare_areas` | tool-dev | done | PR #16 |
-| T-31 | `get_share_link` (state in URL hash) | tool-dev / map-ui-dev | done | codec + tool + UI wiring + 7 e2e; address bar mirrors the map |
-| T-32 | `measure` | tool-dev | done | PR #16 |
-| T-33 | `set_layers` | tool-dev / map-ui-dev | cut | the flagship demo script uses no layer toggling; cut confirmed 2026-08-29 |
-| T-34 | Screenshot-vs-WebMCP comparison (3 tasks, one run each) | orchestrator + qa | done | `docs/comparison.md`; headline: 4 calls/4.5 KB vs 16 actions+11 screenshots, control failed task B (1/11 names) |
+- **D1** harness, scaffold, MapLibre + OpenFreeMap on Vercel, `get_map_state` / `set_map_view`, CI. Gate passed 2026-08-28: ChatGPT desktop listed the tools on production and called one (T-01…T-05).
+- **D2** the six bundled GeoJSON datasets, `list_features_in_view`, `find_features`, `select_features` + sidebar, gazetteer, e2e (T-10…T-13).
+- **D3** `draw_shape` (agent- and hand-drawn), `annotate` imperative + declarative, `describe_surroundings`, district sharpening (T-20…T-24).
+- **D4** `compare_areas`, `measure`, `get_share_link`, the screenshot-vs-WebMCP comparison (`docs/comparison.md`). `set_layers` **cut** 2026-08-29 — the demo script uses no layer toggling (T-30…T-34).
 
 ## D5 — 2026-09-01 · submission assets
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
 | T-40 | Demo video < 3 min, English narration, tool call visible in first 20 s | user + docs-writer (script) | todo | |
-| T-41 | README final: flag steps, 3 example prompts, comparison table, data licence | docs-writer | todo | |
+| T-41 | README final: flag steps, 3 example prompts, comparison table, data licence | docs-writer | done | PR #89 (5th ask card) + this PR. Owner widened scope 2026-09-01: also closed F-4's README debt, deleted the Roadmap section, and fixed a tool-count lie (README said the badge counts 12; the roster is 14 + `add_note` = 15). Two review rounds; four false claims about the *human* surfaces were caught and corrected |
 | T-42 | Devpost text incl. "collaborative capabilities" | docs-writer | todo | |
 | T-43 | Freeze `main`, tag `v1.0-submission` | orchestrator | todo | |
 
@@ -148,14 +116,27 @@ Owner: "A/B 都修". Gap A: the human box matches name/nameEn/brand/cuisine/addr
 |---|---|---|---|---|
 | T-102 | Query parity (five-field matching, both sides of the disclosure) + camera fit-to-target for agents (frame math relocated to src/lib, components re-import) | tool-dev (waivered import flips) → map-ui-dev → qa → review | done | PR #84 → develop (fact-checked: src/lib/geo on tree, the zoom floor in). Five-field parity on every surface with one predicate; fit-vs-row byte-equal by e2e; the last silent zoom-out removed by ruling; ≥ floor proven un-overstatable |
 
-## Follow-ups from the two 2026-08-31 rounds (ticketed, unscheduled)
+## T-103 — the load-window place-name race · approved 2026-09-01 · gate: a name is never answered out of a half-loaded gazetteer
+
+Found by adversarial review of T-41's fifth ask card. `resolveQueryInput` loads a named category **before** it resolves `near` (deliberate — it lets `{near:"Fika Fika Cafe", categories:["cafe"]}` find its own origin), while the six bundled datasets arrive asynchronously. In that window a place name matched the just-fetched category alone, and `post_office.geojson` holds exactly one substring match for "daan": `osm:way:206062024`, Taipei Da-an Post Office, 524 m from the real station. One match is not a tie, so `resolvePlaceOne` returned `found` — a confident wrong answer with no error and no candidates. Every spelling of the station collapsed onto it. Owner approved fixing the tool layer rather than rewording the card.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-103 | `baseDataLoaded` flag + guard on the place-name form of `resolveNear` and `set_map_view.place` (ids and coordinates deliberately ungated); retryable refusal naming an accurate remedy; the refusal documented in `POINT_STRING_FORM` so the model reads it before calling; gated `base_data_loading` on state and on the four read-only answers that return none; `planCategories` splits the claim from the filter so `searched_categories` stops vouching for files that are not in the store | tool-dev → review | done | PR #88 → develop `da6c27b`. Regression test proven to fail without the fix (12/26 red on reverted sources); the coverage test proven to bite (removing the `annotate` row goes red). Blast radius is the load window only — output is byte-identical on any settled page |
+
+## Follow-ups (ticketed, unscheduled)
 
 - **F-1 (qa)** `awakening.spec.ts:672` — the flake family's last site: `stateAfterWaking` returns ~600ms into the story, then two Node-side locator assertions race the remaining ~1200ms of the `disabled` window; fold the reads into the same in-page tick. Pre-existing; deterministic-failure mode once the story lands.
 - **F-2 (map-ui-dev)** idle-chrome `.hint`/`.attribution` ~13px overlap at 1240 AND 1440 (measured with the search box display:none — pre-existing); fix together with adding "search" to the landing hint (the hint grows into the same overlap; choreography only writes opacity to it, so copy is safe).
 - **F-3 (data-engineer)** address generation guard: 152 addresses are a bare city name, 243 carry no street/號 — require a street token before emitting; also 19 `addr:full` values carry upstream city/district duplication verbatim (documented choice, revisit if judges notice).
-- **F-4 (docs-writer)** README narrative debt: the search box and the enrichment story are absent (tool contract itself is current); `TryAsking` has no `get_place_details` prompt card; pre-Awakening wording flagged since T-41 still stands.
+- **F-4 (docs-writer)** ~~README narrative debt~~ **closed 2026-09-01** by T-41 (README) and PR #89 (the `get_place_details` ask card).
 - **F-5 (orchestrator)** Overpass endpoint rot: overpass-api.de and kumi.systems both failed all attempts this export; only the .fr mirror answered. Reorder ENDPOINTS or note the operational reality before the next data re-run.
-- **F-6 (map-ui-dev, design question)** `SelectedRow.details` is computed for sidebar rows and never rendered (T-96 ratified narrowing) — revisit only if the owner wants details in the list too.
+- **F-6 (map-ui-dev, design question)** `SelectedRow.details` is computed for sidebar rows and never rendered (T-96 ratified narrowing) — revisit only if the owner wants details in the list too. *Earned its keep 2026-09-01: the README pass asserted the inspector renders those fields, and this line is what caught it.*
+- **F-7 (map-ui-dev)** `useFeatureData` runs six bare `fetch` calls with no timeout, so one hung request pins `baseDataLoaded: false` forever and every name lookup then invites an infinite retry. Before T-103 that page answered wrongly; after it, it stalls. Add `AbortSignal.timeout(...)` to `loadCollection`, or resolve the flag on settle rather than on `Promise.all` — the tier-2 side already does this (`src/lib/store/tier2.ts:207-250`).
+- **F-8 (qa)** No e2e for the T-103 race. Needs a spec that stalls `/data/*.geojson` behind a `find_features({near:"Daan Station", categories:["post_office"]})` call and asserts the refusal, not `osm:way:206062024`. Every existing spec waits for the data first, so the suite structurally cannot regress here.
+- **F-9 (tool-dev)** In the same load window, `set_map_view({feature_id})`, `measure({target})` and `get_place_details({id})` answer `unknown feature_id` / `unknown target` for a bundled id. Loud, never a confident wrong answer, and `base_data_loading` on map state now lets an agent see why — but the remedy `get_place_details` prescribes ("use find_features") is the path that was silent until T-103.
+- **F-10 (docs-writer)** `docs/design/ui-redesign-handoff.md` still describes a standalone bottom-left "legend" component in at least four places (the component-inventory row naming `StateOverlay.tsx`, two breakpoint rows, two design-token rows); it is now `MapKey.tsx` / `PlacesTray.tsx`. Assessed during T-41 and deliberately not fixed there: correcting it honestly means re-verifying the current responsive behaviour, not renaming a word. Supersedes the 2026-08-31 T-91 handoff.
+- **F-11 (tool-dev)** `src/lib/map-tools/share.test.ts:545` says "The sender has 2297 cafes in memory"; the manifest says 2,298. Harmless fixture prose, but it is the last site of a stale count corrected everywhere else in PR #89.
 
 ## Handoff log
 
@@ -172,14 +153,12 @@ Append-only. `date · from → to · what`.
 - 2026-08-28 · data-engineer → all · T-24 verified: coordinate 121.4933,25.0143 is inside Wanhua (a real neighbourhood), NOT Banqiao Station (real: 121.4618,25.0132, outside all polygons at every tolerance). Seam gaps (~150 m) are source-data properties; tolerance cannot close them — the describe_surroundings 300 m fallback is the correct mechanism.
 - 2026-08-29 · orchestrator → tool-dev/map-ui-dev · UI redesign approved by the user; activity-feed interface contract is in the dispatch; durable design handoff committed at docs/design/ui-redesign-handoff.md.
 - 2026-08-29 · reviewer → qa · e2e/set-map-view.spec.ts:11-24 comment is stale after PR #39: under network isolation the re-entrant moveend now comes from jumpTo, not flyTo's stop(); the mid-flight-clobber race is only exercised with E2E_LIVE_BASEMAP=1 — update the comment, consider a live-basemap variant.
-- 2026-08-29 · reviewer → docs-writer (T-41) · docs/comparison.md:57 "camera animates, state settles at moveend" is over-cautious since PR #39 (no-style path jumps synchronously); soften when T-41 touches the file.
 - 2026-08-29 · qa/map-ui-dev → orchestrator · "Hide" collapses only the inspector body; the glass lane still covers the map, so bounds keep excluding it (correct). If Hide should return the lane to the map, that is a layout decision — padding and bounds would follow for free.
 - 2026-08-30 · orchestrator → all · Tier-2 approved by the user (time explicitly not a constraint; agent-parallel build). Integration on develop only; main stays demo-stable until the whole package is green. Category taxonomy and interface contracts are fixed in the dispatches.
 - 2026-08-30 · qa → orchestrator (decision logged) · the toMap re-entrancy guard is only exercised by the opt-in live-basemap spec (isolation forces jumpTo); accepted live-only exercise for now.
-- 2026-08-30 · docs-writer → orchestrator · README roadmap table still frames a 5-day build with no tier-2/redesign/FX rows — a scope decision for T-41's final pass.
 - 2026-08-31 · qa → map-ui-dev · MapCanvas.tsx:633 comment says a bead tap deselects; it opens the card (correct behavior, stale words) — cosmetic, ride any next components pass.
-- 2026-08-31 · reviewers → docs-writer · README lines 6/56/94/95 still describe the pre-Awakening chrome (sidebar as landing surface, feed as landing chrome) — the final docs pass (T-41) owns the rewrite.
 - 2026-08-31 · suite lesson (recorded) · timing checks against animations must anchor to the browser's clock (MutationObserver + performance.now in one evaluate); Node-side polls across IPC lose races on shared runners — three instances fixed in fx.spec.ts.
 - 2026-08-31 · orchestrator → all · The 2026-08-28 line "delete is UI-only" is superseded by T-90: `remove_from_map` gives agents removal of agent-sourced drawings/annotations and any selection entry; user-sourced marks stay human-only (refused per-id with the reason).
-- 2026-08-31 · user → orchestrator · T-94/T-95 take priority over the D5 submission assets; do not schedule D5 work until the user says so.
-- 2026-08-31 · map-ui-dev → orchestrator (T-91) · prose-only stale references to the retired legend remain outside UI ownership: `src/lib/awaken/timeline.ts:109-114`, `src/lib/awaken/timeline.test.ts:151` (comments), and `docs/design/ui-redesign-handoff.md` (docs-writer) — ride the next pass that touches each file.
+- 2026-09-01 · orchestrator → all · `CONTRIBUTING.md` English rule relaxed: a genuine place name may be quoted inside English prose (a comment or commit message), because `gazetteer.ts:32-33` cannot explain the 大安 / 大安森林公園 disambiguation without naming it. CJK sentences are still banned. The rule text was out of date, not the code.
+- 2026-09-01 · orchestrator → all · `scripts/ship-pr.sh --merge-back` runs `git switch` in the repo root, which fails when the head branch is checked out in a worktree. Merge `origin/develop` inside the worktree instead, then ship without the flag — and it is the better order anyway, because the integration check then runs against the base you are merging into.
+- 2026-09-01 · review → all (lesson) · Four of the T-41 README defects were the same shape: prose describing what a surface was *designed* to do rather than what the component does. Read the component before the sentence, not the sibling doc.

@@ -101,10 +101,25 @@ export async function planCategories(
   const loaded = store.getLoadedCategories();
   const searched = [...(base ?? FEATURE_CATEGORIES), ...loaded];
   const unsearched = toUnsearched(store, loaded);
+  /**
+   * What the answer may *claim* it searched, which is narrower than what it
+   * filtered on while the bundled datasets are still arriving.
+   *
+   * `searched_categories` is read as a promise — these are the categories this
+   * answer covers — and during the loading window naming the six bundled ones
+   * would be the tool vouching for a search of six files that are not in the
+   * store. That is a worse failure than the empty result beside it: an empty
+   * result invites a second look, a positive claim closes the question. The
+   * *filter* below is deliberately left alone: it is what `queryFeatures` gets,
+   * narrowing it here would depend on whether the datasets happened to land
+   * during this call's `await`, and the whole point of the field is that an
+   * answer must not vary with a race.
+   */
+  const claimed = store.isBaseDataLoaded() ? searched : [...loaded];
   return {
     categories: base ? [...searched] : undefined,
     disclosure: unsearched.length
-      ? { searched_categories: searched, unsearched_categories: unsearched }
+      ? { searched_categories: claimed, unsearched_categories: unsearched }
       : {},
     tier2Available: store.getTier2Manifest()?.categories.length ?? 0,
   };

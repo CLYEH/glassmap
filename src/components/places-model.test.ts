@@ -32,11 +32,11 @@ describe("trayCount", () => {
   });
 
   it("rounds thousands to one decimal and drops a bare .0", () => {
-    // The real manifest's numbers: cafés 2,297, banks 1,576, restaurants
-    // 13,819 — the counts the design's own tray frame shows.
-    expect(trayCount(2297)).toBe("2.3k");
+    // The real manifest's numbers: cafés 2,298, banks 1,576, restaurants
+    // 13,789 — the counts the design's own tray frame shows.
+    expect(trayCount(2298)).toBe("2.3k");
     expect(trayCount(1576)).toBe("1.6k");
-    expect(trayCount(13819)).toBe("13.8k");
+    expect(trayCount(13789)).toBe("13.8k");
     expect(trayCount(2000)).toBe("2k");
   });
 });

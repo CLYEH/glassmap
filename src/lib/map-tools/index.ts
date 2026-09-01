@@ -19,7 +19,13 @@ import {
   unsearchedForLookup,
   type Tier2Disclosure,
 } from "./tier2-query";
-import { describeState, round5, roundPoint, SELECTION_ID_LIMIT } from "./state";
+import {
+  baseDataDisclosure,
+  describeState,
+  round5,
+  roundPoint,
+  SELECTION_ID_LIMIT,
+} from "./state";
 import { withActivity } from "./activity";
 import {
   boundsIntersect,
@@ -266,13 +272,28 @@ const limitProperty = {
 };
 
 /**
+ * What the string form of a location parameter accepts, and what it cannot do
+ * yet on a page that has just opened.
+ *
+ * Exported because it is load-bearing twice over: it is the one sentence nine
+ * of the ten location parameters show the model, and it is the literal the
+ * schema sweep in `place-race.test.ts` finds those parameters by, so that a
+ * tool added later cannot take a place name without being covered by the
+ * loading-window tests.
+ */
+export const POINT_STRING_FORM =
+  "A feature id, or the name of a station, park or district. A name needs the base data the " +
+  'page loads on open; before that it answers "map data not ready" rather than guessing, and ' +
+  "asking again works.";
+
+/**
  * The three ways an agent can say "here": an id it already has, a name a human
  * said, or a coordinate. Every tool that takes a location takes all three.
  */
 const pointProperty = (description: string) => ({
   description,
   anyOf: [
-    { type: "string", description: "A feature id, or the name of a station, park or district." },
+    { type: "string", description: POINT_STRING_FORM },
     {
       type: "object",
       properties: {
@@ -324,6 +345,25 @@ type QueryError = {
 } & Tier2Disclosure;
 
 /**
+ * The one refusal a place name gets while the bundled datasets are still on
+ * their way (`MapToolStore.isBaseDataLoaded`).
+ *
+ * It is deliberately not "unknown place". That answer is a fact about the map,
+ * and an agent that reads it correctly stops asking: it tells the human the
+ * place is not on this map, or reaches for something it can see instead. Here
+ * the place almost certainly *is* on the map, a fraction of a second from now,
+ * and asking again is the one action that produces the right answer — so the
+ * words have to be the ones that provoke it. Phrased like the tier-2 loader's
+ * own transient failures ("still loading", "ask again in a moment") rather than
+ * in a third vocabulary, and prefixed like `map not ready`, its sibling for the
+ * other thing a call can be too early for.
+ */
+const BASE_DATA_LOADING_ERROR =
+  "map data not ready: the map is still loading its base data, so place names cannot be " +
+  "looked up yet. Ask again in a moment. A {lng,lat} coordinate always works; a feature id " +
+  "works only if it came from an answer this page has already given you";
+
+/**
  * One location out of the three forms every location parameter accepts.
  * Rounded to 5 decimals (~1 m) so what the store keeps is what the agent is
  * told, and two calls that name the same place cannot differ in float dust.
@@ -334,8 +374,15 @@ function resolvePoint(
   value: unknown,
   field: string,
 ): { point: LngLat; name?: string } | QueryError {
-  const near = resolveNear(value, store.getFeatures(), store.getView().center, field);
+  const near = resolveNear(
+    value,
+    store.getFeatures(),
+    store.getView().center,
+    store.isBaseDataLoaded(),
+    field,
+  );
   if (near.kind === "invalid") return { error: near.error };
+  if (near.kind === "loading") return { error: BASE_DATA_LOADING_ERROR };
   if (near.kind === "none") return { error: "unknown place" };
   if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
   return {
@@ -460,8 +507,13 @@ async function resolveQueryInput(
   let origin = roundPoint(viewCenter);
   let radius_m = rad.radius_m;
   if (input.near !== undefined) {
-    const near = resolveNear(input.near, store.getFeatures(), viewCenter);
+    const near = resolveNear(input.near, store.getFeatures(), viewCenter, store.isBaseDataLoaded());
     if (near.kind === "invalid") return { error: near.error };
+    // Before "unknown place", and without the disclosure that goes with it:
+    // naming the categories this page has not fetched would answer a question
+    // nobody asked while hiding the one that matters, which is that the six it
+    // ships with are not here yet either.
+    if (near.kind === "loading") return { error: BASE_DATA_LOADING_ERROR };
     if (near.kind === "none") return { error: "unknown place", ...(await unsearchedForLookup(store)) };
     if (near.kind === "ambiguous") return { error: "ambiguous place", candidates: near.candidates };
     origin = roundPoint(near.center);
@@ -584,7 +636,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         place: {
           type: "string",
           description:
-            'Name of a place in the loaded data, e.g. "Daan Station". Station suffixes are optional. If several places match equally well the map does not move and the answer lists candidates to choose from.',
+            'Name of a place in the loaded data, e.g. "Daan Station". Station suffixes are optional. If several places match equally well the map does not move and the answer lists candidates to choose from. Like every place name, it needs the base data the page loads on open; before that it answers "map data not ready" rather than guessing, and asking again works.',
         },
         feature_id: {
           type: "string",
@@ -676,6 +728,12 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
       if (hasPlace) {
         if (typeof inp.place !== "string" || !inp.place.trim()) {
           return { error: "place must be a non-empty string", state: state() };
+        }
+        // The one name lookup that does not go through `resolveNear`: `place`
+        // takes a name and nothing else, so there is no id or coordinate here
+        // to let through. Same guard, stated where it is needed (T-103).
+        if (!store.isBaseDataLoaded()) {
+          return { error: BASE_DATA_LOADING_ERROR, state: state() };
         }
         const resolved = resolvePlaceOne(inp.place, store.getFeatures(), store.getView().center);
         if (resolved.kind === "none") {
@@ -777,6 +835,9 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // question. The unfiltered tally is still one call away — ask without
         // the query — while a mistaken "9 cafes here" cannot be walked back.
         ...(plan.tier2Available > 0 ? { category_counts: countByCategory(matched) } : {}),
+        // Read-only answers return no map state, so the one readiness fact the
+        // agent could not otherwise see rides here instead (T-103).
+        ...baseDataDisclosure(store),
         ...plan.disclosure,
       };
     },
@@ -820,6 +881,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         // no near/radius_m searched everything, and echoing a radius there
         // would claim a bound that was never applied.
         ...(resolved.radius_m !== undefined ? { radius_m: resolved.radius_m } : {}),
+        ...baseDataDisclosure(store),
         ...resolved.disclosure,
         // What the same name would find in the categories this session has not
         // loaded. Last, because it is about the calls that could follow rather
@@ -1383,6 +1445,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         total: near.length,
         returned: groups.reduce((n, g) => n + g.items.length, 0),
         groups,
+        ...baseDataDisclosure(store),
         ...plan.disclosure,
       };
     },
@@ -1446,6 +1509,7 @@ export function createMapTools(store: MapToolStore, opts: MapToolsOptions = {}):
         b: right,
         radius_m: radius.radius_m,
         summary: compareSummary(left, right, categories),
+        ...baseDataDisclosure(store),
         ...plan.disclosure,
       };
     },

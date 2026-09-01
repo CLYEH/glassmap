@@ -290,3 +290,46 @@ describe("selectionAttributionExplicit", () => {
     });
   });
 });
+
+/**
+ * The flag the tool layer's place lookup is gated on (T-103). It is store state
+ * rather than a derived `getFeatures().length > 0` for one reason: a page whose
+ * data is on the way and a page whose data is genuinely empty look identical
+ * from the features, and only one of them may be told to ask again.
+ */
+describe("base data readiness", () => {
+  beforeEach(() => {
+    useMapStore.setState({ features: [], baseDataLoaded: false });
+  });
+
+  it("starts false, because a page is mounted before its 614 KB has arrived", () => {
+    expect(zustandToolStore.isBaseDataLoaded()).toBe(false);
+  });
+
+  it("is closed by the same write that delivers the features, never a tick later", () => {
+    // Every subscriber sees each store write. A page that was briefly "has
+    // features, still loading" would be a page in which a name lookup is
+    // refused while the answer is already sitting in the store.
+    useMapStore.getState().setFeatures([]);
+    const { features, baseDataLoaded } = useMapStore.getState();
+    expect({ features, baseDataLoaded }).toEqual({ features: [], baseDataLoaded: true });
+  });
+
+  it("counts a loader that found nothing as loaded, so an empty page answers instead of stalling", () => {
+    // All six datasets 404 is a real deployment state (`useFeatureData` swallows
+    // each failure and hands over the empty flatten). That page has no places,
+    // permanently — telling every caller to ask again would be a lie that never
+    // resolves.
+    useMapStore.getState().setFeatures([]);
+    expect(zustandToolStore.isBaseDataLoaded()).toBe(true);
+  });
+
+  it("says the in-memory adapter is ready exactly when it was given the page's data", () => {
+    // What the two constructor shapes mean, pinned so the tool tests can rely
+    // on them: features in hand is a loader that returned, no features is the
+    // window before it did, and the explicit flag describes the third case.
+    expect(createMemoryToolStore({ features: [] }).isBaseDataLoaded()).toBe(true);
+    expect(createMemoryToolStore().isBaseDataLoaded()).toBe(false);
+    expect(createMemoryToolStore({ baseDataLoaded: true }).isBaseDataLoaded()).toBe(true);
+  });
+});

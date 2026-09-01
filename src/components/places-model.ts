@@ -7,13 +7,13 @@ import { LEGEND_ORDER, TIER2_PLURAL } from "./category-labels";
  *
  * Thousands are rounded because the tray is a menu, not a disclosure. The
  * exact figure is the one printed beside a category once it is actually
- * loaded ("Cafés · 2,297 loaded"), where it is a claim about what the map is
+ * loaded ("Cafés · 2,298 loaded"), where it is a claim about what the map is
  * holding; here it is a sense of scale, and eighteen five-digit numerals in a
  * grid read as noise rather than as scale.
  *
  * Below 1000 the figure is exact, so nothing in the first, most crowded decade
  * of counts is ever advertised as more than it is — 999 stays 999 rather than
- * becoming "1k". Above it the tenth is rounded, not floored, so 2,297 reads as
+ * becoming "1k". Above it the tenth is rounded, not floored, so 2,298 reads as
  * "2.3k": the tray is a sense of scale and half a percent in either direction
  * is not a claim anyone acts on. The exact figure is one click away, beside the
  * category once it is loaded.

@@ -92,6 +92,17 @@ export interface MapStateOutput extends ViewOutput {
   selection: { count: number; ids: string[] };
   /** Everything queryable: the bundled datasets plus every loaded category. */
   features_loaded: number;
+  /**
+   * Present, and only ever `true`, while the six bundled datasets are still on
+   * their way (`MapToolStore.isBaseDataLoaded`). Absent on a settled page.
+   *
+   * The map has three things a call can be too early for, and the other two
+   * already say so on every answer: the camera as `bounds: null`, a share
+   * link's categories as `tier2.loading`. Base data was the one an agent could
+   * only discover by tripping over a refusal, which meant reading
+   * `features_loaded: 0` as an empty map rather than an unfinished one.
+   */
+  base_data_loading?: true;
   tier2?: Tier2StateOutput;
   drawings: { count: number; items: DrawingOutput[] };
   annotations: { count: number; items: AnnotationOutput[] };
@@ -133,6 +144,19 @@ export function describeAnnotation(annotation: Annotation): AnnotationOutput {
 }
 
 /**
+ * Spread into an answer to say that the bundled datasets have not all arrived.
+ *
+ * One function so the fact is computed once and worded once, and a plain spread
+ * rather than a field on `Tier2Disclosure` because it is not a tier-2 fact: the
+ * six datasets are not a category anyone asked for. Write tools already carry
+ * it inside the `state` they return; this is for the read-only answers that
+ * return no state and would otherwise be the only place an agent could not see
+ * the window from.
+ */
+export const baseDataDisclosure = (store: MapToolStore) =>
+  store.isBaseDataLoaded() ? {} : ({ base_data_loading: true } as const);
+
+/**
  * The one state object the agent ever needs: what the camera shows, what is
  * highlighted, how much data is loaded, and what has been drawn or noted on the
  * map by either side. Every write tool returns it so no follow-up read is
@@ -165,6 +189,7 @@ export function describeState(store: MapToolStore): MapStateOutput {
     bounds: describeBounds(store.getBounds()),
     selection: { count: selection.length, ids: selection.slice(0, SELECTION_ID_LIMIT) },
     features_loaded: store.getFeatures().length,
+    ...baseDataDisclosure(store),
     // A page that never touched tier-2 reports exactly the state it always did;
     // a link still loading its categories, or one that failed to, is state in
     // its own right and says so even before a single feature has arrived.

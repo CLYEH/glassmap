@@ -27,6 +27,14 @@ export type NearResolution =
   | { kind: "point"; center: LngLat; name?: string }
   | { kind: "ambiguous"; candidates: PlaceCandidate[] }
   | { kind: "none" }
+  /**
+   * A name was given while the bundled datasets were still arriving, so the
+   * gazetteer it would have been matched against is missing every station,
+   * park and district. Kept apart from `none` because the two ask the caller
+   * for opposite things: `none` is a fact about the map, this is a fact about
+   * the moment (T-103; see `MapToolStore.isBaseDataLoaded`).
+   */
+  | { kind: "loading" }
   | { kind: "invalid"; error: string };
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -90,11 +98,20 @@ export function validateRadius(value: unknown): { radius_m?: number } | { error:
  * `field` names the parameter in the error messages, because the same three
  * ways of saying "here" are also draw_shape's `center`, annotate's `at` and
  * describe_surroundings' `from`.
+ *
+ * `baseLoaded` is `MapToolStore.isBaseDataLoaded()` and gates the third form
+ * only. It is the *name* that needs the whole gazetteer to be trustworthy: an
+ * id names one row that is demonstrably in memory and a coordinate names
+ * itself, so neither can be quietly answered with the wrong place, and refusing
+ * them would cost the caller an answer it is entitled to. This is the one place
+ * that decides which of the three forms a string is, which is why the guard
+ * lives here rather than in each of the tools.
  */
 export function resolveNear(
   near: unknown,
   features: readonly MapFeature[],
-  viewCenter?: LngLat | null,
+  viewCenter: LngLat | null | undefined,
+  baseLoaded: boolean,
   field = "near",
 ): NearResolution {
   if (typeof near === "string") {
@@ -106,6 +123,7 @@ export function resolveNear(
       if (!center) return { kind: "invalid", error: `feature ${trimmed} has no usable geometry` };
       return { kind: "point", center, name: byId.properties.name };
     }
+    if (!baseLoaded) return { kind: "loading" };
     const place = resolvePlaceOne(trimmed, features, viewCenter);
     if (place.kind === "found") {
       return { kind: "point", center: place.entry.center, name: place.entry.name };

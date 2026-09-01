@@ -176,11 +176,13 @@ in `MapCanvas.tsx`).
 4. **Try-asking cards**: static copy component (things to SAY to the agent, not
    buttons), rendered in two landing-only places — the Contents/inspector section
    (≥921) and the sheet Activity pitch, **above** the chip roster (≤920). The
-   four prompts and their tool tags are verified against
+   original four prompts and their tool tags are verified against
    `src/lib/map-tools/index.ts` + `gazetteer.ts` + the bundled data (r4 required
-   checks a/b); if the copy ever changes, re-verify resolution first-call
-   uniqueness — "Daan District"/"Xinyi District" resolve uniquely, bare
-   "Daan"/"Xinyi" do NOT (station exact-match / 6-way ambiguity).
+   checks a/b); a fifth card, for `get_place_details`, was added after r4 and
+   re-verified against the same sources by its implementer. If the copy ever
+   changes, re-verify resolution first-call uniqueness — "Daan District"/"Xinyi
+   District" resolve uniquely, bare "Daan"/"Xinyi" do NOT (station exact-match /
+   6-way ambiguity).
 
 ## Honesty caveats every future implementer must know
 

@@ -8,7 +8,7 @@ Behaviour the README summarises, spelled out.
 
 ## `select_features` 500-match cap
 
-`select_features` still highlights every match a filter finds, its contract since the tool shipped — but once a point-of-interest category is involved, a filter matching more than 500 of them is refused rather than lighting up half the city: the answer gives the true count and asks for `near`+`radius_m`, `within` or `query` to narrow it. The six bundled categories are exempt from that cap.
+`select_features` highlights every match a filter finds — but once a point-of-interest category is involved, a filter matching more than 500 of them is refused rather than lighting up half the city: the answer gives the true count and asks for `near`+`radius_m`, `within` or `query` to narrow it. The six bundled categories are exempt from that cap.
 
 ## `get_share_link` versioning (v1/v2/v3)
 

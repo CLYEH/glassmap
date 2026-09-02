@@ -1307,6 +1307,90 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   display: none;
 }
 
+/* Folded (T-107): the bubble goes, but the note does not vanish. What is left
+   is a chip carrying the source's own colour and the first word — small enough
+   to see the map past, big enough to click, which is the whole fix: folding
+   used to leave a 9px anchor whose only answer was "open the card about me". */
+.pin-chip {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(45, 212, 191, 0.4);
+  box-shadow: 0 6px 16px rgba(3, 7, 13, 0.4);
+  max-width: 150px;
+}
+.note-pin[data-annotation-source="user"] .pin-chip {
+  border-color: rgba(244, 143, 177, 0.45);
+}
+.note-pin[data-folded="true"] .pin-chip {
+  display: inline-flex;
+}
+.pin-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--agent);
+}
+.note-pin[data-annotation-source="user"] .pin-chip-dot {
+  background: var(--human);
+}
+.pin-chip-label {
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--text-mid);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The provisional pin (T-106): where the note in the popover would land. A
+   dashed rose ring on a dashed stem — hollow because it is not a note yet, and
+   click-through because the next click on the map is how it moves. */
+.note-draft-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.note-draft-pin .draft-stem {
+  width: 1.5px;
+  height: 13px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--human) 0 3px,
+    transparent 3px 6px
+  );
+}
+.note-draft-pin .draft-anchor {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.6px dashed var(--human);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+
+/* Where a hand-planned walk starts (T-110), between the two clicks that make
+   it. Solid, unlike the note's hollow dashed pin: this end is decided — what
+   is missing is the other one — and it is the same rose the drawn line will
+   be. Click-through, because the next click on the map is the walk's end. */
+.route-draft-pin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--human);
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
 /* ---------------------------------------------------- inspector */
 .grab {
   display: none;
@@ -2052,6 +2136,31 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
+}
+/* A note's headline is the note (T-108), so it wraps instead of being clipped:
+   this card is the only surface that carries every character of one, and the
+   card measures its own height, so a long note makes a taller card rather than
+   a truncated one. `anywhere` because a note may be one unbroken string — a URL,
+   or a language that does not space its words; `pre-wrap` because a note may
+   carry its own line breaks and they are the writer's.
+
+   Bounded, though: `annotate` accepts 500 characters and every one of them may
+   be a newline, which is 250 lines of card. Above 640px that would run off the
+   top of the map; below it the card is `position: fixed` against the bottom bar
+   and could not be scrolled back into view at all. A scrollbar keeps the whole
+   note reachable on every tier, and 25vh is what makes the card placeable: the
+   rest of the card measures ~115px, and `cardPlacement` can only ever guarantee
+   a side that fits while the whole card is shorter than half the viewport minus
+   its margins. Measured at 1440x900 with 500 newline characters: 225px of note,
+   340px of card, which fits above a tap in the middle of the map — at 40vh the
+   same card was 475px, fitted on neither side, and hung its Remove/Keep buttons
+   41px below the fold. */
+.otm-card[data-kind="annotation"] .otm-name {
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 25vh;
+  overflow-y: auto;
 }
 .otm-cat {
   margin-top: 3px;
@@ -2826,6 +2935,16 @@ html:is(:not([data-chrome="awake"]), [data-panel="closed"]):not(:where([data-pan
   }
   .draw-hint {
     display: none;
+  }
+  /* Except the walk's (T-110). The polygon's hint is a convenience down here —
+     the pressed pill already says what mode the map is in, and every corner is
+     visible as it is clicked. The walk's is not: it is the only place the
+     routing service's refusal is ever shown, and a two-click gesture that can
+     fail silently is worse than a crowded corner. One band lower than the
+     desktop position, clear of the search box that owns 58px at this width. */
+  .draw-hint[data-mode="route"] {
+    display: flex;
+    top: 104px;
   }
 }
 

@@ -5,6 +5,7 @@ import { ACTIVITY_NOTE_CHARS } from "@/lib/map-tools/activity";
 import { truncate } from "@/lib/map-tools/shapes";
 import { useMapStore } from "@/lib/store/map-store";
 import { emitHumanFx } from "./fx/human-events";
+import { useNoteStore } from "./note-store";
 
 /** ~1 m, the same precision the tools report coordinates in. */
 const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
@@ -21,6 +22,16 @@ const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
  * navigates - the page has no server - and never opens a dialog: the result is
  * written to the store and echoed in `add-note-status`, which is also what an
  * agent reads back after submitting.
+ *
+ * **Where the note lands depends on who submitted it** (T-106). An agent has no
+ * cursor, so an agent's submit pins at `view.center` — the place the tool has
+ * always named and the place its description still names. A person has one:
+ * while this popover is open, a click on the map places a provisional pin
+ * (`note-store.ts`, drawn by MapCanvas) and their submit pins there. Without a
+ * click a person gets the centre too, which is the behaviour this form shipped
+ * with — panning the map until the spot sits under an invisible crosshair is
+ * now the fallback rather than the only way. `add-note-target` reports which of
+ * the two is armed, and the status line names the coordinates actually used.
  *
  * Who gets credit for the note comes from `SubmitEvent.agentInvoked`, the
  * spec's own discriminator. Without a WebMCP client there is no such flag and
@@ -43,6 +54,7 @@ const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
  */
 export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
   const [status, setStatus] = useState("");
+  const draft = useNoteStore((s) => s.draft);
 
   const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -55,9 +67,16 @@ export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
     }
     const { view, addAnnotation, recordActivity } = useMapStore.getState();
     const agentInvoked = (event.nativeEvent as SubmitEvent).agentInvoked === true;
+    // The draft is a person's answer to "where", so only a person's submit
+    // reads it: `add_note` promises an agent the map centre, and an agent that
+    // submits while a human has a pin half-placed must still get the place the
+    // tool description names. Read from the store rather than from the
+    // subscribed value, so a click that lands in the same tick as the submit
+    // cannot pin the note at the place before it.
+    const at = agentInvoked ? view.center : (useNoteStore.getState().draft ?? view.center);
     const stored = addAnnotation({
       source: agentInvoked ? "agent" : "user",
-      at: view.center,
+      at,
       note,
     });
     // An agent-submitted form is a tool call like any other, and the activity
@@ -79,10 +98,14 @@ export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
       // drives its (teal) effect.
       emitHumanFx({ type: "note", annotation: stored });
     }
-    setStatus(
-      `Pinned ${stored.id} at ${round5(view.center[0])}, ${round5(view.center[1])}.`,
-    );
+    setStatus(`Pinned ${stored.id} at ${round5(at[0])}, ${round5(at[1])}.`);
     form.reset();
+    // The place is spent with the note a person pinned: the next one starts
+    // unplaced rather than stacking silently on the last one's pin. An agent's
+    // submit never touches it - the draft belongs to the human who clicked it,
+    // and a tool call arriving mid-sentence must not take their pin off the map
+    // (it did not use it either: an agent pins at the centre).
+    if (!agentInvoked) useNoteStore.getState().clearDraft();
   };
 
   return (
@@ -94,7 +117,14 @@ export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
       onSubmit={onSubmit}
       className="note-form"
     >
-      <label htmlFor="add-note-input">Pin a note at the map centre</label>
+      {/* The visible instruction follows the state; the `tooldescription` and
+          `toolparamdescription` around it do not, because they are the agent's
+          contract and an agent's note still goes to the centre. */}
+      <label htmlFor="add-note-input">
+        {draft
+          ? "Pin a note where you clicked"
+          : "Click the map to place a note, or pin it at the centre"}
+      </label>
       <div className="note-form-row">
         <input
           id="add-note-input"
@@ -118,6 +148,12 @@ export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
       <p data-testid="add-note-status" className="note-status" aria-live="polite">
         {status}
       </p>
+      {/* Off screen: which of the two places the next human submit will use,
+          without reading a CSS class or measuring a marker. The draft's own
+          numbers are already rounded to ~1 m by the store that holds them. */}
+      <span data-testid="add-note-target" className="gm-machine">
+        {draft ? `${draft[0]}, ${draft[1]}` : "centre"}
+      </span>
     </form>
   );
 }

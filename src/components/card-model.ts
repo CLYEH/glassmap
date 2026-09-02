@@ -1,5 +1,4 @@
 import { isFeatureCategory, type GlassMapFeature } from "@/lib/data/schema";
-import { truncate } from "@/lib/map-tools/shapes";
 import type { Annotation, Drawing, SelectionSource } from "@/lib/store/map-store";
 import type { MapFeature } from "@/lib/store/tier2";
 import { categorySingular } from "./category-labels";
@@ -142,9 +141,6 @@ export function cardPlacement(tapY: number, cardHeight: number): CardPlace {
   return tapY - CARD_GAP_PX - cardHeight < CARD_TOP_MARGIN_PX ? "below" : "above";
 }
 
-/** How much of a note the card's headline shows before it trails off. */
-export const CARD_NOTE_CHARS = 72;
-
 /** A shape with no label is named by what it is. */
 export const DRAWING_KIND_WORD: Record<Drawing["kind"], string> = {
   circle: "Circle",
@@ -163,7 +159,10 @@ function drawingWhat(drawing: Drawing): string {
 export interface CardView {
   kind: CardKind;
   id: string;
-  /** The headline: a place's name, a note's text, a shape's label. */
+  /**
+   * The headline: a place's name, a shape's label, or a note's text — the
+   * whole of it, however long, because the card is where a note is read.
+   */
   name: string;
   /**
    * The place's English name, under the headline, when the data carries one
@@ -217,7 +216,13 @@ export function cardView(target: CardTarget, subjects: CardSubjects): CardView |
     return {
       kind: "annotation",
       id: annotation.id,
-      name: truncate(annotation.note, CARD_NOTE_CHARS),
+      // The whole note, every character of it (T-108). The card is the only
+      // surface a note is fully readable on — the pin's bubble is 210px wide
+      // and folds away — so clipping here at 72 characters left a 200-character
+      // note with no place on the page that carried its end. It wraps
+      // (globals.css) and the card re-measures its own height, so a long note
+      // makes a taller card rather than a lost one.
+      name: annotation.note,
       what: "Note",
       swatch: DRAWING_COLOR[annotation.source],
       sample: false,

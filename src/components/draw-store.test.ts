@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Position } from "geojson";
-import { httpRouteFetch, resetRouteThrottle, type RouteFetch } from "@/lib/map-tools/route";
+import {
+  httpRouteFetch,
+  reserveRouteSlot,
+  resetRouteThrottle,
+  ROUTE_MIN_INTERVAL_MS,
+  type RouteFetch,
+} from "@/lib/map-tools/route";
 import {
   ROUTE_FIXTURE_BEND,
   createRouteFetch,
@@ -198,6 +204,33 @@ describe("draw store: a walk planned by hand", () => {
     expect(routeRequestPoints(requests[0])).toEqual([ROUNDED_START, END]);
     // And the gesture is over: the map answers questions again.
     expect(draw()).toMatchObject({ mode: "none", routeDraft: [], routeStatus: "idle" });
+  });
+
+  it("spends the same second plan_route spends, not a second of its own", async () => {
+    // FOSSGIS' one request per second is a policy on the page, not on a caller.
+    // Had the gesture kept a private clock, a person and an agent could ask
+    // twice inside one second and the page would be the one in breach — so the
+    // walk must take its turn from the module-level queue `plan_route` uses.
+    // Nothing else in the suite would notice a re-implementation: this test
+    // does, by finding the shared queue still busy after a hand-planned walk.
+    const { routeFetch } = createRouteFetch();
+    setRouteFetchForTests(routeFetch);
+    vi.useFakeTimers();
+    try {
+      draw().startRoute();
+      await draw().addRouteVertex(START);
+      await draw().addRouteVertex(END);
+      expect(map().drawings).toHaveLength(1);
+
+      let next: Awaited<ReturnType<typeof reserveRouteSlot>> | undefined;
+      void reserveRouteSlot().then((slot) => (next = slot));
+      await vi.advanceTimersByTimeAsync(ROUTE_MIN_INTERVAL_MS - 1);
+      expect(next).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(next).toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("announces the walk as a person's own mark, not as agent activity", async () => {

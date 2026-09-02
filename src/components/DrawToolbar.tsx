@@ -100,6 +100,7 @@ export function RoutePill() {
       className="tool-chip lg lens"
       data-testid="route-toggle"
       aria-pressed={routing}
+      aria-label={routing ? "Cancel the walking route" : "Plan a walking route"}
       onClick={() => (routing ? cancel() : startRoute())}
     >
       {/* Two ends and the walk between them: the same picture the drawing on

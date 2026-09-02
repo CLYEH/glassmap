@@ -258,6 +258,13 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
     const flown = await callTool(page, "set_map_view", { place: "Daan Station" });
     expect(flown.error).toBeUndefined();
 
+    // The corridor before the resize below, still at the 1280px canvas this
+    // page opened with -- the value the resize is supposed to move `bounds`
+    // AWAY from, not merely agree with once the flight eventually lands.
+    const beforeResize = await callTool(page, "get_map_state");
+    expect(beforeResize.error).toBeUndefined();
+    expect(beforeResize.bounds).not.toBeNull();
+
     // Mid-flight, a second corridor change from an entirely different cause:
     // `applyPadding` also runs on `resize` (MapCanvas.tsx), and the fix's
     // `flying` guard has to re-fly regardless of which of the two callers
@@ -267,6 +274,19 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
     // change.
     await page.waitForTimeout(300);
     await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Read back WHILE the flight is still in the air -- the ~2s ease is
+    // nowhere near done at 300ms in, and this read is one fast `page.evaluate`
+    // round trip, so this samples well before `waitForLiveArrival` below ever
+    // resolves. `onResize`'s own `pushBoundsFromMap()` call is the only thing
+    // that can have moved `bounds` already: the flight's own `moveend` -- the
+    // other path that republishes bounds -- has not fired yet, and won't for
+    // another second or more. Without that line `bounds` would still equal
+    // `beforeResize.bounds` here, describing a canvas 160px narrower than the
+    // one actually on screen, until the flight happens to land on its own.
+    const midResize = await callTool(page, "get_map_state");
+    expect(midResize.error).toBeUndefined();
+    expect(midResize.bounds).not.toEqual(beforeResize.bounds);
 
     await waitForLiveArrival(page, PLACE_ZOOM);
     const settled = await callTool(page, "get_map_state");
@@ -303,7 +323,15 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
     // allowed to win: `flying` (MapCanvas.tsx) is cleared by this gesture's
     // own `moveend`, and no later corridor change may treat the agent's old
     // target as still owed.
-    const beforeDrag = await callTool(page, "get_map_state");
+    //
+    // The LIVE camera, not the store's: `get_map_state().center` right now
+    // would still read the agent's TARGET (Daan Station) -- `set_map_view`
+    // writes it synchronously before a single animation frame runs (this
+    // file's own top-of-file note), and this flight is nowhere near landing.
+    // Measuring the drag's delta off that target, rather than off where the
+    // hand actually started, would pass even if the drag below were a no-op:
+    // the flight alone would already account for the whole "distance".
+    const beforeDrag = await liveCamera(page);
     const box = await page.getByTestId("map").boundingBox();
     if (!box) throw new Error("map container has no box to drag over");
     const startX = box.x + box.width * 0.3;
@@ -317,28 +345,29 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
 
     const afterDrag = await callTool(page, "get_map_state");
     expect(afterDrag.error).toBeUndefined();
-    // The drag itself really moved the camera -- a real geographic delta, not
-    // merely "the flight got interrupted somewhere else on its own ease"
-    // (mousedown alone would do that with no pixel of pan at all). At any
-    // zoom this flight passes through, a 160x120px pan is orders of magnitude
-    // larger than this threshold.
+    // The drag itself really moved the camera off its OWN pre-drag position --
+    // a real geographic delta, not merely "the flight got interrupted
+    // somewhere else on its own ease" (mousedown alone would do that with no
+    // pixel of pan at all). At any zoom this flight passes through, a
+    // 160x120px pan is orders of magnitude larger than this threshold.
     const dragDelta =
-      Math.abs(afterDrag.center!.lng - beforeDrag.center!.lng) +
-      Math.abs(afterDrag.center!.lat - beforeDrag.center!.lat);
+      Math.abs(afterDrag.center!.lng - beforeDrag.lng) + Math.abs(afterDrag.center!.lat - beforeDrag.lat);
     expect(dragDelta).toBeGreaterThan(1e-3);
 
-    // One more read tool call -- the "chrome flips again later" case the
-    // `flying` guard exists for (a resize, a second page reacting to its own
-    // chrome). Harmless here (this page's chrome flipped once already, at the
-    // first call above) but this is exactly the shape of event that must not
-    // be allowed to treat the human's drag as an agent flight still in the air.
-    await callTool(page, "get_map_state");
-    await page.waitForTimeout(2500);
+    // A real corridor change after the drag, not another read call: `flying`
+    // is false now (the drag's own `moveend` cleared it), so `onResize` must
+    // take the NOT-flying branch and never re-fly toward the agent's old
+    // target. This is exactly the shape of event the `flying` guard exists to
+    // withstand -- a resize arriving after a human already took the wheel --
+    // and unlike a bare read call, a resize genuinely runs `onResize`.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(400);
 
     const settled = await callTool(page, "get_map_state");
     expect(settled.error).toBeUndefined();
 
-    // The human's hand wins: nothing moved the camera again after the drag.
+    // The human's hand wins: nothing moved the camera again after the drag,
+    // not even the resize above.
     expect(settled.center).toEqual(afterDrag.center);
     expect(settled.zoom).toBe(afterDrag.zoom);
 

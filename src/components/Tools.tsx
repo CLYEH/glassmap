@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import { AddNoteForm } from "./AddNoteForm";
 import { DrawHint, DrawPill } from "./DrawToolbar";
+import { useNoteStore } from "./note-store";
 import { ShareChip } from "./ShareChip";
 
 /**
@@ -13,18 +14,28 @@ import { ShareChip } from "./ShareChip";
  * the person watching it. The row sits opposite the brand and steps aside for
  * the inspector lane when the agent chrome is up (globals.css).
  *
- * Nothing here is new behaviour: the draw switch, the note form and the copy
- * chip are the ones that shipped, re-skinned into pills and given a home that
- * survives the agent panels being hidden. The note form especially — it is the
- * declarative `add_note` WebMCP tool, and it used to live in the inspector,
- * which no longer exists on a page no agent has touched.
+ * The draw switch, the note form and the copy chip are the ones that shipped,
+ * re-skinned into pills and given a home that survives the agent panels being
+ * hidden. The note form especially — it is the declarative `add_note` WebMCP
+ * tool, and it used to live in the inspector, which no longer exists on a page
+ * no agent has touched.
+ *
+ * Whether the note popover is open is the one piece of this row's state that is
+ * not this row's business alone: while it is open the map is a place-picker,
+ * and a click on it places the pin the note will be written at (T-106). So it
+ * lives in `note-store.ts` beside the drawing draft, where MapCanvas can
+ * subscribe to it imperatively without this component re-rendering the map.
  */
 export function Tools() {
-  const [noteOpen, setNoteOpen] = useState(false);
+  const noteOpen = useNoteStore((s) => s.open);
+  const setNoteOpen = useNoteStore((s) => s.setOpen);
   const inputRef = useRef<HTMLDivElement>(null);
 
   const toggleNote = useCallback(() => {
-    const next = !noteOpen;
+    // Read through the store rather than the rendered value: `setOpen` also
+    // throws away any half-placed pin, and doing that against a stale answer
+    // would leave a pin on the map with no popover to pin it from.
+    const next = !useNoteStore.getState().open;
     setNoteOpen(next);
     // Focus after paint: the popover is opacity-hidden rather than unmounted
     // (see below), so the input exists either way — but focusing it while it is
@@ -32,7 +43,7 @@ export function Tools() {
     if (next) {
       requestAnimationFrame(() => inputRef.current?.querySelector("input")?.focus());
     }
-  }, [noteOpen]);
+  }, [setNoteOpen]);
 
   return (
     <>

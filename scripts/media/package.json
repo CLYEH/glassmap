@@ -1,0 +1,10 @@
+{
+  "name": "glassmap-media",
+  "private": true,
+  "type": "module",
+  "description": "Replays that record the two README clips (docs/media/*.gif). Run `npm install` here, then see the header of each script.",
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "jpeg-js": "^0.4.4"
+  }
+}

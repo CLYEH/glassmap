@@ -373,9 +373,16 @@ export default function MapCanvas() {
      * every path by which the map itself gets to write `lastView`: the flight's
      * own `moveend` (it arrived), and a human gesture's (they took the wheel -
      * dragging cancels the ease, and the position they dragged from is now the
-     * truth). That is the whole invariant, and it is why this is not
-     * `map.isMoving()`: a hand-dragged map is moving too, and re-flying it to a
-     * target the person just overrode would be the map arguing with them.
+     * truth). That is the whole invariant, and re-flying a camera the person
+     * just overrode would be the map arguing with them.
+     *
+     * Not a live read of `map.isMoving()`, which is `_camera.isMoving() ||
+     * _handlers.isMoving()` and so answers true for a hand-dragged map as
+     * readily as for one of ours. This is sampled ONCE, at the instant our
+     * `flyTo` is issued - the moment `_prepareEase` has just set
+     * `_camera._moving` - and from then on any `moveend` that is not ours
+     * clears it. A hand-dragged map fires exactly such a `moveend`, so the flag
+     * never outlives the person's decision.
      */
     let flying = false;
 
@@ -533,8 +540,14 @@ export default function MapCanvas() {
      * ours is in the air, `applyPadding` re-issuing it is not enough on its own.
      *
      * `map.resize()` first. MapLibre learns its canvas size from a
-     * ResizeObserver throttled by 50 ms, so at this instant its transform still
-     * has the old width - and `flyTo` captures the screen point it flies
+     * ResizeObserver, and we are ahead of it in the queue: the window `resize`
+     * event we are handling fires during the resize steps, while
+     * ResizeObserver callbacks are delivered later in the same rendering
+     * update, after rAF. So at this instant MapLibre's transform still has the
+     * old width - not because of the 50 ms throttle on that callback, which is
+     * leading-edge (its first call runs synchronously) and only bites on the
+     * 2nd..Nth event of a drag-resize burst, but because MapLibre's turn has
+     * not come yet - and `flyTo` captures the screen point it flies
      * `center` to ONCE, at issue time (it re-derives it per frame only while the
      * flight itself interpolates padding, which this one never does: the padding
      * is applied before it starts). A flight aimed through a canvas that no
@@ -554,7 +567,7 @@ export default function MapCanvas() {
      * The not-flying branch needs neither: nothing is aimed anywhere, and its
      * `setPadding` is a `jumpTo` whose synchronous `moveend` publishes through
      * `pushViewFromMap` as it always has (against the pre-resize transform, in
-     * that same 50 ms window - MapLibre's own resize corrects it with a
+     * that same gap - MapLibre's own resize corrects it with a
      * `moveend` of its own, because with no ease running that one does fire).
      */
     const onResize = () => {

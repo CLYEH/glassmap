@@ -44,6 +44,7 @@ import { useDrawStore, type DrawMode } from "./draw-store";
 import { setFxMap } from "./fx/map-handle";
 import { useNoteStore } from "./note-store";
 import { readChromeVisible, subscribeChromeVisible } from "./panel-store";
+import { createRouteDraftElement } from "./route-draft-marker";
 import {
   DRAFT_SOURCE,
   DRAWING_LABEL_SOURCE,
@@ -251,13 +252,14 @@ export default function MapCanvas() {
     const card = useCardStore;
 
     /**
-     * A hand gesture owns the next click on the map: a polygon corner, or the
-     * place a note is about to be pinned to (T-106). While one is running a
-     * click is not a question about what is under it, so the feature, bead and
-     * drawing handlers defer and the cursor is a crosshair either way.
+     * A hand gesture owns the next click on the map: a polygon corner, an end
+     * of a walk being planned (T-110), or the place a note is about to be
+     * pinned to (T-106). While one is running a click is not a question about
+     * what is under it, so the feature, bead and drawing handlers defer and the
+     * cursor is a crosshair either way.
      *
      * Draw mode has precedence: with the note popover left open, clicking is
-     * still how a polygon is drawn.
+     * still how a polygon is drawn or a walk is planned.
      */
     const handOwnsClick = () => draw.getState().mode !== "none" || note.getState().open;
 
@@ -896,22 +898,33 @@ export default function MapCanvas() {
     // a no-op until the style is up.
 
     /**
-     * The cursor says what the next click will do, and two gestures can claim
-     * it: a polygon corner and a note waiting for its place. Only the polygon
-     * also takes the double-click away from the zoom, which is why the mode is
+     * The cursor says what the next click will do, and three gestures can claim
+     * it: a polygon corner, an end of a walk, and a note waiting for its place.
+     * Only the note leaves the double-click alone, which is why the mode is
      * still the argument — a person placing a note may double-click to zoom in
      * on the spot they are aiming at, and the second click simply re-places the
-     * pin where they zoomed.
+     * pin where they zoomed. The other two read every click as a point, so a
+     * double-click that also zoomed would move the map out from under the
+     * second one.
      */
     const applyDrawCursor = (mode: DrawMode) => {
-      map.getCanvas().style.cursor = mode === "polygon" || handOwnsClick() ? "crosshair" : "";
+      map.getCanvas().style.cursor = mode !== "none" || handOwnsClick() ? "crosshair" : "";
       // Otherwise the second click of "double-click to finish" zooms the map.
-      if (mode === "polygon") map.doubleClickZoom.disable();
-      else map.doubleClickZoom.enable();
+      if (mode === "none") map.doubleClickZoom.enable();
+      else map.doubleClickZoom.disable();
     };
 
     map.on("click", (event: MapMouseEvent) => {
       const state = draw.getState();
+      if (state.mode === "route") {
+        // Planning is a request to somebody else's server, allowed one per
+        // second: a second click while it is out would either be dropped by the
+        // store anyway or spend the next second's request. Ignored here so the
+        // map does not even look like it took it.
+        if (state.routeStatus === "planning") return;
+        void state.addRouteVertex([event.lngLat.lng, event.lngLat.lat]);
+        return;
+      }
       if (state.mode !== "polygon") return;
       const last = state.draft[state.draft.length - 1];
       if (last) {
@@ -952,9 +965,30 @@ export default function MapCanvas() {
       }
     };
 
+    /**
+     * Where a hand-planned walk starts, while it has one end and not two
+     * (T-110). The same imperative marker the note draft uses, and there for
+     * the same reason: between the two clicks the only thing on screen saying
+     * the first one landed is the hint, and a hint is not a place.
+     */
+    let routeMarker: Marker | null = null;
+
+    const applyRouteDraft = (at: LngLat | null) => {
+      if (!at) {
+        routeMarker?.remove();
+        routeMarker = null;
+        return;
+      }
+      if (routeMarker) routeMarker.setLngLat(at);
+      else {
+        routeMarker = new Marker({ element: createRouteDraftElement() }).setLngLat(at).addTo(map);
+      }
+    };
+
     map.on("click", (event: MapMouseEvent) => {
       // Draw mode has precedence: with the note popover left open, a click is
-      // still a corner (the guard above has already taken it).
+      // still a corner or an end of a walk (the guard above has already taken
+      // it).
       if (draw.getState().mode !== "none") return;
       const state = note.getState();
       if (!state.open) return;
@@ -1000,6 +1034,11 @@ export default function MapCanvas() {
 
     const unsubscribeDraw = draw.subscribe((state, previous) => {
       if (state.draft !== previous.draft) applyDraft(map, state.draft);
+      // Only the start is ever a mark of its own — the end is the line, or the
+      // failure that clears both. It stays put while the walk is being planned:
+      // the answer comes from somebody else's server, and a pin that vanished
+      // on the second click would read as the first one having been lost.
+      if (state.routeDraft !== previous.routeDraft) applyRouteDraft(state.routeDraft[0] ?? null);
       if (state.mode !== previous.mode) {
         applyDrawCursor(state.mode);
         // Drawing takes the map's clicks over, so a note left half-placed under
@@ -1060,8 +1099,10 @@ export default function MapCanvas() {
     syncAnnotationMarkers(map, markers, store.getState().annotations, tapAnnotation);
     applyDrawCursor(draw.getState().mode);
     // The UI stores outlive this effect (a remount, or React's development
-    // double-mount), so a note being placed keeps its pin across one.
+    // double-mount), so a note being placed and a walk half-clicked keep their
+    // pins across one.
     applyNoteDraft(note.getState().draft);
+    applyRouteDraft(draw.getState().routeDraft[0] ?? null);
 
     return () => {
       window.removeEventListener("resize", onResize);
@@ -1075,6 +1116,8 @@ export default function MapCanvas() {
       markers.clear();
       draftMarker?.remove();
       draftMarker = null;
+      routeMarker?.remove();
+      routeMarker = null;
       try {
         map.remove();
       } catch {

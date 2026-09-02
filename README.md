@@ -6,14 +6,14 @@ Live: **https://glassmap.clyeh.xyz** · **15 WebMCP tools, no backend, no API ke
 ![The map after an agent session: a 6-call activity feed, a dashed teal 800 m "10-minute walk" circle around 7 teal-ringed parks, an inspector reading SELECTED 7 · SHAPES 1 · NOTES 1, and a footer reading "Agent connected · 15 tools · WebMCP".](docs/media/hero.jpg)
 
 ## Why "Glass"
-To an agent, every station, park and pin on a web map is just pixels. A screenshot can't read an unlabeled green polygon, a click stops working the moment the zoom changes, and drawing a shape, measuring a distance or selecting every park in view is essentially impossible from a picture. WebMCP exposes the map's state, features and actions as tools instead, so an agent never has to guess from pixels — the black box becomes **glass**. For someone who cannot see the map at all, the same read-only tools double as agent-mediated map access — not a WCAG or accessibility-compliance claim. Every web map has this problem — property search, delivery planning, travel — and the fix is a tool contract, not a bigger screenshot model.
+To an agent, every station, park and pin on a web map is just pixels. A screenshot can't read an unlabeled green polygon, a click stops working the moment the zoom changes, and drawing a shape, measuring a distance or selecting every park in view is essentially impossible from a picture. WebMCP exposes the map's state, features and actions as tools instead, so an agent never has to guess from pixels — the black box becomes **glass**. Every web map has this problem — property search, delivery planning, travel — and the fix is a tool contract, not a bigger screenshot model. For someone who cannot see the map at all, the same read-only tools double as agent-mediated map access — not a WCAG or accessibility-compliance claim.
 
 ## The same task, two ways
 Both arms were asked: *"Show every park within a 10-minute walk of Daan Station."* — the first "Try asking" card on the page. Open the live site and say it verbatim.
 
 **Screenshot agent**
 ![The screenshot agent driving GlassMap by clicks, keys and full-page screenshots, with no tool access.](docs/media/screenshot-agent.gif)
-19 UI actions · 8 screenshots → finds 2 of 7 parks. The 800 m "circle" is an 8-vertex polygon whose radius is a guess — the page shows a screenshot agent no scale bar and no zoom readout; the other 5 were never found — each one is another click-and-read-the-card round trip, and nothing on screen says how many are left. The search box needs two tries — "Daan Station" has no match, "Daan" does.
+19 UI actions · 8 screenshots → finds 2 of 7 parks. The 800 m "circle" is an 8-vertex polygon whose radius is a guess (the page shows a screenshot agent no scale bar and no zoom readout). The other 5 were never found: each one is another click-and-read-the-card round trip, and nothing on screen says how many are left. The search box needs two tries — "Daan Station" has no match, "Daan" does.
 
 **WebMCP agent**
 ![The WebMCP agent calling map tools directly, with the map updating and no screenshots taken.](docs/media/webmcp-agent.gif)
@@ -87,7 +87,9 @@ Design rules the tool layer follows:
 - Responses stay small: `limit` defaults to 20, coordinates round to 5 decimals, geometry returns by id.
 - Bad input returns a structured `{ error }`, never throws; no `alert` / `confirm` / `prompt` anywhere.
 
-More detail: [`docs/details.md`](./docs/details.md). Verified once, 2026-08-28, against the ChatGPT desktop app: it listed the eleven tools the page declared at the time and called `get_map_state` live, no Chrome flag needed. The roster has grown to fourteen registered tools since — `add_note` is the fifteenth, registered not via `document.modelContext` but as a plain HTML form, which is why the heading above says fifteen — and that growth is unverified against ChatGPT.
+More on how these behave: [`docs/details.md`](./docs/details.md).
+
+Verified once, 2026-08-28, against the ChatGPT desktop app: it listed the eleven tools the page declared at the time and called `get_map_state` live, no Chrome flag needed. The roster has grown to fourteen registered tools since (the `add_note` form is the fifteenth), and that growth is unverified against ChatGPT.
 
 ## One map, two hands
 The map is shared state, not a private channel for the agent.

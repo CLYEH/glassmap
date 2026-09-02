@@ -12,11 +12,10 @@
  * two-step `find_features · measure` chain. Re-verify resolution before
  * changing a single word.
  *
- * And these strings are not only here: README.md's "Try it" section quotes the
- * first three cards verbatim, question and tool tag both. Editing one of those
- * three without editing the README leaves the repo saying two different things
- * a judge can hand the same agent. (It quotes three of five and claims no
- * completeness, so adding a card is safe; changing one of the three is not.)
+ * And these strings are not only here: README.md's "Try it" section quotes all
+ * five cards verbatim, question and tool tag both. Editing any of them without
+ * editing the README leaves the repo saying two different things a judge can
+ * hand the same agent. (Adding a card is safe; changing one is not.)
  *
  * The `get_place_details` card (F-4) is held to the same bar twice over, and
  * both halves are easy to break by rewording it:

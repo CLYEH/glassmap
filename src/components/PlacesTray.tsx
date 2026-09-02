@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { isAgentState } from "@/lib/awaken";
 import { useMapStore } from "@/lib/store/map-store";
 import type { Tier2Category } from "@/lib/store/tier2";
@@ -10,6 +10,7 @@ import { TIER2_PLURAL } from "./category-labels";
 import { TRAY_ORDER, trayCount } from "./places-model";
 import { loadedCategoryRows } from "./tier2-disclosure";
 import { useAwakenMode } from "./useAwakenMode";
+import { usePublishedWidth } from "./usePublishedWidth";
 
 const number = (n: number) => n.toLocaleString("en-US");
 
@@ -49,6 +50,15 @@ const number = (n: number) => n.toLocaleString("en-US");
  */
 export function PlacesDock() {
   const mode = useAwakenMode();
+  /**
+   * The dock's own width, published to the stylesheet as `--dock-w`.
+   *
+   * The loaded-POI disclosure shares this band and has no way to know how wide
+   * the dock is: nought to three browsed chips, each named, is a 159-720px
+   * range that no constant covers. See `usePublishedWidth` and `.poi-strip`.
+   */
+  const dockRef = useRef<HTMLDivElement>(null);
+  usePublishedWidth(dockRef, "--dock-w");
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState<Tier2Category | null>(null);
   /** The category a fourth pick pushed off the map, until the next pick. */
@@ -124,7 +134,7 @@ export function PlacesDock() {
   );
 
   return (
-    <div className="dock" data-testid="places-dock" data-tray-open={open}>
+    <div className="dock" ref={dockRef} data-testid="places-dock" data-tray-open={open}>
       <div className="tray lg deep" data-testid="places-tray" hidden={!open}>
         <span aria-hidden className="caustic" />
         <div className="tray-head">

@@ -988,6 +988,33 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   padding: 5px 10px;
   border-radius: var(--radius-s);
 }
+/* The strip also stops before the Places dock, which is an island centred over
+   this same bar. Nothing above holds it there: the strip's `margin-right: auto`
+   reaches for the corner, and the dock is out of the flow entirely (absolute,
+   z-index 20), so at fifteen loaded categories the row ran clean under the pill
+   and the browsed chips — measured 720px of overlap at 1440 and 319px at 768 —
+   and both surfaces became unreadable at once.
+
+   The boundary is the gutter beside the dock, and it has to be measured
+   because the dock's width is content: the pill alone is 159px, the pill plus
+   three named browsed chips is about 720px, and a person can change which of
+   the two it is at any moment. `--dock-w` is the dock's own box, published by
+   `PlacesTray.tsx`; the halving is the dock being centred over this bar (in
+   agent chrome the lane shifts the dock 5px left of the bar's centre, which is
+   inside the 16px this leaves for the gap and the rounding).
+
+   The strip keeps growing upward past the cap rather than being cut: more
+   rows of the same whole chips, which is the same choice `flex-wrap` above
+   already makes for the same reason.
+
+   Only where the dock is a centred island. Below 641px it spans the bar and
+   the bar is lifted clear of it (`bottom: 62px`), so there is no gutter to
+   compute and this would resolve to nothing. */
+@media (min-width: 641px) {
+  .poi-strip {
+    max-width: min(calc(100vw - 24px), calc((100% - var(--dock-w, 0px)) / 2 - 16px));
+  }
+}
 .poi-strip-label {
   font-size: 10px;
   font-weight: 620;

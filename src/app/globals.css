@@ -1007,12 +1007,75 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
    rows of the same whole chips, which is the same choice `flex-wrap` above
    already makes for the same reason.
 
-   Only where the dock is a centred island. Below 641px it spans the bar and
-   the bar is lifted clear of it (`bottom: 62px`), so there is no gutter to
-   compute and this would resolve to nothing. */
+   Only while the bar and the dock still share the band, and only where the
+   dock is a centred island. Below 641px the dock spans the bar and the bar is
+   lifted clear of it (`bottom: 62px`), and the same is true above 641px once a
+   browsed chip is on the dock (see the lift below) — in both cases there is no
+   gutter to compute and this would resolve to nothing. */
 @media (min-width: 641px) {
-  .poi-strip {
+  .map-wrap:not(:has(.dock-actives)) .poi-strip {
     max-width: min(calc(100vw - 24px), calc((100% - var(--dock-w, 0px)) / 2 - 16px));
+  }
+  /* The corner keeps the mirror image of that gutter, for a harder reason
+     than the strip's. Even the bare pill is 160px wide, and in agent chrome
+     the corridor it is centred on has lost a 300px lane — so at 921px the
+     attribution's own 295px was wider than the 216px left beside the dock and
+     ran under it, licence links and all. Capped, it wraps instead (below), and
+     above 1240 there is room for the whole line again so nothing changes. */
+  .map-wrap:not(:has(.dock-actives)) .corner {
+    max-width: calc((100% - var(--dock-w, 0px)) / 2 - 16px);
+  }
+}
+
+/* What the corner gives up when the gutter is narrower than the licence: the
+   line wraps. Two lines of licence beside the dock is the honest trade against
+   one line under it — and the tier below 921px already made exactly this
+   choice for exactly this reason. Above 1240px the gutter fits the whole line
+   again, so nothing wraps there and the corner reads as it always has. */
+@media (min-width: 921px) {
+  .map-wrap:not(:has(.dock-actives)) .attribution {
+    white-space: normal;
+    text-align: right;
+  }
+}
+/* And the badge is allowed to wrap at all, so that a capped corner can narrow
+   it instead of pushing it out to the left. Its three parts stay whole because
+   each is `nowrap` on its own — what wraps is where they sit, never a word. */
+.badge {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The dock with browsed chips on it is too wide to share the band at all, and
+   what it covers is a licence condition.
+
+   One tap paints a kind of place and puts a named chip on the dock; three of
+   them make it 320-815px wide, which at every width up to 1240 is more than
+   half the corridor — and in agent chrome more than the corridor itself (the
+   awake dock is centred on `calc((100% - var(--lane) - 10px) / 2)` with the
+   canvas, not the corridor, as its shrink-to-fit space). Measured with three
+   browsed kinds, the dock covered the OpenStreetMap attribution at every width
+   from 641 to 1024 in human chrome and from 641 to 1440 in agent chrome — by
+   22 to 295px — the WebMCP badge by up to 255px and the corner whisper by up
+   to 87px, and the attribution's three links sat *under* the chips, so they
+   could not be clicked either. "Data © OpenStreetMap
+   contributors" is a licence condition and may never be covered; the same
+   sentence is already written at the phone tier, where this arrangement comes
+   from.
+
+   So the bar takes the row above the dock, exactly as it does below 641px —
+   the design's own answer to the same collision, applied at the same moment
+   the collision appears rather than at a width. Nothing wraps, nothing
+   narrows, nothing is hidden: the licence, the badge, the whisper and the
+   disclosure all keep the form they have on the landing map, one band higher.
+
+   `--dock-h` is the dock's own box (`PlacesTray.tsx`); the 28px is its bottom
+   inset (16px, 12px below 1361) plus the gap the bar keeps from it. The
+   landing map is untouched — with no browsed chip there is no `.dock-actives`,
+   and the bar stays in the corner. */
+@media (min-width: 641px) {
+  .map-wrap:has(.dock-actives) .bottom-bar {
+    bottom: calc(var(--dock-h, 0px) + 28px);
   }
 }
 .poi-strip-label {

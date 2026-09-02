@@ -988,6 +988,88 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   padding: 5px 10px;
   border-radius: var(--radius-s);
 }
+/* The strip also stops before the Places dock, which is an island centred over
+   this same bar. Nothing above holds it there: the strip's `margin-right: auto`
+   reaches for the corner, and the dock is out of the flow entirely (absolute,
+   z-index 20), so at fifteen loaded categories the row ran clean under the pill
+   and the browsed chips — measured 720px of overlap at 1440 and 319px at 768 —
+   and both surfaces became unreadable at once.
+
+   The boundary is the gutter beside the dock, and it has to be measured
+   because the dock's width is content: the pill alone is 159px, the pill plus
+   three named browsed chips is about 720px, and a person can change which of
+   the two it is at any moment. `--dock-w` is the dock's own box, published by
+   `PlacesTray.tsx`; the halving is the dock being centred over this bar (in
+   agent chrome the lane shifts the dock 5px left of the bar's centre, which is
+   inside the 16px this leaves for the gap and the rounding).
+
+   The strip keeps growing upward past the cap rather than being cut: more
+   rows of the same whole chips, which is the same choice `flex-wrap` above
+   already makes for the same reason.
+
+   Only while the bar and the dock still share the band, and only where the
+   dock is a centred island. Below 641px the dock spans the bar and the bar is
+   lifted clear of it (`bottom: 62px`), and the same is true above 641px once a
+   browsed chip is on the dock (see the lift below) — in both cases there is no
+   gutter to compute and this would resolve to nothing. */
+@media (min-width: 641px) {
+  .map-wrap:not(:has(.dock-actives)) .poi-strip {
+    max-width: min(calc(100vw - 24px), calc((100% - var(--dock-w, 0px)) / 2 - 16px));
+  }
+  /* The corner keeps the mirror image of that gutter, for a harder reason
+     than the strip's. Even the bare pill is 160px wide, and in agent chrome
+     the corridor it is centred on has lost a 300px lane — so at 921px the
+     attribution's own 295px was wider than the 216px left beside the dock and
+     ran under it, licence links and all. Capped, it wraps instead (below), and
+     above 1240 there is room for the whole line again so nothing changes. */
+  .map-wrap:not(:has(.dock-actives)) .corner {
+    max-width: calc((100% - var(--dock-w, 0px)) / 2 - 16px);
+  }
+}
+
+/* What the corner gives up when the gutter is narrower than the licence: the
+   line wraps. Two lines of licence beside the dock is the honest trade against
+   one line under it — and the tier below 921px already made exactly this
+   choice for exactly this reason. Above 1240px the gutter fits the whole line
+   again, so nothing wraps there and the corner reads as it always has. */
+@media (min-width: 921px) {
+  .map-wrap:not(:has(.dock-actives)) .attribution {
+    white-space: normal;
+    text-align: right;
+  }
+}
+/* The dock with browsed chips on it is too wide to share the band at all, and
+   what it covers is a licence condition.
+
+   One tap paints a kind of place and puts a named chip on the dock; three of
+   them make it 320-815px wide, which at every width up to 1240 is more than
+   half the corridor — and in agent chrome more than the corridor itself (the
+   awake dock is centred on `calc((100% - var(--lane) - 10px) / 2)` with the
+   canvas, not the corridor, as its shrink-to-fit space). Measured with three
+   browsed kinds, the dock covered the OpenStreetMap attribution at every width
+   from 641 to 1024 in human chrome and from 641 to 1440 in agent chrome — by
+   22 to 295px — the WebMCP badge by up to 255px and the corner whisper by up
+   to 87px, and the attribution's three links sat *under* the chips, so they
+   could not be clicked either. "Data © OpenStreetMap
+   contributors" is a licence condition and may never be covered; the same
+   sentence is already written at the phone tier, where this arrangement comes
+   from.
+
+   So the bar takes the row above the dock, exactly as it does below 641px —
+   the design's own answer to the same collision, applied at the same moment
+   the collision appears rather than at a width. Nothing wraps, nothing
+   narrows, nothing is hidden: the licence, the badge, the whisper and the
+   disclosure all keep the form they have on the landing map, one band higher.
+
+   `--dock-h` is the dock's own box (`PlacesTray.tsx`); the 28px is its bottom
+   inset (16px, 12px below 921) plus the gap the bar keeps from it. The
+   landing map in human chrome is untouched — with no browsed chip there is
+   no `.dock-actives`, and the bar stays in the corner. */
+@media (min-width: 641px) {
+  .map-wrap:has(.dock-actives) .bottom-bar {
+    bottom: calc(var(--dock-h, 0px) + 28px);
+  }
+}
 .poi-strip-label {
   font-size: 10px;
   font-weight: 620;
@@ -1091,6 +1173,12 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   align-items: center;
   gap: 8px;
   padding: 7px 12px;
+  /* Allowed to wrap, so that the corner's cap beside the Places dock (see
+     `.corner` above) can narrow it instead of pushing it out to the left. Its
+     parts stay whole because each is `nowrap` on its own — what wraps is where
+     they sit, never a word. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .badge .live-dot {
   width: 7px;

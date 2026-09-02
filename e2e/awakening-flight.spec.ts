@@ -331,17 +331,25 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
     // Measuring the drag's delta off that target, rather than off where the
     // hand actually started, would pass even if the drag below were a no-op:
     // the flight alone would already account for the whole "distance".
-    const beforeDrag = await liveCamera(page);
+    //
+    // And sampled AFTER `mouse.down()`, not before it. The pan handler is
+    // `activateOnStart`, so the mousedown alone makes the handler manager call
+    // `stop(true)`: from that instant the camera is frozen until the first
+    // pan delta. Sampled a few round trips earlier, the still-moving flight
+    // would pollute the delta -- on a slow CI runner it once cancelled most
+    // of a 160x120px pan and read 0.00055 against the 0.001 floor below.
     const box = await page.getByTestId("map").boundingBox();
     if (!box) throw new Error("map container has no box to drag over");
     const startX = box.x + box.width * 0.3;
     const startY = box.y + box.height * 0.5;
     await page.mouse.move(startX, startY);
     await page.mouse.down();
+    const beforeDrag = await liveCamera(page);
     await page.mouse.move(startX + 160, startY + 120, { steps: 12 });
     await page.mouse.up();
-    // Let any drag inertia settle before reading the position back.
-    await page.waitForTimeout(400);
+    // Let the drag's inertia run out before reading the position back -- the
+    // store publishes at `moveend`, and a fixed wait is a bet on the runner.
+    await page.waitForFunction(() => !window.__glassmapMap!.isMoving());
 
     const afterDrag = await callTool(page, "get_map_state");
     expect(afterDrag.error).toBeUndefined();

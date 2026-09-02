@@ -205,6 +205,14 @@ const sameView = (a: MapView, b: MapView) =>
   Math.abs(a.bearing - b.bearing) < 1e-4 &&
   Math.abs(a.pitch - b.pitch) < 1e-4;
 
+/** The camera options a `MapView` is: the same four fields, MapLibre's names. */
+const cameraOf = (view: MapView) => ({
+  center: view.center,
+  zoom: view.zoom,
+  bearing: view.bearing,
+  pitch: view.pitch,
+});
+
 /**
  * The map is a mirror of the store: tools write `view`/`selection` and the map
  * follows; user gestures write back through `moveend`.
@@ -216,6 +224,11 @@ const sameView = (a: MapView, b: MapView) =>
  *    which fires `moveend` SYNCHRONOUSLY when an animation is already running;
  *    without this guard that re-entrant `moveend` writes the mid-flight camera
  *    back over the request a tool is about to read.
+ *
+ * And one fact, `flying`, that says a flight of ours is still owed. Not whose
+ * camera the map is obeying, which is a different question with a different
+ * answer: a human who drags mid-flight is obeyed at once, and that clears the
+ * flag. See `applyPadding`, which has to interrupt a flight without ending it.
  */
 export default function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -352,6 +365,26 @@ export default function MapCanvas() {
     // request is not dropped just because it momentarily matches an unrelated
     // interpolated position.
     let lastView: MapView = initial;
+    /**
+     * True exactly while `lastView` is a camera WE commanded and the map has
+     * not reported reaching yet - i.e. one of our flights is still in the air.
+     *
+     * Set where the flight is issued, cleared in `pushViewFromMap`, which is
+     * every path by which the map itself gets to write `lastView`: the flight's
+     * own `moveend` (it arrived), and a human gesture's (they took the wheel -
+     * dragging cancels the ease, and the position they dragged from is now the
+     * truth). That is the whole invariant, and re-flying a camera the person
+     * just overrode would be the map arguing with them.
+     *
+     * Not a live read of `map.isMoving()`, which is `_camera.isMoving() ||
+     * _handlers.isMoving()` and so answers true for a hand-dragged map as
+     * readily as for one of ours. This is sampled ONCE, at the instant our
+     * `flyTo` is issued - the moment `_prepareEase` has just set
+     * `_camera._moving` - and from then on any `moveend` that is not ours
+     * clears it. A hand-dragged map fires exactly such a `moveend`, so the flag
+     * never outlives the person's decision.
+     */
+    let flying = false;
 
     /**
      * Publish the extent of the corridor the camera is currently over. Not
@@ -374,6 +407,9 @@ export default function MapCanvas() {
     const pushViewFromMap = () => {
       // A `moveend` our own flyTo caused, not a user gesture - ignore it.
       if (toMap) return;
+      // Whatever this event is, the map is about to become the author of
+      // `lastView`, so no flight of ours is owed against it any more.
+      flying = false;
       const center = map.getCenter();
       const view: MapView = {
         center: [center.lng, center.lat],
@@ -394,12 +430,7 @@ export default function MapCanvas() {
     const applyView = (view: MapView) => {
       if (sameView(view, lastView)) return;
       lastView = view;
-      const camera = {
-        center: view.center,
-        zoom: view.zoom,
-        bearing: view.bearing,
-        pitch: view.pitch,
-      };
+      const camera = cameraOf(view);
       toMap = true;
       try {
         // Animate only when there is a render loop to animate in. Without a
@@ -409,8 +440,27 @@ export default function MapCanvas() {
         // store reports the new one, and `bounds` - only ever written from
         // `moveend` - would freeze there with it. A jump has no animation to
         // stall: the map really is where the store says it is.
-        if (styleLoaded) map.flyTo({ ...camera, essential: true });
-        else map.jumpTo(camera);
+        if (styleLoaded) {
+          map.flyTo({ ...camera, essential: true });
+          // Asked, not asserted. A flight that finishes inside this call -
+          // what `duration: 0` does, running its last frame and `finish`
+          // synchronously - has already fired the `moveend` that clears this,
+          // and fired it inside the `toMap` guard, which drops it. `flying =
+          // true` would then latch with nothing left to clear it, and every
+          // later corridor change would re-fly a camera nobody is owed. No
+          // caller does that today (both pass `essential: true` and no
+          // duration), so this costs nothing and cannot be got wrong later.
+          //
+          // `isMoving()` and not `Camera.isEasing()`, which is the narrower
+          // question but is not on `Map` in maplibre-gl 6 (`Map` composes a
+          // `Camera`, it no longer extends one). The wider answer is the one
+          // that keeps the invariant anyway: while the map is moving at all
+          // there is a `moveend` still to come, and every `moveend` that is
+          // not ours clears this flag.
+          flying = map.isMoving();
+        } else {
+          map.jumpTo(camera);
+        }
       } finally {
         toMap = false;
       }
@@ -429,11 +479,107 @@ export default function MapCanvas() {
     // corridor the human can actually see. Applied before the first
     // `pushViewFromMap` so the very first `center`/`bounds` pair a tool can
     // read already describes that corridor and not the full canvas.
+    //
+    // A corridor change must not cancel the flight it interrupts (T-104). In
+    // maplibre-gl 6 `Camera.setPadding(p)` is literally `this.jumpTo({padding:
+    // p})`, and `jumpTo` opens with `this.stop()`: an ease in progress is
+    // dropped at whatever frame it had reached and its `finish` fires `moveend`
+    // SYNCHRONOUSLY, carrying that frame's camera: the pre-flight one when the
+    // interruption lands in the same tick as the flight (frame 0 - the T-104
+    // case), a genuine mid-flight one when it comes later, as a window resize
+    // does. `jumpTo` then fires a SECOND synchronous `moveend` of its own, once
+    // the new padding is on. Unguarded, `pushViewFromMap` believed both: it
+    // wrote a camera the flight had already left behind into the store and into
+    // `lastView`, so nothing was owed any more and nothing re-flew. Both are
+    // guarded now, and neither needs to be told apart from the other - every
+    // camera event this re-padding causes is one we caused.
+    //
+    // Which made the FIRST tool call on a page cancel its own flight, every
+    // time: that call is also the one that wakes the chrome, so the flight and
+    // the lane arrived in the same tick. `set_map_view` returned the new
+    // camera, the store held it for one tick, and the map never left the
+    // landing view. The same call on an already-awake page was fine, which is
+    // why this hid for so long - and why the suite hid it too. Network
+    // isolation is the reason: with the basemap host blocked no style ever
+    // arrives, so `applyView` jumps instead of flying and there is no ease to
+    // cancel. A spec that opts into the mock basemap (`mockMinimalBasemap` - a
+    // valid empty style document, all MapLibre needs to fire `load` and run a
+    // render loop) does fly, and reproduces this in seconds.
+    //
+    // So when a flight of ours is in the air, pad inside the `toMap` guard -
+    // that guard is for re-entrant camera events and this is one, an event that
+    // says where the map is while lying about where it is going - and then put
+    // the flight back in the air towards the target `lastView` still holds. The
+    // corridor really did move and the flight really is still owed; both
+    // statements survive. Publishing the new corridor is then the caller's job,
+    // because the `moveend` that would have done it is inside the guard: both
+    // callers - `subscribeChromeVisible` and `onResize` - follow this with
+    // `pushBoundsFromMap`, which reports the corridor around the camera as it
+    // is mid-flight, exactly as it does during any other flight, and the
+    // flight's own `moveend` corrects it on arrival.
     const applyPadding = () => {
-      map.setPadding({ top: 0, bottom: 0, left: 0, right: inspectorLane() });
+      const padding = { top: 0, bottom: 0, left: 0, right: inspectorLane() };
+      if (!flying) {
+        map.setPadding(padding);
+        return;
+      }
+      toMap = true;
+      try {
+        map.setPadding(padding);
+        map.flyTo({ ...cameraOf(lastView), essential: true });
+        // Same reason as in `applyView`: never latch on a flight that is over.
+        flying = map.isMoving();
+      } finally {
+        toMap = false;
+      }
     };
     applyPadding();
-    window.addEventListener("resize", applyPadding);
+
+    /**
+     * The window changed size, so the corridor did too - and when a flight of
+     * ours is in the air, `applyPadding` re-issuing it is not enough on its own.
+     *
+     * `map.resize()` first. MapLibre learns its canvas size from a
+     * ResizeObserver, and we are ahead of it in the queue: the window `resize`
+     * event we are handling fires during the resize steps, while
+     * ResizeObserver callbacks are delivered later in the same rendering
+     * update, after rAF. So at this instant MapLibre's transform still has the
+     * old width - not because of the 50 ms throttle on that callback, which is
+     * leading-edge (its first call runs synchronously) and only bites on the
+     * 2nd..Nth event of a drag-resize burst, but because MapLibre's turn has
+     * not come yet - and `flyTo` captures the screen point it flies
+     * `center` to ONCE, at issue time (it re-derives it per frame only while the
+     * flight itself interpolates padding, which this one never does: the padding
+     * is applied before it starts). A flight aimed through a canvas that no
+     * longer exists lands a few hundred metres from the centre the tool already
+     * returned, and `moveend` then writes that wrong place into the store as
+     * fact. Resizing mid-ease is safe: `Map.resize` calls `stop()` and fires
+     * move events only when `!this._camera._moving`, which a running ease makes
+     * false - so it cannot cancel the flight it is here to protect.
+     *
+     * `pushBoundsFromMap()` after, because the flying branch of `applyPadding`
+     * re-pads inside the `toMap` guard, and that guard swallows the `moveend`
+     * which used to publish the new corridor. Without this line
+     * `get_map_state().bounds` keeps describing the old canvas width for the
+     * whole flight - byte-identical to the answer before the resize, on a page
+     * that visibly changed shape.
+     *
+     * The not-flying branch needs neither: nothing is aimed anywhere, and its
+     * `setPadding` is a `jumpTo` whose synchronous `moveend` publishes through
+     * `pushViewFromMap` as it always has (against the pre-resize transform, in
+     * that same gap - MapLibre's own resize corrects it with a
+     * `moveend` of its own, because with no ease running that one does fire).
+     */
+    const onResize = () => {
+      if (!flying) {
+        applyPadding();
+        return;
+      }
+      map.resize();
+      applyPadding();
+      pushBoundsFromMap();
+    };
+    window.addEventListener("resize", onResize);
 
     // The transform is valid as soon as the constructor returns, so bounds is
     // available immediately - a tool must not see `bounds: null` for the ~1.4 s
@@ -843,7 +989,7 @@ export default function MapCanvas() {
     applyDrawCursor(draw.getState().mode);
 
     return () => {
-      window.removeEventListener("resize", applyPadding);
+      window.removeEventListener("resize", onResize);
       setFxMap(null);
       unsubscribe();
       unsubscribeDraw();

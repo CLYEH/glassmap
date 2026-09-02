@@ -48,9 +48,9 @@ import { useEffect, type RefObject } from "react";
  * there is no separate initial read either.
  *
  * The properties are removed on unmount, so a page with no dock falls back to
- * the values written in the stylesheet rather than to a stale measurement.
+ * each rule's own `var(…, 0px)` default rather than to a stale measurement.
  */
-export function usePublishedBox(ref: RefObject<HTMLElement | null>, prefix: string): void {
+export function usePublishedBox(ref: RefObject<HTMLElement | null>, prefix: `--${string}`): void {
   useEffect(() => {
     const node = ref.current;
     if (!node) return;

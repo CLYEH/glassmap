@@ -1038,14 +1038,6 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
     text-align: right;
   }
 }
-/* And the badge is allowed to wrap at all, so that a capped corner can narrow
-   it instead of pushing it out to the left. Its three parts stay whole because
-   each is `nowrap` on its own — what wraps is where they sit, never a word. */
-.badge {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 /* The dock with browsed chips on it is too wide to share the band at all, and
    what it covers is a licence condition.
 
@@ -1070,9 +1062,9 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
    disclosure all keep the form they have on the landing map, one band higher.
 
    `--dock-h` is the dock's own box (`PlacesTray.tsx`); the 28px is its bottom
-   inset (16px, 12px below 1361) plus the gap the bar keeps from it. The
-   landing map is untouched — with no browsed chip there is no `.dock-actives`,
-   and the bar stays in the corner. */
+   inset (16px, 12px below 921) plus the gap the bar keeps from it. The
+   landing map in human chrome is untouched — with no browsed chip there is
+   no `.dock-actives`, and the bar stays in the corner. */
 @media (min-width: 641px) {
   .map-wrap:has(.dock-actives) .bottom-bar {
     bottom: calc(var(--dock-h, 0px) + 28px);
@@ -1181,6 +1173,12 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   align-items: center;
   gap: 8px;
   padding: 7px 12px;
+  /* Allowed to wrap, so that the corner's cap beside the Places dock (see
+     `.corner` above) can narrow it instead of pushing it out to the left. Its
+     parts stay whole because each is `nowrap` on its own — what wraps is where
+     they sit, never a word. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .badge .live-dot {
   width: 7px;

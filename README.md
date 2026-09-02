@@ -61,7 +61,7 @@ JSON.parse(found);
 Any other browser works with `?shim=1` appended to the URL: the page installs `document.modelContext` itself when the browser has none. Development builds do this by default.
 
 ## Fifteen tools
-Three layers, in that order: **Perceive** (read-only — replaces screenshots), **Navigate** (camera only) and **Act** (writes page state; only `plan_route` calls an external service).
+Three layers, in that order: **Perceive** (read-only — replaces screenshots), **Navigate** (camera only) and **Act** (writes page state; only routing calls an external service).
 
 | Tool | What it does |
 |---|---|
@@ -101,7 +101,7 @@ The map is shared state, not a private channel for the agent.
 - **Two WebMCP APIs, one state.** The pin-note field is a plain `<form toolname="add_note">` — no JavaScript registration — and `SubmitEvent.agentInvoked`, the browser's own signal rather than a guess the page makes, decides whether the note is stored as `agent` or `user`.
 - A search box lets a human find a place, calling no tool; a Places tray loads any of 18 OpenStreetMap categories, up to 3 painted at once — a fourth tap evicts the oldest and says so.
 - With the Note popover open, a click on the map places the pin there — a second click moves it, `Escape` cancels — and with no click, the note pins at the map centre.
-- A Route pill: click a start and an end, and the same walking-route service draws the walk as a human line, labelled with its distance and time.
+- A Route pill: click a start and an end, and the same walking-route service `plan_route` uses draws the walk as a `source: "user"` line, labelled with its distance and time (`walking route · 3.8 km · 47 min`) — a mark `remove_from_map` refuses like any other of the human's.
 - Every tool call plays a brief effect on the map, capped at 2 seconds — teal for the agent, rose for a human action. `?fx=off` turns it off, and it honours `prefers-reduced-motion`.
 - The address bar holds a link that restores this exact map — camera, selection, drawings and notes, each still tagged `agent` or `user` — for whoever opens it.
 
@@ -113,7 +113,7 @@ Six bundled Taipei datasets are always in memory — 109 MRT stations, 12 distri
 - Code: [MIT](./LICENSE).
 
 ## How it is built
-A single Next.js app on Vercel — **no backend, no database, no API keys, no login**. [MapLibre GL JS](https://maplibre.org/) renders [OpenFreeMap](https://openfreemap.org/) vector tiles; [Turf.js](https://turfjs.org/) runs every spatial query in the browser; [Zustand](https://zustand.docs.pmnd.rs/) holds map state. Tools in `src/lib/map-tools/` talk to the map only through a `MapToolStore` interface, so they are unit-tested against an in-memory store. `src/lib/webmcp/register.ts` registers on both `document.modelContext` and `navigator.modelContext`, cancellable via `AbortSignal`. The one external service is `plan_route`, which asks the keyless FOSSGIS OSRM instance for walking routes, throttled to its 1 request/second policy; when the service is unreachable the tool returns an error and leaves the map unchanged.
+A single Next.js app on Vercel — **no backend, no database, no API keys, no login**. [MapLibre GL JS](https://maplibre.org/) renders [OpenFreeMap](https://openfreemap.org/) vector tiles; [Turf.js](https://turfjs.org/) runs every spatial query in the browser; [Zustand](https://zustand.docs.pmnd.rs/) holds map state. Tools in `src/lib/map-tools/` talk to the map only through a `MapToolStore` interface, so they are unit-tested against an in-memory store. `src/lib/webmcp/register.ts` registers on both `document.modelContext` and `navigator.modelContext`, cancellable via `AbortSignal`. The one external service is the keyless FOSSGIS OSRM instance that plans walking routes, asked by `plan_route` and by the human Route pill through one shared throttle that keeps its 1 request/second policy; when the service is unreachable the tool returns an error, the pill says so, and the map is left unchanged.
 
 ```bash
 pnpm install

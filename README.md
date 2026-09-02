@@ -123,4 +123,4 @@ pnpm test:e2e     # Playwright, via document.modelContext
 pnpm build
 ```
 
-CI runs `pnpm check`, `pnpm build` and `pnpm test:e2e` on every code PR: 1,436 unit tests across 60 files. Node 22. Branching, worktrees, commit and PR conventions: [CONTRIBUTING.md](./CONTRIBUTING.md).
+CI runs `pnpm check`, `pnpm build` and `pnpm test:e2e` on every code PR: 1,461 unit tests across 63 files. Node 22. Branching, worktrees, commit and PR conventions: [CONTRIBUTING.md](./CONTRIBUTING.md).

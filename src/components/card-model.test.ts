@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { GlassMapFeature } from "@/lib/data/schema";
+import { MAX_NOTE_CHARS } from "@/lib/map-tools/shapes";
 import type { Annotation, Drawing } from "@/lib/store/map-store";
 import type { MapFeature } from "@/lib/store/tier2";
 import {
   CARD_COPY,
   CARD_GAP_PX,
-  CARD_NOTE_CHARS,
   CARD_TOP_MARGIN_PX,
   cardPlacement,
   cardProvenance,
@@ -187,14 +187,21 @@ describe("cardView", () => {
     expect(view?.copy.line).toContain("you pinned it");
   });
 
-  it("clips a long note to a headline instead of growing the card", () => {
-    const long = "x".repeat(CARD_NOTE_CHARS * 2);
+  it("puts the whole of a long note on the card, however long the note is", () => {
+    // The card is the only surface a note is fully readable on: the pin's
+    // bubble is 210px wide and a person can fold it away. Clipping here (it
+    // used to stop at 72 characters) meant a note that `annotate` accepts in
+    // full — up to MAX_NOTE_CHARS, and 200 from the form — had an end that
+    // nothing on the page could show, and a person who folded the pin to see
+    // the map was left with an ellipsis and no way back to their own words.
+    // The card grows instead; it measures its own height and flips above or
+    // below the tap accordingly (`cardPlacement`, above).
+    const long = "x".repeat(MAX_NOTE_CHARS);
     const view = cardView(
       { kind: "annotation", id: "annotation:1", x: 1, y: 2 },
       subjects({ annotations: [{ ...note, note: long }] }),
     );
-    expect(view?.name).toHaveLength(CARD_NOTE_CHARS);
-    expect(view?.name.endsWith("…")).toBe(true);
+    expect(view?.name).toBe(long);
   });
 
   it("answers for a shape with its label, its size and who drew it", () => {

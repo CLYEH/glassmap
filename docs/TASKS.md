@@ -24,6 +24,10 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 
 ## D6 — 2026-09-02 · buffer; submit by evening of 2026-09-03 Taiwan time
 
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-105 | README shows the map before it explains it: 251 → 124 lines, describes only shipped behaviour; hero and landing images; two GIFs of the same ask card run by a screenshot agent and by a WebMCP agent; `docs/details.md` keeps the cut prose | docs-writer → review → docs-writer → review | done | Owner asked 2026-09-02 for: no unshipped work in the README, a 2–3 scenario comparison recording, images, and a condensed pitch judged adversarially. Two scenarios recorded (Playwright headless Chromium, scripted replays, WebMCP arm on `?shim=1`; the README says all of this); a third, human–agent collaboration, was not recorded — the "One map, two hands" section carries it in text. Recording the first arm surfaced T-104. Two review rounds: nine false or unsupported claims corrected before merge |
+
 ## UI redesign — "Smoked Glass" · approved 2026-08-29 · gate: production matches the shipped mockup
 
 Design handoff: `docs/design/ui-redesign-handoff.md` (tokens, component inventory, ship-gates, honesty caveats). Verdict: SHIP after a five-round adversarial design review; mockup + evidence live in the design session workspace outside the repo.

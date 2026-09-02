@@ -273,17 +273,37 @@ test.describe("the Awakening does not cancel the first flight (T-104)", () => {
     // changes (944px corridor -> 1104px), isolating this from a lane-width
     // change.
     await page.waitForTimeout(300);
+    // Captured raw (unrounded) so the poll below can compare tuple to tuple --
+    // `beforeResize.bounds` is the tool's own *rounded* echo, and comparing a
+    // raw live value against a rounded one would nearly always read as
+    // "changed" even when nothing has, defeating the wait.
+    const rawBoundsBeforeResize = await page.evaluate(() => window.__glassmapStore!.getState().bounds);
     await page.setViewportSize({ width: 1440, height: 900 });
 
     // Read back WHILE the flight is still in the air -- the ~2s ease is
-    // nowhere near done at 300ms in, and this read is one fast `page.evaluate`
-    // round trip, so this samples well before `waitForLiveArrival` below ever
-    // resolves. `onResize`'s own `pushBoundsFromMap()` call is the only thing
-    // that can have moved `bounds` already: the flight's own `moveend` -- the
-    // other path that republishes bounds -- has not fired yet, and won't for
-    // another second or more. Without that line `bounds` would still equal
-    // `beforeResize.bounds` here, describing a canvas 160px narrower than the
-    // one actually on screen, until the flight happens to land on its own.
+    // nowhere near done at 300ms in. `onResize`'s own `pushBoundsFromMap()`
+    // call is the only thing that can have moved `bounds` already: the
+    // flight's own `moveend` -- the other path that republishes bounds -- has
+    // not fired yet, and won't for another second or more.
+    //
+    // `page.setViewportSize` resolves once the emulated viewport itself has
+    // been resized, not once the window's own "resize" event -- and
+    // `onResize`'s listener with it -- has actually run; that dispatch is
+    // asynchronous relative to the CDP call, so reading `bounds` immediately
+    // after raced it and occasionally won, seeing the PRE-resize bounds
+    // (observed ~4/24 CI runs). Poll the live store directly instead of
+    // reading once: bounded well under the flight's own remaining ease, so a
+    // build whose flight simply lands before the resize handler ever runs
+    // cannot make this pass for the wrong reason.
+    await page.waitForFunction(
+      (previous) => {
+        const bounds = window.__glassmapStore?.getState().bounds;
+        return !!bounds && JSON.stringify(bounds) !== JSON.stringify(previous);
+      },
+      rawBoundsBeforeResize,
+      { timeout: 1500 },
+    );
+
     const midResize = await callTool(page, "get_map_state");
     expect(midResize.error).toBeUndefined();
     expect(midResize.bounds).not.toEqual(beforeResize.bounds);

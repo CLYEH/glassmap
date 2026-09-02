@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { AddNoteForm } from "./AddNoteForm";
 import { DrawHint, DrawPill } from "./DrawToolbar";
 import { useNoteStore } from "./note-store";
@@ -30,6 +30,7 @@ export function Tools() {
   const noteOpen = useNoteStore((s) => s.open);
   const setNoteOpen = useNoteStore((s) => s.setOpen);
   const inputRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   const toggleNote = useCallback(() => {
     // Read through the store rather than the rendered value: `setOpen` also
@@ -45,11 +46,40 @@ export function Tools() {
     }
   }, [setNoteOpen]);
 
+  /**
+   * Esc leaves note mode, like every other dismissible surface on this page
+   * (the "On the map" card, a drawing in progress).
+   *
+   * It needs to be a document-level listener rather than one on the popover:
+   * while the popover is open the map is a place-picker, so the person's
+   * pointer - and, after a click on the canvas, the focus - is out on the map
+   * rather than in the form. Without this the only way out of a mode that
+   * suppresses every tap on a place, bead or shape was a second press on the
+   * Note chip. Bound only while the popover is open, so it can never swallow an
+   * Esc meant for the drawing toolbar or the card.
+   *
+   * A click on the map is the placing gesture, so it is deliberately NOT also a
+   * way out: a person aiming at a spot must not close the popover by aiming.
+   */
+  useEffect(() => {
+    if (!noteOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setNoteOpen(false);
+      // Focus was in the field, which is about to be transparent and out of the
+      // tab order: hand it back to the chip that opened it.
+      toggleRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [noteOpen, setNoteOpen]);
+
   return (
     <>
       <div className="tools" data-testid="tools">
         <DrawPill />
         <button
+          ref={toggleRef}
           type="button"
           className="tool-chip lg lens"
           data-testid="note-toggle"

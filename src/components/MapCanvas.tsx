@@ -345,6 +345,12 @@ export default function MapCanvas() {
      * that is what the card is about — and because the pin is a tall element
      * whose top is nowhere near the place it points at. In draw mode a tap is
      * a vertex like any other, so the card stays out of the way.
+     *
+     * The guard is deliberately draw-only, and not `handOwnsClick()`: with the
+     * note popover open, a tap on a pin that is already on the map still opens
+     * its card. It cannot place a draft either way — the pin root stops the
+     * click from reaching the map (`annotation-marker.ts`) — so refusing here
+     * would only take an answer away and give nothing back.
      */
     const tapAnnotation = (id: string) => {
       if (draw.getState().mode !== "none") return;

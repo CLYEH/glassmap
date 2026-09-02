@@ -17,8 +17,10 @@ describe("note store", () => {
     note().setOpen(true);
     note().place([121.5, 25]);
 
-    expect(useMapStore.getState().annotations).toBe(before.annotations);
-    expect(useMapStore.getState().activity).toBe(before.activity);
+    // Whole-state identity, not a field at a time: the assertion is that
+    // placing a pin writes NOTHING an agent can read - not the annotations, not
+    // the activity feed, and not any field this store might grow later.
+    expect(useMapStore.getState()).toBe(before);
   });
 
   it("rounds the clicked place to ~1 m, like a drawn corner", () => {

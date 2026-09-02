@@ -2039,11 +2039,26 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
    this card is the only surface that carries every character of one, and the
    card measures its own height, so a long note makes a taller card rather than
    a truncated one. `anywhere` because a note may be one unbroken string — a URL,
-   or a language that does not space its words. */
+   or a language that does not space its words; `pre-wrap` because a note may
+   carry its own line breaks and they are the writer's.
+
+   Bounded, though: `annotate` accepts 500 characters and every one of them may
+   be a newline, which is 250 lines of card. Above 640px that would run off the
+   top of the map; below it the card is `position: fixed` against the bottom bar
+   and could not be scrolled back into view at all. A scrollbar keeps the whole
+   note reachable on every tier, and 25vh is what makes the card placeable: the
+   rest of the card measures ~115px, and `cardPlacement` can only ever guarantee
+   a side that fits while the whole card is shorter than half the viewport minus
+   its margins. Measured at 1440x900 with 500 newline characters: 225px of note,
+   340px of card, which fits above a tap in the middle of the map — at 40vh the
+   same card was 475px, fitted on neither side, and hung its Remove/Keep buttons
+   41px below the fold. */
 .otm-card[data-kind="annotation"] .otm-name {
   font-weight: 600;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  max-height: 25vh;
+  overflow-y: auto;
 }
 .otm-cat {
   margin-top: 3px;

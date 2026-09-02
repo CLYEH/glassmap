@@ -100,9 +100,12 @@ export function AddNoteForm({ focusable = true }: { focusable?: boolean }) {
     }
     setStatus(`Pinned ${stored.id} at ${round5(at[0])}, ${round5(at[1])}.`);
     form.reset();
-    // The place is spent with the note: the next one starts unplaced rather
-    // than stacking silently on the last one's pin.
-    useNoteStore.getState().clearDraft();
+    // The place is spent with the note a person pinned: the next one starts
+    // unplaced rather than stacking silently on the last one's pin. An agent's
+    // submit never touches it - the draft belongs to the human who clicked it,
+    // and a tool call arriving mid-sentence must not take their pin off the map
+    // (it did not use it either: an agent pins at the centre).
+    if (!agentInvoked) useNoteStore.getState().clearDraft();
   };
 
   return (

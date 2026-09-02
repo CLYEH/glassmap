@@ -19,8 +19,10 @@ describe("folded pin label", () => {
   });
 
   it("clips a note with no spaces at all by length", () => {
-    // 大安森林公園 is one word to a splitter and a whole note to a reader.
-    expect(foldedLabel("大安森林公園旁邊的長椅很安靜，午後有樹蔭")).toBe("大安森林公園旁邊的長椅很安靜…");
+    // A note naming 國立臺灣大學醫學院附設醫院兒童醫療大樓 is one word to a
+    // splitter and nineteen characters to a reader, so only the length rule
+    // can fold it.
+    expect(foldedLabel("國立臺灣大學醫學院附設醫院兒童醫療大樓")).toBe("國立臺灣大學醫學院附設醫院兒…");
   });
 
   it("still shows something for a note that is only whitespace", () => {

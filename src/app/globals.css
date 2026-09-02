@@ -2035,6 +2035,16 @@ html:is([data-chrome="awake"]:not(:where([data-panel="closed"])), :where([data-p
   font-weight: 650;
   line-height: 1.35;
 }
+/* A note's headline is the note (T-108), so it wraps instead of being clipped:
+   this card is the only surface that carries every character of one, and the
+   card measures its own height, so a long note makes a taller card rather than
+   a truncated one. `anywhere` because a note may be one unbroken string — a URL,
+   or a language that does not space its words. */
+.otm-card[data-kind="annotation"] .otm-name {
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .otm-cat {
   margin-top: 3px;
   display: flex;

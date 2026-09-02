@@ -96,12 +96,14 @@ The map is shared state, not a private channel for the agent.
 ![The page as it opens: a plain map with no agent chrome — search box, Draw/Note/Share buttons, Places tray and a small "also readable by AI agents" hint.](docs/media/landing.jpg)
 
 - The page opens as a plain map. The first live tool call wakes the inspector and activity feed into view, and a human can open or close that view by hand at any time (a share link that carries agent state opens with that view already up).
-- Human draws, agent reads: a shape drawn by hand appears with `source: "user"` and is immediately queryable with `find_features({ within: "drawing:<n>" })`.
-- Agent draws or annotates, human sees and edits: the shape or note renders at once with an "agent" or "user" provenance tag and a ✕ to remove it — no confirmation dialog on either side.
-- **Two WebMCP APIs, one state.** The pin-note field is a plain `<form toolname="add_note">` — no JavaScript registration — and `SubmitEvent.agentInvoked` decides whether the note is stored as `agent` or `user`.
+- **Who did what.** Every shape and note carries `source: "agent"` or `"user"` — the tag a human sees on the mark, and the same field an agent reads back from `get_map_state`. A shape drawn by hand appears with `source: "user"` and is immediately queryable with `find_features({ within: "drawing:<n>" })`; a shape or note an agent draws or annotates renders at once with its own tag and a ✕ to remove it — no confirmation dialog on either side. `remove_from_map` takes off only the marks tagged `agent`; a human's it refuses, by id, with the reason.
+- **On the record — on screen.** Every tool call lands on the activity feed as a row — the tool, a one-line summary, success or error, when, and the ids it touched — the last 50 kept, its sequence number still counting past that. A human's own actions write no row: their trail is the tag on the mark, not a line in the feed.
+- **Two WebMCP APIs, one state.** The pin-note field is a plain `<form toolname="add_note">` — no JavaScript registration — and `SubmitEvent.agentInvoked`, the browser's own signal rather than a guess the page makes, decides whether the note is stored as `agent` or `user`.
 - A search box lets a human find a place, calling no tool; a Places tray loads any of 18 OpenStreetMap categories, up to 3 painted at once — a fourth tap evicts the oldest and says so.
+- With the Note popover open, a click on the map places the pin there — a second click moves it, `Escape` cancels — and with no click, the note pins at the map centre.
+- A Route pill: click a start and an end, and the same walking-route service draws the walk as a human line, labelled with its distance and time.
 - Every tool call plays a brief effect on the map, capped at 2 seconds — teal for the agent, rose for a human action. `?fx=off` turns it off, and it honours `prefers-reduced-motion`.
-- The address bar holds a link that restores this exact map — camera, selection, drawings and notes — for whoever opens it.
+- The address bar holds a link that restores this exact map — camera, selection, drawings and notes, each still tagged `agent` or `user` — for whoever opens it.
 
 ## Data
 Six bundled Taipei datasets are always in memory — 109 MRT stations, 12 districts, 865 parks, 445 schools, 607 supermarkets and 25 sample listings (fictional, not from OSM) — 2,063 features total. 18 more OpenStreetMap point-of-interest categories (31,069 features) load lazily, one at a time, the moment a category is named; an answer that didn't search one lists it under `unsearched_categories`. Full provenance and tag mapping: [`public/data/README.md`](./public/data/README.md).

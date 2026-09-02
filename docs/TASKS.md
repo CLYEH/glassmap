@@ -24,6 +24,10 @@ Deadline: 2026-09-03 13:00 PDT. Must-have tools: `get_map_state`, `list_features
 
 ## D6 — 2026-09-02 · buffer; submit by evening of 2026-09-03 Taiwan time
 
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-105 | README shows the map before it explains it: 251 → 124 lines, describes only shipped behaviour; hero and landing images; two GIFs of the same ask card run by a screenshot agent and by a WebMCP agent; `docs/details.md` keeps the cut prose | docs-writer → review → docs-writer → review | done | Owner asked 2026-09-02 for: no unshipped work in the README, a 2–3 scenario comparison recording, images, and a condensed pitch judged adversarially. Two scenarios recorded (Playwright headless Chromium, scripted replays, WebMCP arm on `?shim=1`; the README says all of this); a third, human–agent collaboration, was not recorded — the "One map, two hands" section carries it in text. Recording the first arm surfaced T-104. Two review rounds: nine false or unsupported claims corrected before merge |
+
 ## UI redesign — "Smoked Glass" · approved 2026-08-29 · gate: production matches the shipped mockup
 
 Design handoff: `docs/design/ui-redesign-handoff.md` (tokens, component inventory, ship-gates, honesty caveats). Verdict: SHIP after a five-round adversarial design review; mockup + evidence live in the design session workspace outside the repo.
@@ -124,6 +128,14 @@ Found by adversarial review of T-41's fifth ask card. `resolveQueryInput` loads 
 |---|---|---|---|---|
 | T-103 | `baseDataLoaded` flag + guard on the place-name form of `resolveNear` and `set_map_view.place` (ids and coordinates deliberately ungated); retryable refusal naming an accurate remedy; the refusal documented in `POINT_STRING_FORM` so the model reads it before calling; gated `base_data_loading` on state and on the four read-only answers that return none; `planCategories` splits the claim from the filter so `searched_categories` stops vouching for files that are not in the store | tool-dev → review | done | PR #88 → develop `da6c27b`. Regression test proven to fail without the fix (12/26 red on reverted sources); the coverage test proven to bite (removing the `annotate` row goes red). Blast radius is the load window only — output is byte-identical on any settled page |
 
+## T-104 — the awakening cancelled the flight it interrupted · found 2026-09-02 while recording the README comparison · gate: an agent's first `set_map_view` lands where the tool said
+
+Reproduced on production: `set_map_view({ place: "Daan Station" })` as the very first tool call returned a z15 camera, and the map settled back at z12. The first live call wakes the inspector lane, which calls `map.setPadding` — in maplibre-gl 6.6.0 that is `jumpTo({ padding })`, which opens with `stop()` and fires two synchronous `moveend`s carrying the pre-flight camera; the store adopted them and the flight was gone. Every later call (page already awake) was fine, which is why no e2e spec ever saw it: the default network-isolated page never loads a style, so `flyTo` degraded to a synchronous jump there.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-104 | `flying` flag in `MapCanvas`: a corridor change (chrome wake, chrome flip, window resize) during a flight of ours re-issues the flight to the same target inside the `toMap` guard; a human gesture clears the flag so a drag mid-flight is never overridden; a resize mid-flight calls `map.resize()` first so the re-fly aims at the new canvas and republishes `bounds` | map-ui-dev → review → qa → review | done | Two review rounds. Review 1 found the resize path landing ~300 m off and `bounds` stale for the flight's duration; both fixed and probed before/after on a live basemap (landing error 302.7 m → 0.0 m). `e2e/awakening-flight.spec.ts`: 4 tests on the mock basemap, three proven red on the pre-fix `MapCanvas`, the fourth guards human authority |
+
 ## Follow-ups (ticketed, unscheduled)
 
 - **F-1 (qa)** `awakening.spec.ts:672` — the flake family's last site: `stateAfterWaking` returns ~600ms into the story, then two Node-side locator assertions race the remaining ~1200ms of the `disabled` window; fold the reads into the same in-page tick. Pre-existing; deterministic-failure mode once the story lands.
@@ -137,6 +149,7 @@ Found by adversarial review of T-41's fifth ask card. `resolveQueryInput` loads 
 - **F-9 (tool-dev)** In the same load window, `set_map_view({feature_id})`, `measure({target})` and `get_place_details({id})` answer `unknown feature_id` / `unknown target` for a bundled id. Loud, never a confident wrong answer, and `base_data_loading` on map state now lets an agent see why — but the remedy `get_place_details` prescribes ("use find_features") is the path that was silent until T-103.
 - **F-10 (docs-writer)** `docs/design/ui-redesign-handoff.md` still describes a standalone bottom-left "legend" component in at least four places (the component-inventory row naming `StateOverlay.tsx`, two breakpoint rows, two design-token rows); it is now `MapKey.tsx` / `PlacesTray.tsx`. Assessed during T-41 and deliberately not fixed there: correcting it honestly means re-verifying the current responsive behaviour, not renaming a word. Supersedes the 2026-08-31 T-91 handoff.
 - **F-11 (tool-dev)** `src/lib/map-tools/share.test.ts:545` says "The sender has 2297 cafes in memory"; the manifest says 2,298. Harmless fixture prose, but it is the last site of a stale count corrected everywhere else in PR #89.
+- **F-12 (map-ui-dev)** Two camera moves still sit outside T-104's `flying` invariant (`MapCanvas.tsx`): the cluster-expansion `map.easeTo` is cancelled by a corridor change during its 500 ms and not re-issued (no agent was promised that landing, so loud-but-harmless), and `load`'s second `pushViewFromMap()` would clear `flying` if a flight were in the air when the style loads. Both pre-existing; review 1 charged neither. Review 2 added a third, same class: a resize while NOT flying still runs `applyPadding()` before MapLibre's own resize, so `bounds` is published against the old width for one rendering update — `map.resize()` first on both paths would close it (`onResize = () => { map.resize(); applyPadding(); if (flying) pushBoundsFromMap(); }`), deferred to keep T-104 to the flight case.
 
 ## Handoff log
 

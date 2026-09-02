@@ -136,6 +136,30 @@ Reproduced on production: `set_map_view({ place: "Daan Station" })` as the very 
 |---|---|---|---|---|
 | T-104 | `flying` flag in `MapCanvas`: a corridor change (chrome wake, chrome flip, window resize) during a flight of ours re-issues the flight to the same target inside the `toMap` guard; a human gesture clears the flag so a drag mid-flight is never overridden; a resize mid-flight calls `map.resize()` first so the re-fly aims at the new canvas and republishes `bounds` | map-ui-dev → review → qa → review | done | Two review rounds. Review 1 found the resize path landing ~300 m off and `bounds` stale for the flight's duration; both fixed and probed before/after on a live basemap (landing error 302.7 m → 0.0 m). `e2e/awakening-flight.spec.ts`: 4 tests on the mock basemap, three proven red on the pre-fix `MapCanvas`, the fourth guards human authority |
 
+## T-106 — a human pins a note where they click · owner request 2026-09-02 · gate: a person's note lands under their cursor, an agent's exactly where it landed before
+
+Owner: the Note pill is unfriendly to a person — the form pins only at the map centre, so placing a note means panning the whole map until the spot is under the crosshair. Human side only: the declarative `add_note` tool (its `toolname`, `tooldescription`, `toolparamdescription`, and an agent-invoked submit landing at `view.center`) does not change, and neither does the imperative `annotate`.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-106 | While the Note popover is open and draw mode is off, a map click places a provisional rose pin at the cursor (a second click moves it); the human's submit pins there, falling back to the map centre when nothing was clicked; closing the popover or submitting clears the draft. Draft location lives in a UI store next to `draw-store.ts`, never in `map-store.ts`, so no tool can see it. An `agentInvoked` submit ignores the draft and pins at `view.center` exactly as today | map-ui-dev → qa → review | doing | Feature taps are suppressed while the popover is open, as in draw mode; draw mode keeps precedence over note placement |
+
+## T-107 — a folded note can be unfolded · owner report 2026-09-02 · gate: no gesture on a note leaves it unreadable with no way back
+
+Owner: "a note disappears when clicked, and there is no way to bring it back." Root cause in `annotation-marker.ts`: a click on the bubble toggles `.pin-card.hidden` (`display: none`), and a click on what remains — a 9 px anchor and a 1.5 px stem — opens the "On the map" card rather than unfolding the bubble. The fold is one-way in practice.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-107 | A click on a folded pin unfolds it (and does nothing else); a click on the bubble folds it as before; a click on the stem/anchor of an unfolded pin opens the "On the map" card as before. A folded pin must stay visibly clickable — keep a compact chip (the source dot with the note's first word or an ellipsis) rather than a bare anchor, so the way back is on screen. Same PR as T-106 | map-ui-dev → qa → review | doing | Agent-facing behaviour unchanged: annotations, ids, `annotate`/`add_note`/`remove_from_map` untouched |
+
+## T-108 — the "On the map" card shows the whole note · owner report 2026-09-02 · gate: a person can read every character of a note somewhere on the map, whatever state the pin is in
+
+Owner: after folding a pin and reopening it, a long note is cut to "…" and there is no way to read the rest. Root cause in `card-model.ts:220`: the card's headline is `truncate(annotation.note, CARD_NOTE_CHARS)` with `CARD_NOTE_CHARS = 72`, while a note may be `MAX_NOTE_CHARS` (200) long; the card has no other line that carries the note, and with the bubble folded (T-107) the text was on screen nowhere.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| T-108 | The card for a note shows the full note text, wrapped (`pre-wrap`, `overflow-wrap: anywhere`), instead of a 72-character headline; `CARD_NOTE_CHARS` and the "clips a long note" unit test are replaced by a test that pins the whole-note intent. Card placement already re-measures through `ResizeObserver`, so a taller card still flips above/below correctly. Same PR as T-106/T-107 | map-ui-dev → qa → review | doing | Feature and drawing headlines unchanged |
+
 ## Follow-ups (ticketed, unscheduled)
 
 - **F-1 (qa)** `awakening.spec.ts:672` — the flake family's last site: `stateAfterWaking` returns ~600ms into the story, then two Node-side locator assertions race the remaining ~1200ms of the `disabled` window; fold the reads into the same in-page tick. Pre-existing; deterministic-failure mode once the story lands.

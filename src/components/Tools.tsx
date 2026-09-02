@@ -2,17 +2,23 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { AddNoteForm } from "./AddNoteForm";
-import { DrawHint, DrawPill } from "./DrawToolbar";
+import { DrawHint, DrawPill, RoutePill } from "./DrawToolbar";
 import { useNoteStore } from "./note-store";
 import { ShareChip } from "./ShareChip";
 
 /**
- * The three things a person can do to this map, in one row: Draw, Note, Share.
+ * The four things a person can do to this map, in one row: Draw, Route,
+ * Note, Share.
  *
  * They are the human half of the repositioning (BRIEF item 3) and they are on
  * screen in both chromes — an agent arriving does not take the map away from
  * the person watching it. The row sits opposite the brand and steps aside for
  * the inspector lane when the agent chrome is up (globals.css).
+ *
+ * Route is the youngest of them (T-110) and it is there for the same reason
+ * the others are: `plan_route` was an agent-only verb, so a walk was something
+ * this map could only be *told* to plan. Clicking two points is the human way
+ * to ask the same question of the same service.
  *
  * The draw switch, the note form and the copy chip are the ones that shipped,
  * re-skinned into pills and given a home that survives the agent panels being
@@ -78,6 +84,7 @@ export function Tools() {
     <>
       <div className="tools" data-testid="tools">
         <DrawPill />
+        <RoutePill />
         <button
           ref={toggleRef}
           type="button"
